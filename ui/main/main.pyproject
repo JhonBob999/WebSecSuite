@@ -1,0 +1,9 @@
+{
+    "files": [
+        "mainwindow.py",
+        "form.ui",
+        "../panels/scraper_panel.h",
+        "../panels/scraper_panel.cpp",
+        "../panels/scraper_panel.ui"
+    ]
+}
