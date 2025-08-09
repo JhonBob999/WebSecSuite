@@ -48,12 +48,12 @@ class TaskManager(QObject):
         worker.moveToThread(thread)
 
         # Проброс сигналов воркера -> менеджер
-        worker.sig_log.connect(self.task_log)
-        worker.sig_status.connect(self._on_worker_status)
-        worker.sig_progress.connect(self.task_progress)
-        worker.sig_result.connect(self.task_result)
-        worker.sig_error.connect(self.task_error)
-        worker.sig_finished.connect(self._on_worker_finished)
+        worker.task_log.connect(self.task_log)
+        worker.task_status.connect(self._on_worker_status)
+        worker.task_progress.connect(self.task_progress)
+        worker.task_result.connect(self.task_result)
+        worker.task_error.connect(self.task_error)
+        worker.task_finished.connect(self._on_worker_finished)
 
         # Старт/стоп связка
         thread.started.connect(worker.run)
@@ -90,12 +90,12 @@ class TaskManager(QObject):
         worker.moveToThread(thread)
 
         # Проброс сигналов воркера -> менеджер
-        worker.sig_log.connect(self.task_log)
-        worker.sig_status.connect(self._on_worker_status)
-        worker.sig_progress.connect(self.task_progress)
-        worker.sig_result.connect(self.task_result)
-        worker.sig_error.connect(self.task_error)
-        worker.sig_finished.connect(self._on_worker_finished)
+        worker.task_log.connect(self.task_log)
+        worker.task_status.connect(self._on_worker_status)
+        worker.task_progress.connect(self.task_progress)
+        worker.task_result.connect(self.task_result)
+        worker.task_error.connect(self.task_error)
+        worker.task_finished.connect(self._on_worker_finished)
 
         # Старт связка
         thread.started.connect(worker.run)

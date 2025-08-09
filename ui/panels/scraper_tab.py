@@ -2,13 +2,63 @@
 from __future__ import annotations  # ← должен быть первым
 from datetime import datetime
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont
 from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
+
+#Класс Хайлайтер
+class LogHighlighter(QSyntaxHighlighter):
+    def __init__(self, document):
+        super().__init__(document)
+        # Форматы
+        self.f_info = QTextCharFormat()
+        self.f_info.setForeground(QColor("#A0A0A0"))  # мягкий серый
+
+        self.f_warn = QTextCharFormat()
+        self.f_warn.setForeground(QColor("#C8A200"))  # жёлто-янтарный
+        self.f_warn.setFontWeight(QFont.Bold)
+
+        self.f_error = QTextCharFormat()
+        self.f_error.setForeground(QColor("#E05A5A"))  # красный
+        self.f_error.setFontWeight(QFont.Bold)
+
+        self.f_result = QTextCharFormat()
+        self.f_result.setForeground(QColor("#3CC3D3"))  # бирюзовый
+        self.f_result.setFontWeight(QFont.DemiBold)
+
+        self.f_taskid = QTextCharFormat()
+        self.f_taskid.setForeground(QColor("#808080"))  # серый для [abcd1234]
+
+    def highlightBlock(self, text: str):
+        # Уровни
+        if "] [ERROR]" in text:
+            self.setFormat(0, len(text), self.f_error)
+        elif "] [WARN]" in text:
+            self.setFormat(0, len(text), self.f_warn)
+        elif "] [RESULT]" in text:
+            self.setFormat(0, len(text), self.f_result)
+        elif "] [INFO]" in text:
+            self.setFormat(0, len(text), self.f_info)
+
+        # Подсветим короткий task_id вида [e0f1a2b3]
+        # (пробегаем и находим такие подпоследовательности)
+        start = 0
+        while True:
+            i = text.find("[", start)
+            if i < 0:
+                break
+            j = text.find("]", i + 1)
+            if j < 0:
+                break
+            token = text[i:j+1]
+            # [abcdef12] — восьмизначный hex?
+            if len(token) == 10 and all(c in "0123456789abcdef" for c in token[1:-1].lower()):
+                self.setFormat(i, j - i + 1, self.f_taskid)
+            start = j + 1
 
 
 class ScraperTabController(QWidget):
@@ -18,6 +68,9 @@ class ScraperTabController(QWidget):
         # 1) Поднимаем UI
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
+        
+        # Хайлайтер подключение
+        self._log_hl = LogHighlighter(self.ui.logOutput.document())
 
         # 2) Менеджер задач + индексы строк
         self.task_manager = TaskManager()
@@ -229,6 +282,37 @@ class ScraperTabController(QWidget):
 
     def delete_selected_tasks(self):
         self.on_delete_clicked()
+        
+    def _format_result_short(self, payload: dict) -> str:
+        # безопасные get'ы
+        url = payload.get("final_url") or payload.get("url") or ""
+        code = payload.get("status_code", "")
+        title = (payload.get("title") or "").strip()
+        size = payload.get("content_len", "")
+        timings = payload.get("timings", {}) or {}
+        t_req = timings.get("request_ms", "")
+        t_total = timings.get("total_ms", "")
+
+        # короткие заголовки
+        headers = payload.get("headers", {}) or {}
+        hdr_pairs = []
+        for k in ("server", "content-type", "content-length", "date", "via", "x-powered-by", "cf-ray"):
+            if k in headers or k.title() in headers:
+                v = headers.get(k, headers.get(k.title()))
+                hdr_pairs.append(f"    {k}: {v}")
+        hdr_block = ("\n" + "\n".join(hdr_pairs)) if hdr_pairs else ""
+
+        lines = [
+            f"  URL: {url}",
+            f"  Status: {code}",
+            f"  Title: {title}" if title else "  Title: (none)",
+            f"  Size: {size} bytes",
+            f"  Time: request {t_req} ms, total {t_total} ms",
+        ]
+        if hdr_block:
+            lines.append("  Headers:" + hdr_block)
+        return "\n".join(lines)
+
 
     # ---------- Контекстное меню ----------
     def on_context_menu(self, pos):
@@ -368,7 +452,11 @@ class ScraperTabController(QWidget):
 
     @Slot(str, dict)
     def on_task_result(self, task_id: str, payload: dict):
-        self.append_log_line(f"[RESULT][{task_id[:8]}] {payload}")
+        # в лог — кратко и красиво
+        pretty = self._format_result_short(payload)
+        self.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
+        # (полный payload уже хранится в task.result / приходит из воркера — оставляем как есть)
+
 
     @Slot(str, str)
     def on_task_error(self, task_id: str, error_str: str):
