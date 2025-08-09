@@ -110,6 +110,16 @@
      <string>Results</string>
     </property>
    </column>
+   <column>
+    <property name="text">
+     <string>Cookies</string>
+    </property>
+   </column>
+   <column>
+    <property name="text">
+     <string>Params</string>
+    </property>
+   </column>
   </widget>
   <widget class="QPushButton" name="btnExport">
    <property name="geometry">

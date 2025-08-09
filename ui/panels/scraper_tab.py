@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 import os
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl
-from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction
+from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
@@ -19,6 +19,8 @@ COL_STATUS  = 1
 COL_CODE    = 2
 COL_TIME    = 3
 COL_RESULT  = 4
+COL_COOKIES = 5
+COL_PARAMS  = 6
 
 # --- палитра ---
 CLR_STATUS = {
@@ -193,14 +195,10 @@ class ScraperTabController(QWidget):
      # --- настройка таблицы, один раз ---
     def _setup_task_table(self):
         t = self.ui.taskTable
-        t.setColumnCount(5)
-        t.setHorizontalHeaderLabels(["URL", "Status", "Code", "Time", "Results"])
-
-        # выбор строк
+        t.setColumnCount(7)
+        t.setHorizontalHeaderLabels(["URL", "Status", "Code", "Time", "Results", "Cookies", "Params"])
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.setSelectionMode(QAbstractItemView.ExtendedSelection)
-
-        # сортировка и растягивание
         t.setSortingEnabled(True)
         t.horizontalHeader().setStretchLastSection(True)
 
@@ -275,27 +273,51 @@ class ScraperTabController(QWidget):
         p = str(path_or_flag)
         it.setText(Path(p).name)
         it.setToolTip(p)
+        
+    def set_cookies_cell(self, row: int, has_cookies: bool, cookies_tip: str = ""):
+        it = self._ensure_item(row, COL_COOKIES)
+        it.setText("✔" if has_cookies else "")
+        it.setToolTip(cookies_tip or ("Set-Cookie present" if has_cookies else ""))
+
+    def set_params_cell(self, row: int, has_params: bool, params_tip: str = ""):
+        it = self._ensure_item(row, COL_PARAMS)
+        it.setText("⚙" if has_params else "")
+        it.setToolTip(params_tip or ("Custom params" if has_params else ""))
 
     # --- двойные клики: URL/Result ---
     def on_task_cell_double_clicked(self, row: int, col: int):
+        table = self.ui.taskTable
         try:
             if col == COL_URL:
-                url_item = self.ui.taskTable.item(row, COL_URL)
+                url_item = table.item(row, COL_URL)
                 if not url_item:
                     return
-                tip = url_item.toolTip() or url_item.text()
-                full_url = tip.split("\n")[0]
-                if full_url.startswith("http"):
-                    QDesktopServices.openUrl(QUrl(full_url))
-            elif col == COL_RESULT:
-                res_item = self.ui.taskTable.item(row, COL_RESULT)
-                if not res_item:
-                    return
-                path = res_item.toolTip() or res_item.text()
+                tip = (url_item.toolTip() or url_item.text() or "").strip()
+                full_url = tip.split("\n", 1)[0].strip()
+                if full_url:
+                    QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
+                return
+
+            if col == COL_RESULT:
+                res_item = table.item(row, COL_RESULT)
+                path = ((res_item.toolTip() or res_item.text()) if res_item else "").strip()
                 if path:
                     self._open_path(path)
-        except Exception:
-            pass
+                    return
+                # фолбэк: открыть URL, если пути нет
+                url_item = table.item(row, COL_URL)
+                if url_item:
+                    tip = (url_item.toolTip() or url_item.text() or "").strip()
+                    full_url = tip.split("\n", 1)[0].strip()
+                    if full_url:
+                        QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
+                return
+
+        except Exception as e:
+            try:
+                self.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
+            except Exception:
+                pass
 
     # --- утилиты ---
     def _open_path(self, path: str):
@@ -388,17 +410,23 @@ class ScraperTabController(QWidget):
         row = self.ui.taskTable.rowCount()
         self.ui.taskTable.insertRow(row)
 
-        # сохраняем task_id в URL-ячейку
-        url_item = QTableWidgetItem("")  # текст поставим через set_url_cell
+        # URL-ячейка (сохраняем task_id в UserRole)
+        url_item = QTableWidgetItem("")
         url_item.setData(Qt.UserRole, task_id)
         self.ui.taskTable.setItem(row, COL_URL, url_item)
 
-        # наполнить ячейки базовыми значениями
+        # Базовые значения
         self.set_url_cell(row, url)
         self.set_status_cell(row, TaskStatus.PENDING.value)
         self.set_code_cell(row, None)
         self.set_time_cell(row, None)
         self.set_result_cell(row, None)
+
+        # Новые индикаторы: cookies/params
+        has_params = bool(params and any(k in params for k in ("headers", "proxy", "user_agent", "timeout", "retries")))
+        self.set_params_cell(row, has_params, params_tip=str({k:v for k,v in (params or {}).items() if k in ("method","proxy","user_agent","timeout","retries")}))
+
+        self.set_cookies_cell(row, False, "")  # пока нет данных — заполним в on_task_result
 
         self._row_by_task_id[task_id] = row
         self.ui.taskTable.resizeRowToContents(row)
@@ -444,16 +472,24 @@ class ScraperTabController(QWidget):
         self.on_delete_clicked()
         
     def _format_result_short(self, payload: dict) -> str:
-        # безопасные get'ы
-        url = payload.get("final_url") or payload.get("url") or ""
+        url = payload.get("url", "") or ""
         code = payload.get("status_code", "")
         title = (payload.get("title") or "").strip()
-        size = payload.get("content_len", "")
-        timings = payload.get("timings", {}) or {}
-        t_req = timings.get("request_ms", "")
-        t_total = timings.get("total_ms", "")
 
-        # короткие заголовки
+        # соответствие твоим ключам
+        size_bytes = payload.get("content_length")  # может быть int/str/None
+        try:
+            size_bytes = int(size_bytes) if size_bytes is not None else None
+        except Exception:
+            size_bytes = None
+
+        t_req = payload.get("elapsed_request_ms")
+        try:
+            t_req = int(t_req) if t_req is not None else None
+        except Exception:
+            t_req = None
+
+        # заголовки (есть в payload['headers'])
         headers = payload.get("headers", {}) or {}
         hdr_pairs = []
         for k in ("server", "content-type", "content-length", "date", "via", "x-powered-by", "cf-ray"):
@@ -462,12 +498,16 @@ class ScraperTabController(QWidget):
                 hdr_pairs.append(f"    {k}: {v}")
         hdr_block = ("\n" + "\n".join(hdr_pairs)) if hdr_pairs else ""
 
+        # форматирование
+        size_line = f"{size_bytes} bytes" if size_bytes is not None else "(unknown)"
+        time_line = f"{t_req} ms" if t_req is not None else "(unknown)"
+
         lines = [
             f"  URL: {url}",
             f"  Status: {code}",
             f"  Title: {title}" if title else "  Title: (none)",
-            f"  Size: {size} bytes",
-            f"  Time: request {t_req} ms, total {t_total} ms",
+            f"  Size: {size_line}",
+            f"  Time: request {time_line}",
         ]
         if hdr_block:
             lines.append("  Headers:" + hdr_block)
@@ -540,30 +580,46 @@ class ScraperTabController(QWidget):
         global_pos = table.viewport().mapToGlobal(pos)
 
         row_under_cursor = table.rowAt(pos.y())
-        if row_under_cursor >= 0:
-            if row_under_cursor not in self._selected_rows():
-                table.clearSelection()
-                table.selectRow(row_under_cursor)
+        if row_under_cursor >= 0 and row_under_cursor not in self._selected_rows():
+            table.clearSelection()
+            table.selectRow(row_under_cursor)
 
         has_selection = len(self._selected_rows()) > 0
+        single_row = has_selection and len(self._selected_rows()) == 1
+        row = self._selected_rows()[0] if single_row else -1
 
         menu = QMenu(self)
 
+        # ▶ Действия запуска
         act_start   = menu.addAction("Start selected")
         act_stop    = menu.addAction("Stop selected")
-        act_del     = menu.addAction("Delete selected")
-        menu.addSeparator()
-        # ↓ добавляем новые пункты
-        act_reset   = menu.addAction("Reset selected")
         act_restart = menu.addAction("Restart selected")
+        act_reset   = menu.addAction("Reset selected")
         menu.addSeparator()
-        act_add     = menu.addAction("Add task")
 
-        # доступность по выбору
-        for a in (act_start, act_stop, act_del, act_reset, act_restart):
+        # ▶ Переходы/копирование
+        act_open_url   = menu.addAction("Open URL in browser")
+        act_copy_url   = menu.addAction("Copy URL")
+        act_open_res   = menu.addAction("Open Result Folder")
+        act_copy_hdrs  = menu.addAction("Copy Response Headers")
+        menu.addSeparator()
+
+        # ▶ Просмотр детальной инфы
+        act_view_hdrs  = menu.addAction("View Response Headers…")
+        act_view_redir = menu.addAction("View Redirects…")
+        act_view_cookies = menu.addAction("View Cookies…")
+        menu.addSeparator()
+
+        # ▶ Настройки задачи
+        act_edit_params = menu.addAction("Edit Params…")
+        act_delete   = menu.addAction("Delete selected")
+
+        # доступность
+        for a in (act_start, act_stop, act_restart, act_reset, act_delete,
+                act_open_url, act_copy_url, act_open_res, act_copy_hdrs,
+                act_view_hdrs, act_view_redir, act_view_cookies, act_edit_params):
             a.setEnabled(has_selection)
 
-        # PyQt5 обычно menu.exec_(...), PySide6 — menu.exec(...). Оставь как у тебя работает.
         action = menu.exec(global_pos)
         if action is None:
             return
@@ -572,14 +628,28 @@ class ScraperTabController(QWidget):
             self.start_selected_tasks()
         elif action == act_stop:
             self.stop_selected_tasks()
-        elif action == act_del:
-            self.delete_selected_tasks()
-        elif action == act_reset:
-            self.reset_selected_tasks()
         elif action == act_restart:
             self.restart_selected_tasks()
-        elif action == act_add:
-            self.on_add_task_clicked()
+        elif action == act_reset:
+            self.reset_selected_tasks()
+        elif action == act_delete:
+            self.delete_selected_tasks()
+        elif action == act_open_url and single_row:
+            self._ctx_open_url(row)
+        elif action == act_copy_url and single_row:
+            self._ctx_copy_url(row)
+        elif action == act_open_res and single_row:
+            self._ctx_open_result_folder(row)
+        elif action == act_copy_hdrs and single_row:
+            self._ctx_copy_response_headers(row)
+        elif action == act_view_hdrs and single_row:
+            self._ctx_view_headers_dialog(row)
+        elif action == act_view_redir and single_row:
+            self._ctx_view_redirects_dialog(row)
+        elif action == act_view_cookies and single_row:
+            self._ctx_view_cookies_dialog(row)
+        elif action == act_edit_params and single_row:
+            self._ctx_edit_params_dialog(row)
 
     # ---------- Слоты кнопок ----------
     @Slot()
@@ -755,22 +825,136 @@ class ScraperTabController(QWidget):
 
     @Slot(str, dict)
     def on_task_result(self, task_id: str, payload: dict):
-        # в лог — кратко и красиво
+        # лог — кратко
         pretty = self._format_result_short(payload)
         self.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
-        # (полный payload уже хранится в task.result / приходит из воркера — оставляем как есть)
-        # обновим таблицу
+
         row = self._find_row_by_task_id(task_id)
-        if row >= 0:
-            self.set_status_cell(row, "Done")
-            self.set_url_cell(row, payload.get("final_url") or payload.get("url") or "", payload.get("title"))
-            self.set_code_cell(row, payload.get("status_code"))
-            # elapsed_ms / total_ms — как у тебя называется в payload
-            elapsed = payload.get("elapsed_ms") or (payload.get("timings") or {}).get("total_ms")
-            self.set_time_cell(row, elapsed)
-            self.set_result_cell(row, payload.get("result_path"))
+        if row < 0:
+            return
+
+        # Статус/основные колонки
+        self.set_status_cell(row, "Done")
+        self.set_url_cell(row, payload.get("url") or "", payload.get("title"))
+        self.set_code_cell(row, payload.get("status_code"))
+        self.set_time_cell(row, payload.get("elapsed_request_ms"))
+        # Results пока не приходит — остаётся пустым (двойной клик по Results откроет URL как фолбэк)
+
+        # Cookies: по заголовку 'set-cookie'
+        headers = payload.get("headers", {}) or {}
+        # нормализуем ключи
+        low_headers = {k.lower(): v for k, v in headers.items()}
+        set_cookie_val = low_headers.get("set-cookie")
+        has_cookies = bool(set_cookie_val)
+        tip = f"Set-Cookie: {set_cookie_val}" if isinstance(set_cookie_val, str) else ""
+        self.set_cookies_cell(row, has_cookies, tip)
+
+        # Params: смотрим, есть ли у задачи кастомные параметры
+        task = self.task_manager.get_task(task_id)
+        has_params = False
+        params_tip = ""
+        if task:
+            # предполагаем, что экземпляр задачи хранит параметры рядом (подгони под свою модель)
+            p = getattr(task, "params", {}) or {}
+            has_params = bool(p) and any(k in p for k in ("headers", "proxy", "user_agent", "timeout", "retries", "method"))
+            if has_params:
+                light = {k: p.get(k) for k in ("method","proxy","user_agent","timeout","retries") if k in p}
+                params_tip = str(light)
+        self.set_params_cell(row, has_params, params_tip)
 
 
     @Slot(str, str)
     def on_task_error(self, task_id: str, error_str: str):
         self.append_log_line(f"[ERROR][{task_id[:8]}] {error_str}")
+        
+        
+    #--------------- CTX ОБРАБОТЧИКИ -------------------#
+    
+    def _ctx_open_url(self, row: int):
+        it = self.ui.taskTable.item(row, COL_URL)
+        if not it:
+            return
+        tip = (it.toolTip() or it.text() or "").strip()
+        full_url = tip.split("\n", 1)[0].strip()
+        if full_url:
+            QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
+
+    def _ctx_copy_url(self, row: int):
+        it = self.ui.taskTable.item(row, COL_URL)
+        if not it:
+            return
+        tip = (it.toolTip() or it.text() or "").strip()
+        full_url = tip.split("\n", 1)[0].strip()
+        if full_url:
+            QGuiApplication.clipboard().setText(full_url)
+            self.append_log_line("[INFO] URL copied to clipboard")
+
+    def _ctx_open_result_folder(self, row: int):
+        it = self.ui.taskTable.item(row, COL_RESULT)
+        path = ((it.toolTip() or it.text()) if it else "").strip()
+        if not path:
+            # фолбэк — попробуем открыть папку экспорта
+            base = exporter.default_exports_dir()
+            os.makedirs(base, exist_ok=True)
+            path = base
+        self._open_path(path)
+
+    def _ctx_copy_response_headers(self, row: int):
+        # вытащим task_id → task → headers из последнего payload
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        headers = {}
+        if task and getattr(task, "result", None):
+            headers = (task.result or {}).get("headers", {}) or {}
+        if not headers:
+            self.append_log_line("[WARN] No headers available")
+            return
+        text = "\n".join(f"{k}: {v}" for k, v in headers.items())
+        QGuiApplication.clipboard().setText(text)
+        self.append_log_line("[INFO] Headers copied to clipboard")
+
+    def _ctx_view_headers_dialog(self, row: int):
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        headers = {}
+        if task and getattr(task, "result", None):
+            headers = (task.result or {}).get("headers", {}) or {}
+        if not headers:
+            QMessageBox.information(self, "Headers", "No headers available")
+            return
+        text = "\n".join(f"{k}: {v}" for k, v in headers.items())
+        QMessageBox.information(self, "Response Headers", text[:6000])  # простая заглушка
+
+    def _ctx_view_redirects_dialog(self, row: int):
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        redirs = []
+        if task and getattr(task, "result", None):
+            redirs = (task.result or {}).get("redirect_chain", []) or []
+        if not redirs:
+            QMessageBox.information(self, "Redirects", "No redirects")
+            return
+        text = "\n".join(f"{h.get('status_code')} → {h.get('url')}" for h in redirs)
+        QMessageBox.information(self, "Redirect history", text[:6000])
+
+    def _ctx_view_cookies_dialog(self, row: int):
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        headers = {}
+        if task and getattr(task, "result", None):
+            headers = (task.result or {}).get("headers", {}) or {}
+        low = {k.lower(): v for k, v in (headers or {}).items()}
+        sc = low.get("set-cookie")
+        if not sc:
+            QMessageBox.information(self, "Cookies", "No Set-Cookie in response")
+            return
+        text = sc if isinstance(sc, str) else str(sc)
+        QMessageBox.information(self, "Cookies", text[:6000])
+
+    def _ctx_edit_params_dialog(self, row: int):
+        # Заглушка: позже заменим на полноценный ParamsDialog
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        p = getattr(task, "params", {}) if task else {}
+        text = "Current params:\n" + "\n".join(f"{k}: {v}" for k, v in (p or {}).items())
+        QMessageBox.information(self, "Edit Params", text or "No params.\n(Will implement editor dialog)")

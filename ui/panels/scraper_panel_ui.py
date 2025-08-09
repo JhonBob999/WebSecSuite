@@ -44,8 +44,8 @@ class Ui_scraper_panel(object):
         font1.setBold(True)
         self.lbl_tasks.setFont(font1)
         self.taskTable = QTableWidget(scraper_panel)
-        if (self.taskTable.columnCount() < 5):
-            self.taskTable.setColumnCount(5)
+        if (self.taskTable.columnCount() < 7):
+            self.taskTable.setColumnCount(7)
         __qtablewidgetitem = QTableWidgetItem()
         self.taskTable.setHorizontalHeaderItem(0, __qtablewidgetitem)
         __qtablewidgetitem1 = QTableWidgetItem()
@@ -56,6 +56,10 @@ class Ui_scraper_panel(object):
         self.taskTable.setHorizontalHeaderItem(3, __qtablewidgetitem3)
         __qtablewidgetitem4 = QTableWidgetItem()
         self.taskTable.setHorizontalHeaderItem(4, __qtablewidgetitem4)
+        __qtablewidgetitem5 = QTableWidgetItem()
+        self.taskTable.setHorizontalHeaderItem(5, __qtablewidgetitem5)
+        __qtablewidgetitem6 = QTableWidgetItem()
+        self.taskTable.setHorizontalHeaderItem(6, __qtablewidgetitem6)
         self.taskTable.setObjectName(u"taskTable")
         self.taskTable.setGeometry(QRect(10, 40, 861, 421))
         self.taskTable.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -107,6 +111,10 @@ class Ui_scraper_panel(object):
         ___qtablewidgetitem3.setText(QCoreApplication.translate("scraper_panel", u"Time", None));
         ___qtablewidgetitem4 = self.taskTable.horizontalHeaderItem(4)
         ___qtablewidgetitem4.setText(QCoreApplication.translate("scraper_panel", u"Results", None));
+        ___qtablewidgetitem5 = self.taskTable.horizontalHeaderItem(5)
+        ___qtablewidgetitem5.setText(QCoreApplication.translate("scraper_panel", u"Cookies", None));
+        ___qtablewidgetitem6 = self.taskTable.horizontalHeaderItem(6)
+        ___qtablewidgetitem6.setText(QCoreApplication.translate("scraper_panel", u"Params", None));
         self.btnExport.setText(QCoreApplication.translate("scraper_panel", u"Export", None))
         self.btnDelete.setText(QCoreApplication.translate("scraper_panel", u"Delete", None))
         self.btnStop.setText(QCoreApplication.translate("scraper_panel", u"Stop", None))
