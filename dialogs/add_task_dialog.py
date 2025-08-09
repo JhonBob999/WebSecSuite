@@ -27,7 +27,7 @@ class AddTaskDialog(QtWidgets.QDialog):
         self.ui.btn_cancel.clicked.connect(self.reject)
         # retries: границы
         self.ui.retries_spin.setRange(0, 5)   # 0 = без повторов
-        self.ui.retries_spin.setValue(0)
+        self.ui.retries_spin.setValue(1)
 
 
     def _validate_url(self, url: str) -> bool:

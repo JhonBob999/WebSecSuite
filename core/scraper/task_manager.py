@@ -66,11 +66,46 @@ class TaskManager(QObject):
         print(f"DEBUG: запускаю задачу {task_id} для {task.url}")
         thread.start()
 
+    # ---------- Управление исполнением ----------
     def start_all(self) -> None:
         for task in self._tasks.values():
             if task.status in (TaskStatus.PENDING, TaskStatus.STOPPED, TaskStatus.ERROR, TaskStatus.DONE):
-                # Разрешим повторный запуск с любого статуса, кроме RUNNING
                 self.start_task(task.id)
+
+    def start_task(self, task_id: str) -> None:
+        # уже бежит?
+        if task_id in self._threads:
+            return
+        task = self._tasks.get(task_id)
+        if not task:
+            raise ValueError(f"No such task: {task_id}")
+        if task.status == TaskStatus.RUNNING:
+            return
+        self._start_worker(task_id, task)
+
+    def _start_worker(self, task_id: str, task: ScrapeTask) -> None:
+        # Подготовка воркера и треда
+        worker = TaskWorker(task)
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        # Проброс сигналов воркера -> менеджер
+        worker.sig_log.connect(self.task_log)
+        worker.sig_status.connect(self._on_worker_status)
+        worker.sig_progress.connect(self.task_progress)
+        worker.sig_result.connect(self.task_result)
+        worker.sig_error.connect(self.task_error)
+        worker.sig_finished.connect(self._on_worker_finished)
+
+        # Старт связка
+        thread.started.connect(worker.run)
+
+        # Запоминаем ссылки
+        self._workers[task_id] = worker
+        self._threads[task_id] = thread
+
+        # Запуск
+        thread.start()
 
     def stop_task(self, task_id: str) -> None:
         worker = self._workers.get(task_id)
@@ -96,15 +131,29 @@ class TaskManager(QObject):
         self.task_status.emit(task_id, status_str)
 
     def _on_worker_finished(self, task_id: str) -> None:
-        # Отключаем и очищаем тред/воркер
         thread = self._threads.pop(task_id, None)
         worker = self._workers.pop(task_id, None)
         if thread:
             thread.quit()
             thread.wait()
             thread.deleteLater()
-        # worker удалится сборщиком мусора
+        # worker освободится GC
 
-    # Удобный хелпер (не обязателен, пригодится позже)
     def is_running(self, task_id: str) -> bool:
         return task_id in self._threads
+
+    def remove_task(self, task_id: str) -> bool:
+        """Остановить (если бежит) и удалить задачу из менеджера."""
+        # если бежит — мягко останавливаем
+        if task_id in self._workers:
+            self.stop_task(task_id)
+        # удалить из реестров (тред/воркер доудалятся в _on_worker_finished)
+        existed = self._tasks.pop(task_id, None) is not None
+        # лог
+        try:
+            self.task_log.emit(task_id, "INFO", "Task removed")
+        except Exception:
+            pass
+        return existed
+
+

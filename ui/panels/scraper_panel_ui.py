@@ -41,6 +41,7 @@ class Ui_scraper_panel(object):
         __qtablewidgetitem1 = QTableWidgetItem()
         self.taskTable.setHorizontalHeaderItem(1, __qtablewidgetitem1)
         self.taskTable.setObjectName(u"taskTable")
+        self.taskTable.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.taskTable.horizontalHeader().setStretchLastSection(True)
 
         self.verticalLayout.addWidget(self.taskTable)
@@ -77,6 +78,11 @@ class Ui_scraper_panel(object):
 
         self.verticalLayout_2.addWidget(self.btnStop)
 
+        self.btnDelete = QPushButton(scraper_panel)
+        self.btnDelete.setObjectName(u"btnDelete")
+
+        self.verticalLayout_2.addWidget(self.btnDelete)
+
         self.btnExport = QPushButton(scraper_panel)
         self.btnExport.setObjectName(u"btnExport")
 
@@ -102,6 +108,7 @@ class Ui_scraper_panel(object):
         self.btnAddTask.setText(QCoreApplication.translate("scraper_panel", u"Add Task", None))
         self.btnStart.setText(QCoreApplication.translate("scraper_panel", u"Start", None))
         self.btnStop.setText(QCoreApplication.translate("scraper_panel", u"Stop", None))
+        self.btnDelete.setText(QCoreApplication.translate("scraper_panel", u"Delete", None))
         self.btnExport.setText(QCoreApplication.translate("scraper_panel", u"Export", None))
     # retranslateUi
 
