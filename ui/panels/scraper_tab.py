@@ -1,12 +1,14 @@
 # ui/panels/scraper_tab.py
 from __future__ import annotations  # ← должен быть первым
 from datetime import datetime
-from PySide6.QtCore import Qt, Slot
+import os
+from PySide6.QtCore import Qt, Slot, QSettings
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
+from core.scraper import exporter
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
 
@@ -385,7 +387,77 @@ class ScraperTabController(QWidget):
 
     @Slot()
     def on_export_clicked(self):
-        self.append_log_line("[UI] Export clicked (stub)")
+        # 1) Выбор Scope
+        scopes = ["Selected", "Completed", "All"]
+        scope, ok = QInputDialog.getItem(self, "Export scope", "Choose:", scopes, 0, False)
+        if not ok:
+            return
+
+        # 2) Формат — спросим через стандартный диалог
+        filters = "CSV (*.csv);;Excel (*.xlsx);;JSON (*.json)"
+
+        # Папка по умолчанию (data/exports) или последняя использованная
+        settings = QSettings("WebSecSuite", "Scraper")
+        last_dir = settings.value("export/last_dir", "", str) or exporter.default_exports_dir()
+
+        # Предложим осмысленное имя
+        default_fmt = "csv"
+        suggested_name = exporter.suggest_filename(default_fmt, scope)
+        start_path = os.path.join(last_dir, suggested_name)
+
+        path, selected_filter = QFileDialog.getSaveFileName(self, "Export tasks", start_path, filters)
+        if not path:
+            return
+
+        # Определим fmt по расширению/фильтру
+        lf = path.lower()
+        if lf.endswith(".csv"):
+            fmt = "csv"
+        elif lf.endswith(".xlsx"):
+            fmt = "xlsx"
+        elif lf.endswith(".json"):
+            fmt = "json"
+        else:
+            if "CSV" in selected_filter:
+                fmt = "csv"; path += ".csv"
+            elif "Excel" in selected_filter:
+                fmt = "xlsx"; path += ".xlsx"
+            else:
+                fmt = "json"; path += ".json"
+
+        # 3) Соберём задачи
+        tasks = []
+        try:
+            if scope == "Selected":
+                rows = self._selected_rows()
+                if not rows:
+                    self.append_log_line("[WARN] Nothing selected for export")
+                    return
+                for r in rows:
+                    tid = self._task_id_by_row(r)
+                    t = self.task_manager.get_task(tid)
+                    if t: tasks.append(t)
+            elif scope == "Completed":
+                for t in self.task_manager.get_all_tasks():
+                    if getattr(t, "status", None) == TaskStatus.DONE:
+                        tasks.append(t)
+            else:
+                tasks = self.task_manager.get_all_tasks()
+
+            if not tasks:
+                self.append_log_line("[WARN] No tasks to export")
+                return
+
+            # 4) Экспорт
+            out = exporter.export_tasks(tasks, fmt, path)
+            self.append_log_line(f"[INFO] Exported {len(tasks)} task(s) → {out}")
+
+            # запомним папку
+            settings.setValue("export/last_dir", os.path.dirname(out))
+
+        except Exception as e:
+            self.append_log_line(f"[ERROR] Export failed: {e}")
+
 
     @Slot()
     def on_add_task_clicked(self):

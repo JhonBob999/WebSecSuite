@@ -27,10 +27,10 @@ class TaskManager(QObject):
         self._tasks[task.id] = task
         return task.id
 
-    def get_task(self, task_id: str) -> Optional[ScrapeTask]:
+    def get_task(self, task_id: str):
         return self._tasks.get(task_id)
 
-    def tasks(self) -> Iterable[ScrapeTask]:
+    def get_all_tasks(self):
         return list(self._tasks.values())
 
     # ---------- Управление исполнением ----------
