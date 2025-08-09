@@ -1,11 +1,12 @@
 # ui/panels/scraper_tab.py
 from __future__ import annotations
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper.task_types import TaskStatus
+from dialogs.add_task_dialog import AddTaskDialog
 
 
 class ScraperTabController(QWidget):
@@ -50,7 +51,7 @@ class ScraperTabController(QWidget):
         vh.setSectionResizeMode(QHeaderView.ResizeToContents)
 
         # 5) Демонстрационные задачи
-        self.add_task_row("https://example.com")
+        self.add_task_row("https://delfi.lv")
         self.add_task_row("https://cnn.com")
         self.add_task_row("https://github.com")
 
@@ -58,14 +59,12 @@ class ScraperTabController(QWidget):
         assert hasattr(self.ui, "btnStart"), "В .ui нет кнопки btnStart"
         assert hasattr(self.ui, "btnStop"), "В .ui нет кнопки btnStop"
         assert hasattr(self.ui, "btnExport"), "В .ui нет кнопки btnExport"
-
-        # снимаем возможные старые коннекты (на случай повторной инициализации)
-        for btn in (self.ui.btnStart, self.ui.btnStop, self.ui.btnExport):
-            try:
-                btn.clicked.disconnect()
-            except Exception:
-                pass
-
+        
+        # Подключаем кнопку Add Task
+        assert hasattr(self.ui, "btnAddTask"), "В .ui нет кнопки btnAddTask"
+        
+        # Кнопки — подключаем
+        self.ui.btnAddTask.clicked.connect(self.on_add_task_clicked)
         self.ui.btnStart.clicked.connect(self.on_start_clicked)
         self.ui.btnStop.clicked.connect(self.on_stop_clicked)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
@@ -120,6 +119,16 @@ class ScraperTabController(QWidget):
     @Slot()
     def on_export_clicked(self):
         self.append_log_line("[UI] Export clicked (stub)")
+        
+    @Slot()
+    def on_add_task_clicked(self):
+        dlg = AddTaskDialog(self)  # наше модальное окно
+        if dlg.exec() == QDialog.Accepted and dlg.data:
+            data = dlg.data
+            # Добавляем задачу в таблицу и TaskManager
+            self.add_task_row(data["url"], params=data)
+            self.append_log_line(f"[INFO] Added task → {data['url']}")
+
 
     # ---------- Обработчики сигналов менеджера ----------
     @Slot(str, str, str)

@@ -62,6 +62,11 @@ class Ui_scraper_panel(object):
         self.verticalLayout_2 = QVBoxLayout()
         self.verticalLayout_2.setSpacing(0)
         self.verticalLayout_2.setObjectName(u"verticalLayout_2")
+        self.btnAddTask = QPushButton(scraper_panel)
+        self.btnAddTask.setObjectName(u"btnAddTask")
+
+        self.verticalLayout_2.addWidget(self.btnAddTask)
+
         self.btnStart = QPushButton(scraper_panel)
         self.btnStart.setObjectName(u"btnStart")
 
@@ -94,6 +99,7 @@ class Ui_scraper_panel(object):
         ___qtablewidgetitem1 = self.taskTable.horizontalHeaderItem(1)
         ___qtablewidgetitem1.setText(QCoreApplication.translate("scraper_panel", u"Status", None));
         self.lbl_logs.setText(QCoreApplication.translate("scraper_panel", u"Logs", None))
+        self.btnAddTask.setText(QCoreApplication.translate("scraper_panel", u"Add Task", None))
         self.btnStart.setText(QCoreApplication.translate("scraper_panel", u"Start", None))
         self.btnStop.setText(QCoreApplication.translate("scraper_panel", u"Stop", None))
         self.btnExport.setText(QCoreApplication.translate("scraper_panel", u"Export", None))
