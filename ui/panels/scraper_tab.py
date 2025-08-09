@@ -43,13 +43,21 @@ class ScraperTabController(QWidget):
         self.add_task_row("https://cnn.com")
         self.add_task_row("https://github.com")
 
-        # 6) Кнопки (если не связаны в Designer)
-        if hasattr(self.ui, "Start"):
-            self.ui.btnStart.clicked.connect(self.on_start_clicked)
-        if hasattr(self.ui, "Stop"):
-            self.ui.btnStop.clicked.connect(self.on_stop_clicked)
-        if hasattr(self.ui, "Export"):
-            self.ui.btnExport.clicked.connect(self.on_export_clicked)
+        # 6) Кнопки — подключаем явно
+        assert hasattr(self.ui, "btnStart"), "В .ui нет кнопки btnStart"
+        assert hasattr(self.ui, "btnStop"), "В .ui нет кнопки btnStop"
+        assert hasattr(self.ui, "btnExport"), "В .ui нет кнопки btnExport"
+
+        # снимаем возможные старые коннекты (на случай повторной инициализации)
+        for btn in (self.ui.btnStart, self.ui.btnStop, self.ui.btnExport):
+            try:
+                btn.clicked.disconnect()
+            except Exception:
+                pass
+
+        self.ui.btnStart.clicked.connect(self.on_start_clicked)
+        self.ui.btnStop.clicked.connect(self.on_stop_clicked)
+        self.ui.btnExport.clicked.connect(self.on_export_clicked)
 
     # ---------- Таблица и строки ----------
     def add_task_row(self, url: str, params: dict | None = None) -> None:

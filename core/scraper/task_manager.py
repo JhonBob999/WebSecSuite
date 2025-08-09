@@ -63,6 +63,7 @@ class TaskManager(QObject):
         self._threads[task_id] = thread
 
         # Запуск
+        print(f"DEBUG: запускаю задачу {task_id} для {task.url}")
         thread.start()
 
     def start_all(self) -> None:

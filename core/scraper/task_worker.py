@@ -24,6 +24,7 @@ class TaskWorker(QObject):
     @Slot()
     def run(self) -> None:
         """Основной цикл работы — тут имитация 'запросов' с прогрессом."""
+        print(f"DEBUG: воркер стартовал для {self._task.url}")
         task_id = self._task.id
         try:
             self.sig_status.emit(task_id, TaskStatus.RUNNING.value)
