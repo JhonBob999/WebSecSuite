@@ -184,13 +184,6 @@ class ScraperTabController(QWidget):
 
     # ---------- ИНИЦИАЛИЗАЦИЯ КНОПОК ФИЛЬТРОВ ----------
     def _init_ui_connections(self):
-        # Кнопки фильтров (toggle)
-        if hasattr(self.ui, "btnInfo"):
-            self.ui.btnInfo.toggled.connect(lambda checked: self._toggle_level("INFO", checked))
-        if hasattr(self.ui, "btnWarn"):
-            self.ui.btnWarn.toggled.connect(lambda checked: self._toggle_level("WARN", checked))
-        if hasattr(self.ui, "btnError"):
-            self.ui.btnError.toggled.connect(lambda checked: self._toggle_level("ERROR", checked))
         # Clear — очищает экран, но НЕ буфер
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)

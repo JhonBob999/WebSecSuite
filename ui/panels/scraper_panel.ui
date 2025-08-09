@@ -186,19 +186,6 @@
     <string>Add Task</string>
    </property>
   </widget>
-  <widget class="QToolButton" name="btnWarn">
-   <property name="geometry">
-    <rect>
-     <x>1506</x>
-     <y>430</y>
-     <width>48</width>
-     <height>22</height>
-    </rect>
-   </property>
-   <property name="text">
-    <string>WARN</string>
-   </property>
-  </widget>
   <widget class="QToolButton" name="btnClearLog">
    <property name="geometry">
     <rect>
@@ -210,32 +197,6 @@
    </property>
    <property name="text">
     <string>CLEAR</string>
-   </property>
-  </widget>
-  <widget class="QToolButton" name="btnInfo">
-   <property name="geometry">
-    <rect>
-     <x>1460</x>
-     <y>430</y>
-     <width>40</width>
-     <height>22</height>
-    </rect>
-   </property>
-   <property name="text">
-    <string>INFO</string>
-   </property>
-  </widget>
-  <widget class="QToolButton" name="btnError">
-   <property name="geometry">
-    <rect>
-     <x>1560</x>
-     <y>430</y>
-     <width>49</width>
-     <height>22</height>
-    </rect>
-   </property>
-   <property name="text">
-    <string>ERROR</string>
    </property>
   </widget>
   <widget class="QPushButton" name="btnPause">
