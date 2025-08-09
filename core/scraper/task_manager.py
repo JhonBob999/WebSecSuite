@@ -1,5 +1,6 @@
 # core/scraper/task_manager.py
 from __future__ import annotations
+from time import monotonic
 from PySide6.QtCore import QObject, Signal, QThread
 from typing import Dict, Optional, Iterable
 
@@ -206,5 +207,56 @@ class TaskManager(QObject):
         except Exception:
             pass
         return existed
+    
+    # Контроль Тредов и Потоков для безопасного завершения
+    
+    def active_task_ids(self):
+        """Какие задачи сейчас имеют активные треды."""
+        return list(self._threads.keys())
+
+    def is_idle(self) -> bool:
+        """Нет активных тредов/воркеров."""
+        return not self._threads
+
+    def shutdown(self, timeout_ms: int = 5000) -> dict:
+        """
+        Мягко останавливает все задачи и ждёт завершения потоков.
+        Возвращает итоговую сводку:
+          {
+            "stopped": <int>,   # скольким воркерам отправили request_stop
+            "joined": <int>,    # скольких реально дождались (thread.wait)
+            "left": [task_id],  # у кого тред всё ещё жив по истечении таймаута
+          }
+        """
+        summary = {"stopped": 0, "joined": 0, "left": []}
+
+        # 1) Попросим всех остановиться
+        if self._workers:
+            self.stop_all()
+            summary["stopped"] = len(self._workers)
+
+        # 2) Ждём завершения тредов с таймаутом
+        deadline = monotonic() + (timeout_ms / 1000.0)
+        # Снимем срез, потому что _on_worker_finished будет чистить словари
+        pending = dict(self._threads)
+        for task_id, thread in pending.items():
+            remain_ms = int(max(0.0, deadline - monotonic()) * 1000)
+            if remain_ms <= 0:
+                break
+            # Если воркер уже сам выполз — _on_worker_finished его почистит
+            # На всякий случай попросим тред завершиться, если он ещё жив
+            try:
+                thread.quit()  # безопасно: вдруг у него есть цикл событий
+            except Exception:
+                pass
+            # Ждём
+            if thread.wait(remain_ms):
+                summary["joined"] += 1
+            else:
+                summary["left"].append(task_id)
+
+        # 3) Лёгкая уборка хвостов (если какие-то ещё числятся)
+        # Они завершатся при выходе процесса; мы просто не уронем приложение.
+        return summary
 
 
