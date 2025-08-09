@@ -89,8 +89,6 @@ class ScraperTabController(QWidget):
 
         # 4) Инициализация таблицы
         table = self.ui.taskTable
-        table.setColumnCount(2)  # пока: URL | Status
-        table.setHorizontalHeaderLabels(["URL", "Status"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
