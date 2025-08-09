@@ -14,6 +14,8 @@ class TaskManager(QObject):
     task_progress = Signal(str, int)        # (task_id, progress)
     task_result = Signal(str, dict)         # (task_id, payload)
     task_error = Signal(str, str)           # (task_id, error_str)
+    task_reset = Signal(str)            # task_id , reset
+    task_restarted = Signal(str)        # task_id , restart all selected
 
     def __init__(self):
         super().__init__()
@@ -115,6 +117,55 @@ class TaskManager(QObject):
     def stop_all(self) -> None:
         for task_id in list(self._workers.keys()):
             self.stop_task(task_id)
+            
+    def reset_task(self, task_id: str) -> bool:
+        """Сбрасывает задачу в состояние PENDING, очищает прогресс/результат.
+           Если задача запущена — останавливает перед сбросом.
+        """
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+
+        # если запущена — корректно останавливаем
+        try:
+            if getattr(task, "status", None) == "RUNNING":
+                self.stop_task(task_id)
+        except Exception:
+            pass
+
+        # Обнуляем поля
+        task.status = "PENDING"
+        task.progress = 0
+        task.result = None
+        task.error = None
+        task.started_at = None
+        task.finished_at = None
+
+        # Удаляем воркер, если остался
+        worker = self._workers.pop(task_id, None)
+        if worker is not None:
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+
+        # Сообщаем в UI
+        self.task_reset.emit(task_id)
+        return True
+
+    def restart_task(self, task_id: str) -> bool:
+        """Сбрасывает и сразу запускает задачу."""
+        if not self.reset_task(task_id):
+            return False
+        ok = self.start_task(task_id)
+        if ok:
+            self.task_restarted.emit(task_id)
+        return ok
+
+    def restart_selected_tasks(self, task_ids) -> None:
+        """Перезапуск нескольких задач."""
+        for tid in task_ids:
+            self.restart_task(tid)
 
     # ---------- Внутренние обработчики ----------
     def _on_worker_status(self, task_id: str, status_str: str) -> None:

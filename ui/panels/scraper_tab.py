@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 from PySide6.QtCore import Qt, Slot, QSettings
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
@@ -84,6 +84,8 @@ class ScraperTabController(QWidget):
         self.task_manager.task_progress.connect(self.on_task_progress)
         self.task_manager.task_result.connect(self.on_task_result)
         self.task_manager.task_error.connect(self.on_task_error)
+        self.task_manager.task_reset.connect(self._on_task_reset)
+        self.task_manager.task_restarted.connect(self._on_task_restarted)
 
         # 4) Инициализация таблицы
         table = self.ui.taskTable
@@ -314,6 +316,65 @@ class ScraperTabController(QWidget):
         if hdr_block:
             lines.append("  Headers:" + hdr_block)
         return "\n".join(lines)
+    
+    def _selected_task_ids(self):
+        rows = self._selected_rows()
+        ids = []
+        for r in rows:
+            tid = self._task_id_by_row(r)
+            if tid:
+                ids.append(tid)
+        return ids
+    
+    # Обновление строки таблицы по task_id
+    def _refresh_row_by_task_id(self, task_id: str):
+        """Обновить статус строки по task_id."""
+        row = self._find_row_by_task_id(task_id)  # ← ИСПОЛЬЗУЕМ ВЕРСИЮ ИЗ МАПЫ
+        if row is None or row < 0:
+            return
+        task = self.task_manager._tasks.get(task_id)
+        if not task:
+            return
+        # Колонка Status = 1
+        self._set_status_text(row, getattr(task, "status", "") or "")
+
+    def _find_row_by_task_id(self, task_id: str) -> int:
+        return self._row_by_task_id.get(task_id, -1)
+
+
+    def reset_selected_tasks(self):
+        ids = self._selected_task_ids()
+        if not ids:
+            self.append_log_line("[WARN] No rows selected for reset.")
+            return
+        ok = 0
+        for tid in ids:
+            if self.task_manager.reset_task(tid):
+                ok += 1
+                self._refresh_row_by_task_id(tid)
+                self.append_log_line(f"[INFO] Task {tid} reset")
+        self.append_log_line(f"[INFO] Reset done: {ok}/{len(ids)}")
+
+    def restart_selected_tasks(self):
+        ids = self._selected_task_ids()
+        if not ids:
+            self.append_log_line("[WARN] No rows selected for restart.")
+            return
+        ok = 0
+        for tid in ids:
+            if self.task_manager.restart_task(tid):
+                ok += 1
+                self.append_log_line(f"[INFO] Task {tid} restarted")
+        self.append_log_line(f"[INFO] Restart done: {ok}/{len(ids)}")
+        
+    def _on_task_reset(self, task_id):
+        self._refresh_row_by_task_id(task_id)
+        
+    def _on_task_restarted(self, task_id: str):
+        # можно ничего не делать: воркер сам будет пушить прогресс/статус
+        pass
+
+
 
 
     # ---------- Контекстное меню ----------
@@ -331,25 +392,35 @@ class ScraperTabController(QWidget):
 
         menu = QMenu(self)
 
-        act_start = menu.addAction("Start selected")
-        act_stop  = menu.addAction("Stop selected")
-        act_del   = menu.addAction("Delete selected")
+        act_start   = menu.addAction("Start selected")
+        act_stop    = menu.addAction("Stop selected")
+        act_del     = menu.addAction("Delete selected")
         menu.addSeparator()
-        act_add   = menu.addAction("Add task")
+        # ↓ добавляем новые пункты
+        act_reset   = menu.addAction("Reset selected")
+        act_restart = menu.addAction("Restart selected")
+        menu.addSeparator()
+        act_add     = menu.addAction("Add task")
 
-        act_start.setEnabled(has_selection)
-        act_stop.setEnabled(has_selection)
-        act_del.setEnabled(has_selection)
+        # доступность по выбору
+        for a in (act_start, act_stop, act_del, act_reset, act_restart):
+            a.setEnabled(has_selection)
 
+        # PyQt5 обычно menu.exec_(...), PySide6 — menu.exec(...). Оставь как у тебя работает.
         action = menu.exec(global_pos)
         if action is None:
             return
+
         if action == act_start:
             self.start_selected_tasks()
         elif action == act_stop:
             self.stop_selected_tasks()
         elif action == act_del:
             self.delete_selected_tasks()
+        elif action == act_reset:
+            self.reset_selected_tasks()
+        elif action == act_restart:
+            self.restart_selected_tasks()
         elif action == act_add:
             self.on_add_task_clicked()
 
