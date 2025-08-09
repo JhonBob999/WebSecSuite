@@ -1,11 +1,24 @@
-README.md (короткий, понятный)
+# WebSecSuite
 
-требования (Python 3.13.1)
+Desktop-инструмент на PySide6 (Python 3.13), стартовая вкладка — Scraper.
 
-установка (python -m venv .venv, pip install -r requirements.txt)
+## Установка
+1. Python 3.13.x
+2. Создать окружение:
+   python -m venv .venv
+   .venv\Scripts\activate
+3. Зависимости:
+   pip install -r requirements.txt
 
-генерация UI через pyside6-uic
+## Генерация UI
+powershell scripts\generate_ui.ps1
+(или VS Code Task: "Generate UI")
 
-запуск (python main.py)
+## Запуск
+python main.py
 
-как устроены папки (2 абзаца)
+## Структура
+ui/           # Сгенерированные PySide6 .py + исходные .ui
+  main/
+  panels/
+core/         # Логика (здесь будет scraper, cve, ssl и т.д.)
