@@ -222,7 +222,6 @@ class ScraperTabController(QWidget):
                 except Exception as e:
                     self.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
 
-
     @Slot()
     def on_stop_clicked(self):
         self.append_log_line("[UI] Stop clicked")
@@ -280,6 +279,7 @@ class ScraperTabController(QWidget):
                 self._row_by_task_id[task_id] = row
 
     # ---------- Обработчики сигналов менеджера ----------
+    
     @Slot(str, str, str)
     def on_task_log(self, task_id: str, level: str, text: str):
         self.append_log_line(f"[{level}][{task_id[:8]}] {text}")
@@ -306,6 +306,7 @@ class ScraperTabController(QWidget):
         self.append_log_line(f"[ERROR][{task_id[:8]}] {error_str}")
 
     # ---------- Логи ----------
+    
     def append_log_line(self, text: str) -> None:
         self.ui.logOutput.appendPlainText(text)
         # автоскролл
