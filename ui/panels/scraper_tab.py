@@ -843,9 +843,16 @@ class ScraperTabController(QWidget):
         if row < 0:
             return
 
-        # Статус/основные колонки
         self.set_status_cell(row, "Done")
-        self.set_url_cell(row, payload.get("url") or "", payload.get("title"))
+
+        # ⬇️ Новая логика: если payload['url'] пустой — берём URL из задачи
+        url_val = payload.get("url")
+        if not url_val:
+            task = self.task_manager.get_task(task_id)
+            if task:
+                url_val = getattr(task, "url", "") or url_val
+
+        self.set_url_cell(row, url_val or "", payload.get("title"))
         self.set_code_cell(row, payload.get("status_code"))
         self.set_time_cell(row, payload.get("elapsed_request_ms"))
         # Results пока не приходит — остаётся пустым (двойной клик по Results откроет URL как фолбэк)
