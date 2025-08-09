@@ -220,11 +220,6 @@
    </item>
    <item>
     <property name="text">
-     <string>PUT</string>
-    </property>
-   </item>
-   <item>
-    <property name="text">
      <string>HEAD</string>
     </property>
    </item>

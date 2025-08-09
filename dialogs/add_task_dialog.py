@@ -25,6 +25,10 @@ class AddTaskDialog(QtWidgets.QDialog):
         # кнопки
         self.ui.btn_ok.clicked.connect(self._on_accept)
         self.ui.btn_cancel.clicked.connect(self.reject)
+        # retries: границы
+        self.ui.retries_spin.setRange(0, 5)   # 0 = без повторов
+        self.ui.retries_spin.setValue(0)
+
 
     def _validate_url(self, url: str) -> bool:
         q = QtCore.QUrl(url)
@@ -53,10 +57,12 @@ class AddTaskDialog(QtWidgets.QDialog):
 
     def _on_accept(self):
         url = self._normalize_url(self.ui.url_input.text())
+        method = (self.ui.http_combox.currentText() or "GET").upper()
         headers_txt = self.ui.header_textedit.toPlainText()
         proxy = self.ui.proxy_input.text().strip()
         ua = self.ui.user_agent_input.text().strip() or DEFAULT_UA
         timeout_str = self.ui.timeout_input.text().strip()
+        retries = int(self.ui.retries_spin.value())
 
         if not self._validate_url(url):
             QtWidgets.QMessageBox.critical(self, "Invalid URL", "Введите корректный http/https URL.")
@@ -83,11 +89,11 @@ class AddTaskDialog(QtWidgets.QDialog):
 
         self.data = {
             "url": url,
-            "method": "GET",
+            "method": method,
             "headers": headers,
             "user_agent": ua,
             "proxy": proxy or None,
             "timeout": timeout,
-            "retries": 1,
+            "retries": retries,
         }
         self.accept()

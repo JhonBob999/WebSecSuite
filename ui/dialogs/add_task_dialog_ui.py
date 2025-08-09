@@ -79,7 +79,6 @@ class Ui_Dialog(object):
         self.http_combox.addItem("")
         self.http_combox.addItem("")
         self.http_combox.addItem("")
-        self.http_combox.addItem("")
         self.http_combox.setObjectName(u"http_combox")
         self.http_combox.setGeometry(QRect(500, 50, 111, 22))
         self.retries_spin = QSpinBox(Dialog)
@@ -107,8 +106,7 @@ class Ui_Dialog(object):
         self.lbl_http.setText(QCoreApplication.translate("Dialog", u"<html><head/><body><p align=\"right\">HTTP-Method:</p></body></html>", None))
         self.http_combox.setItemText(0, QCoreApplication.translate("Dialog", u"GET", None))
         self.http_combox.setItemText(1, QCoreApplication.translate("Dialog", u"POST", None))
-        self.http_combox.setItemText(2, QCoreApplication.translate("Dialog", u"PUT", None))
-        self.http_combox.setItemText(3, QCoreApplication.translate("Dialog", u"HEAD", None))
+        self.http_combox.setItemText(2, QCoreApplication.translate("Dialog", u"HEAD", None))
 
         self.lbl_retires.setText(QCoreApplication.translate("Dialog", u"<html><head/><body><p align=\"right\">Retries:</p></body></html>", None))
     # retranslateUi
