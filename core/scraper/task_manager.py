@@ -3,15 +3,17 @@ from __future__ import annotations
 
 # === SECTION === Imports & Typing
 from typing import Dict, Optional, Iterable, List
+from datetime import datetime
+
 from PySide6.QtCore import QObject, Signal, QThreadPool
 
 from .task_types import ScrapeTask, TaskStatus
 from .runnables import WorkerSignals, ScraperRunnable
 
 
-# === SECTION === TaskManager signals (proxy to UI)
+# === SECTION === TaskManager (proxy signals → UI, state holder)
 class TaskManager(QObject):
-    # Пробрасываем события вверх (в контроллер UI)
+    # Сигналы наружу (слушает UI-контроллер)
     task_log = Signal(str, str, str)        # (task_id, level, text)
     task_status = Signal(str, str)          # (task_id, status)
     task_progress = Signal(str, int)        # (task_id, progress)
@@ -29,6 +31,14 @@ class TaskManager(QObject):
         self.pool = QThreadPool.globalInstance()
         self.max_concurrent_tasks = 4
         self.pool.setMaxThreadCount(self.max_concurrent_tasks)
+
+    # === SECTION === Concurrency control
+    def set_max_concurrency(self, n: int) -> None:
+        """Изменить максимальное число параллельных задач на лету."""
+        n = max(1, int(n))
+        self.max_concurrent_tasks = n
+        self.pool.setMaxThreadCount(n)
+        self.task_log.emit("", "INFO", f"Max concurrency set to {n}")
 
     # === SECTION === CRUD
     def create_task(self, url: str, params: Optional[dict] = None) -> str:
@@ -102,36 +112,68 @@ class TaskManager(QObject):
                 self.start_task(tid)
 
     def stop_task(self, task_id: str) -> None:
+        """
+        Запрашиваем кооперативную остановку.
+        ВАЖНО: если задача была на паузе — «будим» её перед стопом, чтобы она вышла из _wait_pause().
+        """
         r = self._runnables.get(task_id)
         if r:
-            r.request_stop()
+            # «Будим» на случай паузы, затем стоп
+            try:
+                r.request_resume()
+            finally:
+                r.request_stop()
 
     def stop_all(self) -> None:
-        for r in list(self._runnables.values()):
-            r.request_stop()
+        for tid, r in list(self._runnables.items()):
+            try:
+                r.request_resume()
+            finally:
+                r.request_stop()
 
     # === SECTION === Pause/Resume (single & bulk)
     def pause_task(self, task_id: str) -> None:
         r = self._runnables.get(task_id)
         if r:
             r.request_pause()
+            # Синхронизируем локальное состояние задачи (воркер паузу не эмитит)
+            task = self._tasks.get(task_id)
+            if task:
+                task.status = TaskStatus.PAUSED
             self.task_status.emit(task_id, TaskStatus.PAUSED.value)
+            self.task_log.emit(task_id, "INFO", "Pause requested")
 
     def resume_task(self, task_id: str) -> None:
         r = self._runnables.get(task_id)
         if r:
             r.request_resume()
+            task = self._tasks.get(task_id)
+            if task:
+                task.status = TaskStatus.RUNNING
+                if task.started_at is None:
+                    task.started_at = datetime.utcnow()
             self.task_status.emit(task_id, TaskStatus.RUNNING.value)
+            self.task_log.emit(task_id, "INFO", "Resume requested")
 
     def pause_all(self) -> None:
         for tid, r in list(self._runnables.items()):
             r.request_pause()
+            task = self._tasks.get(tid)
+            if task:
+                task.status = TaskStatus.PAUSED
             self.task_status.emit(tid, TaskStatus.PAUSED.value)
+        self.task_log.emit("", "INFO", "Pause requested for all active tasks")
 
     def resume_all(self) -> None:
         for tid, r in list(self._runnables.items()):
             r.request_resume()
+            task = self._tasks.get(tid)
+            if task:
+                task.status = TaskStatus.RUNNING
+                if task.started_at is None:
+                    task.started_at = datetime.utcnow()
             self.task_status.emit(tid, TaskStatus.RUNNING.value)
+        self.task_log.emit("", "INFO", "Resume requested for all active tasks")
 
     # === SECTION === Reset/Restart
     def reset_task(self, task_id: str) -> bool:
@@ -145,7 +187,7 @@ class TaskManager(QObject):
 
         # если запущена — корректно останавливаем
         try:
-            if getattr(task, "status", None) == TaskStatus.RUNNING:
+            if getattr(task, "status", None) in (TaskStatus.RUNNING, TaskStatus.PAUSED):
                 self.stop_task(task_id)
         except Exception:
             pass
@@ -181,21 +223,23 @@ class TaskManager(QObject):
         task = self._tasks.get(task_id)
         if not task:
             return
-        # Нормализуем в enum
-        task.status = TaskStatus(status_str)
-
+        # Нормализуем в enum (ожидаем точные строки из воркера)
+        try:
+            task.status = TaskStatus(status_str)
+        except ValueError:
+            # Если пришло неожиданное значение — прокинем как есть, но в лог отметим.
+            self.task_log.emit(task_id, "WARN", f"Unknown status from worker: {status_str}")
+            # Не падаем и просто транслируем
         # Таймстемпы
-        from datetime import datetime
         if task.status == TaskStatus.RUNNING and task.started_at is None:
             task.started_at = datetime.utcnow()
         if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.STOPPED):
             task.finished_at = datetime.utcnow()
-
         # Проксируем наружу (UI)
         self.task_status.emit(task_id, status_str)
 
     def _on_worker_finished(self, task_id: str) -> None:
-        # раннабл сам завершился — убираем из реестра
+        # Воркер завершился — удаляем его из реестра
         self._runnables.pop(task_id, None)
 
     # === SECTION === Introspection & shutdown
@@ -215,8 +259,11 @@ class TaskManager(QObject):
         """
         summary = {"stopped": 0, "joined": 0, "left": []}
         if self._runnables:
-            for r in list(self._runnables.values()):
-                r.request_stop()
+            for tid, r in list(self._runnables.items()):
+                try:
+                    r.request_resume()   # на случай паузы
+                finally:
+                    r.request_stop()
             summary["stopped"] = len(self._runnables)
 
         self.pool.waitForDone(timeout_ms)

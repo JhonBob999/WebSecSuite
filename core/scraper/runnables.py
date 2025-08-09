@@ -40,16 +40,39 @@ class ScraperRunnable(QRunnable):
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # set = разрешено выполнять
+        self._is_paused = False  # внутренний флаг для UX-логов/статусов
 
     # --- Cooperative control API (called by TaskManager) ---
     def request_stop(self) -> None:
+        # Останавливаем и обязательно "пробуждаем" из паузы, чтобы поток не завис
         self._stop_event.set()
+        self._pause_event.set()
+        try:
+            self.signals.task_log.emit(getattr(self.task, "id", ""), "INFO", "Stop requested")
+        except Exception:
+            pass
 
     def request_pause(self) -> None:
-        self._pause_event.clear()
+        if not self._is_paused:
+            self._is_paused = True
+            self._pause_event.clear()
+            tid = getattr(self.task, "id", "")
+            try:
+                self.signals.task_status.emit(tid, "Paused")
+                self.signals.task_log.emit(tid, "INFO", "Paused")
+            except Exception:
+                pass
 
     def request_resume(self) -> None:
-        self._pause_event.set()
+        if self._is_paused:
+            self._is_paused = False
+            self._pause_event.set()
+            tid = getattr(self.task, "id", "")
+            try:
+                self.signals.task_status.emit(tid, "Running")
+                self.signals.task_log.emit(tid, "INFO", "Resumed")
+            except Exception:
+                pass
 
     # --- Internal helpers ---
     def _check_stop(self, tid: str) -> bool:
@@ -60,18 +83,28 @@ class ScraperRunnable(QRunnable):
             return True
         return False
 
-    def _wait_pause(self, tid: str, ping_sec: float = 3.0) -> None:
+    def _pause_gate(self, tid: str, ping_sec: float = 5.0) -> bool:
         """
-        Ожидаем выхода из паузы. Каждые ping_sec шлём INFO лог.
-        Не блокируем UI — это в пуле.
+        Кооперативная пауза: блокируемся, пока _pause_event не set().
+        Раз в ping_sec пишем в лог "Paused…".
+        Возвращаем False, если в ожидании пришёл stop.
         """
-        last_ping = time.perf_counter()
+        if self._pause_event.is_set():
+            return True
+
+        last_ping = 0.0
+        # На входе мы уже на паузе
         while not self._pause_event.is_set():
-            time.sleep(0.05)
+            if self._stop_event.is_set():
+                # Прерываем ожидание паузы из-за стопа
+                return False
             now = time.perf_counter()
             if now - last_ping >= ping_sec:
                 self.signals.task_log.emit(tid, "INFO", "Paused…")
                 last_ping = now
+            # Короткий сон, чтобы не крутить CPU
+            time.sleep(0.05)
+        return True
 
     # --- Main entry point ---
     def run(self) -> None:
@@ -91,14 +124,15 @@ class ScraperRunnable(QRunnable):
             if self._check_stop(tid):
                 self.signals.task_finished.emit(tid)
                 return
-            self._wait_pause(tid)
+            if not self._pause_gate(tid):
+                self.signals.task_finished.emit(tid)
+                return
 
             # Лог запроса
             self.signals.task_log.emit(tid, "INFO", f"Request {method} {url}")
 
             # === HTTP request ===
-            # httpx >= 0.28: используем proxy= и follow_redirects=True
-            # Если нужен verify=False/клиентские сертификаты — добавим позже через params.
+            # httpx >= 0.28: proxy=, follow_redirects=True
             t0_req = time.perf_counter()
             with httpx.Client(timeout=timeout, headers=headers, proxy=proxy, follow_redirects=True) as client:
                 resp = client.request(method, url)
@@ -108,7 +142,9 @@ class ScraperRunnable(QRunnable):
             if self._check_stop(tid):
                 self.signals.task_finished.emit(tid)
                 return
-            self._wait_pause(tid)
+            if not self._pause_gate(tid):
+                self.signals.task_finished.emit(tid)
+                return
 
             # === Redirect chain ===
             redirect_chain: List[Dict[str, Optional[str]]] = [
@@ -145,9 +181,14 @@ class ScraperRunnable(QRunnable):
                     "total_ms": total_ms,
                 },
             }
+            
+            self.task.result = result
 
             # Последняя проверка остановки перед эмитом
             if self._check_stop(tid):
+                self.signals.task_finished.emit(tid)
+                return
+            if not self._pause_gate(tid):
                 self.signals.task_finished.emit(tid)
                 return
 

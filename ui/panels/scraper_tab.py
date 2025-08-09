@@ -172,6 +172,8 @@ class ScraperTabController(QWidget):
         self.ui.btnStop.clicked.connect(self.on_stop_clicked)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.btnDelete.clicked.connect(self.on_delete_clicked)
+        self.ui.btnPause.clicked.connect(self.on_pause_clicked)    # ← добавлено
+        self.ui.btnResume.clicked.connect(self.on_resume_clicked)  # ← добавлено
 
         # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР (п.2 из next_step)
         self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
@@ -482,24 +484,31 @@ class ScraperTabController(QWidget):
         self.on_delete_clicked()
         
     def _format_result_short(self, payload: dict) -> str:
-        url = payload.get("url", "") or ""
+        # URL, код, заголовок
+        url = payload.get("final_url") or payload.get("url", "") or ""
         code = payload.get("status_code", "")
         title = (payload.get("title") or "").strip()
 
-        # соответствие твоим ключам
-        size_bytes = payload.get("content_length")  # может быть int/str/None
+        # размер контента
+        size_bytes = payload.get("content_len")
         try:
             size_bytes = int(size_bytes) if size_bytes is not None else None
         except Exception:
             size_bytes = None
 
-        t_req = payload.get("elapsed_request_ms")
+        # тайминги
+        timings = payload.get("timings", {}) or {}
+        t_req = timings.get("request_ms")
         try:
             t_req = int(t_req) if t_req is not None else None
         except Exception:
             t_req = None
 
-        # заголовки (есть в payload['headers'])
+        # редиректы
+        redirects = payload.get("redirect_chain", []) or []
+        redirect_count = len(redirects)
+
+        # заголовки
         headers = payload.get("headers", {}) or {}
         hdr_pairs = []
         for k in ("server", "content-type", "content-length", "date", "via", "x-powered-by", "cf-ray"):
@@ -508,9 +517,9 @@ class ScraperTabController(QWidget):
                 hdr_pairs.append(f"    {k}: {v}")
         hdr_block = ("\n" + "\n".join(hdr_pairs)) if hdr_pairs else ""
 
-        # форматирование
         size_line = f"{size_bytes} bytes" if size_bytes is not None else "(unknown)"
         time_line = f"{t_req} ms" if t_req is not None else "(unknown)"
+        redirect_line = f"{redirect_count} redirect(s)" if redirect_count else "No redirects"
 
         lines = [
             f"  URL: {url}",
@@ -518,10 +527,12 @@ class ScraperTabController(QWidget):
             f"  Title: {title}" if title else "  Title: (none)",
             f"  Size: {size_line}",
             f"  Time: request {time_line}",
+            f"  Redirects: {redirect_line}",
         ]
         if hdr_block:
             lines.append("  Headers:" + hdr_block)
         return "\n".join(lines)
+
     
     def _selected_task_ids(self):
         rows = self._selected_rows()
@@ -603,6 +614,8 @@ class ScraperTabController(QWidget):
         # ▶ Действия запуска
         act_start   = menu.addAction("Start selected")
         act_stop    = menu.addAction("Stop selected")
+        act_pause   = menu.addAction("Pause selected")    # ← добавлено
+        act_resume  = menu.addAction("Resume selected")   # ← добавлено
         act_restart = menu.addAction("Restart selected")
         act_reset   = menu.addAction("Reset selected")
         menu.addSeparator()
@@ -625,7 +638,7 @@ class ScraperTabController(QWidget):
         act_delete   = menu.addAction("Delete selected")
 
         # доступность
-        for a in (act_start, act_stop, act_restart, act_reset, act_delete,
+        for a in (act_start, act_stop, act_pause, act_resume, act_restart, act_reset, act_delete,
                 act_open_url, act_copy_url, act_open_res, act_copy_hdrs,
                 act_view_hdrs, act_view_redir, act_view_cookies, act_edit_params):
             a.setEnabled(has_selection)
@@ -638,6 +651,10 @@ class ScraperTabController(QWidget):
             self.start_selected_tasks()
         elif action == act_stop:
             self.stop_selected_tasks()
+        elif action == act_pause:          # ← добавлено
+            self.pause_selected_tasks()
+        elif action == act_resume:         # ← добавлено
+            self.resume_selected_tasks()
         elif action == act_restart:
             self.restart_selected_tasks()
         elif action == act_reset:
@@ -692,6 +709,26 @@ class ScraperTabController(QWidget):
     def on_stop_clicked(self):
         self.append_log_line("[UI] Stop clicked")
         self.task_manager.stop_all()
+        
+    @Slot()
+    def on_pause_clicked(self):  # ← добавлено
+        ids = self._selected_task_ids()
+        if not ids:
+            self.append_log_line("[WARN] No tasks selected")
+            return
+        for tid in ids:
+            self.task_manager.pause_task(tid)
+        self.append_log_line(f"[UI] Pause clicked → {len(ids)} task(s)")
+
+    @Slot()
+    def on_resume_clicked(self):  # ← добавлено
+        ids = self._selected_task_ids()
+        if not ids:
+            self.append_log_line("[WARN] No tasks selected")
+            return
+        for tid in ids:
+            self.task_manager.resume_task(tid)
+        self.append_log_line(f"[UI] Resume clicked → {len(ids)} task(s)")
 
     @Slot()
     def on_export_clicked(self):
@@ -835,7 +872,7 @@ class ScraperTabController(QWidget):
 
     @Slot(str, dict)
     def on_task_result(self, task_id: str, payload: dict):
-        # лог — кратко
+        # Красивый блок в логи (с учётом final_url/content_len/timings.request_ms + redirects)
         pretty = self._format_result_short(payload)
         self.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
 
@@ -843,41 +880,50 @@ class ScraperTabController(QWidget):
         if row < 0:
             return
 
+        # Ставим статус
         self.set_status_cell(row, "Done")
 
-        # ⬇️ Новая логика: если payload['url'] пустой — берём URL из задачи
-        url_val = payload.get("url")
+        # URL: предпочитаем final_url (после редиректов), фолбэк — исходный из задачи
+        url_val = payload.get("final_url") or payload.get("url") or ""
         if not url_val:
             task = self.task_manager.get_task(task_id)
             if task:
                 url_val = getattr(task, "url", "") or url_val
+        self.set_url_cell(row, url_val, payload.get("title"))
 
-        self.set_url_cell(row, url_val or "", payload.get("title"))
+        # Код ответа
         self.set_code_cell(row, payload.get("status_code"))
-        self.set_time_cell(row, payload.get("elapsed_request_ms"))
-        # Results пока не приходит — остаётся пустым (двойной клик по Results откроет URL как фолбэк)
 
-        # Cookies: по заголовку 'set-cookie'
+        # Время запроса (берём timings.request_ms)
+        timings = payload.get("timings", {}) or {}
+        self.set_time_cell(row, timings.get("request_ms"))
+
+        # Подсказка по редиректам в статусе
+        redirects = payload.get("redirect_chain", []) or []
+        st_item = self.ui.taskTable.item(row, COL_STATUS)
+        if st_item:
+            st_item.setToolTip(f"Done • redirects: {len(redirects)}")
+
+        # Cookies: по заголовку 'Set-Cookie'
         headers = payload.get("headers", {}) or {}
-        # нормализуем ключи
         low_headers = {k.lower(): v for k, v in headers.items()}
         set_cookie_val = low_headers.get("set-cookie")
         has_cookies = bool(set_cookie_val)
         tip = f"Set-Cookie: {set_cookie_val}" if isinstance(set_cookie_val, str) else ""
         self.set_cookies_cell(row, has_cookies, tip)
 
-        # Params: смотрим, есть ли у задачи кастомные параметры
+        # Params: есть ли кастомные параметры у задачи
         task = self.task_manager.get_task(task_id)
         has_params = False
         params_tip = ""
         if task:
-            # предполагаем, что экземпляр задачи хранит параметры рядом (подгони под свою модель)
             p = getattr(task, "params", {}) or {}
             has_params = bool(p) and any(k in p for k in ("headers", "proxy", "user_agent", "timeout", "retries", "method"))
             if has_params:
-                light = {k: p.get(k) for k in ("method","proxy","user_agent","timeout","retries") if k in p}
+                light = {k: p.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if k in p}
                 params_tip = str(light)
         self.set_params_cell(row, has_params, params_tip)
+
 
 
     @Slot(str, str)

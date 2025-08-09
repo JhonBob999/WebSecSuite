@@ -91,6 +91,12 @@ class Ui_scraper_panel(object):
         self.btnError = QToolButton(scraper_panel)
         self.btnError.setObjectName(u"btnError")
         self.btnError.setGeometry(QRect(1560, 430, 49, 22))
+        self.btnPause = QPushButton(scraper_panel)
+        self.btnPause.setObjectName(u"btnPause")
+        self.btnPause.setGeometry(QRect(90, 500, 75, 24))
+        self.btnResume = QPushButton(scraper_panel)
+        self.btnResume.setObjectName(u"btnResume")
+        self.btnResume.setGeometry(QRect(10, 500, 75, 24))
 
         self.retranslateUi(scraper_panel)
 
@@ -124,5 +130,7 @@ class Ui_scraper_panel(object):
         self.btnClearLog.setText(QCoreApplication.translate("scraper_panel", u"CLEAR", None))
         self.btnInfo.setText(QCoreApplication.translate("scraper_panel", u"INFO", None))
         self.btnError.setText(QCoreApplication.translate("scraper_panel", u"ERROR", None))
+        self.btnPause.setText(QCoreApplication.translate("scraper_panel", u"Pause", None))
+        self.btnResume.setText(QCoreApplication.translate("scraper_panel", u"Resume", None))
     # retranslateUi
 

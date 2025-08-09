@@ -14,6 +14,8 @@ _HEADERS_OF_INTEREST = (
     "server",
     "content-type",
     "content-length",
+    "content-encoding",  # NEW (optional)
+    "location",          # NEW (optional)
     "date",
     "via",
     "x-powered-by",
@@ -55,11 +57,8 @@ def _lower_keys(d: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {str(k).lower(): v for k, v in d.items()}
 
 def _flatten_result_for_table(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Produce a flat row with key metrics for CSV/XLSX.
-    Keeps most-used fields and picks important headers.
-    """
     row: Dict[str, Any] = {
+        # текущие поля (сохраняем для совместимости)
         "result_status_code": "",
         "result_final_url": "",
         "result_title": "",
@@ -67,23 +66,53 @@ def _flatten_result_for_table(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         "result_request_ms": "",
         "result_total_ms": "",
         "result_redirects": "",
+        # новые алиасы под план Этапа B
+        "final_status": "",
+        "final_url": "",
+        "title": "",
+        "content_length": "",
+        "elapsed_ms": "",
+        "redirect_count": 0,
+        "has_redirects": 0,
     }
     if not isinstance(result, dict):
         return row
 
     # basics
-    row["result_status_code"] = result.get("status_code", "")
-    row["result_final_url"] = result.get("final_url", "")
-    row["result_title"] = result.get("title", "")
-    row["result_content_len"] = result.get("content_len", "")
+    status_code = result.get("status_code", "")
+    final_url = result.get("final_url", "")
+    title = result.get("title", "")
+    content_len = result.get("content_len", "")
+
+    row["result_status_code"] = status_code
+    row["result_final_url"] = final_url
+    row["result_title"] = title
+    row["result_content_len"] = content_len
+
+    # алиасы
+    row["final_status"] = status_code
+    row["final_url"] = final_url
+    row["title"] = title
+    row["content_length"] = content_len
 
     # timings
     timings = result.get("timings", {}) or {}
-    row["result_request_ms"] = timings.get("request_ms", "")
-    row["result_total_ms"] = timings.get("total_ms", "")
+    request_ms = timings.get("request_ms", "")
+    total_ms = timings.get("total_ms", "")
+    row["result_request_ms"] = request_ms
+    row["result_total_ms"] = total_ms
+    row["elapsed_ms"] = total_ms or request_ms or ""
 
     # redirects
-    row["result_redirects"] = _stringify_redirect_chain(result.get("redirect_chain"))
+    redirects = result.get("redirect_chain")
+    r_str = _stringify_redirect_chain(redirects)
+    row["result_redirects"] = r_str
+    if isinstance(redirects, (list, tuple)):
+        row["redirect_count"] = len(redirects)
+        row["has_redirects"] = 1 if len(redirects) > 0 else 0
+    else:
+        row["redirect_count"] = 0
+        row["has_redirects"] = 0
 
     # headers of interest
     headers = _lower_keys(result.get("headers"))
@@ -130,8 +159,13 @@ def _export_csv(tasks: Iterable[Any], path: str) -> None:
         raise ValueError("No data to export.")
     _ensure_dir(path)
 
-    # RFC4180-friendly for Excel: add BOM so Excel picks UTF-8 automatically
-    fieldnames = list(rows[0].keys())
+    # NEW: собрать объединённый список всех ключей по порядку их первого появления
+    fieldnames: List[str] = []
+    for r in rows:
+        for k in r.keys():
+            if k not in fieldnames:
+                fieldnames.append(k)
+
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -181,7 +215,13 @@ def _export_xlsx(tasks: Iterable[Any], path: str) -> None:
     ws: Worksheet = wb.active
     ws.title = "Scraper"
 
-    headers = list(rows[0].keys())
+    # NEW: объединённые заголовки
+    headers: List[str] = []
+    for r in rows:
+        for k in r.keys():
+            if k not in headers:
+                headers.append(k)
+
     ws.append(headers)
     for r in rows:
         ws.append([r.get(h, "") for h in headers])
