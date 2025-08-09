@@ -1,7 +1,7 @@
 # ui/panels/scraper_tab.py
 from __future__ import annotations
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
@@ -37,6 +37,17 @@ class ScraperTabController(QWidget):
         table.setSelectionMode(QAbstractItemView.SingleSelection)
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(False)
+
+        # 👉 Автоподгон размеров
+        hh: QHeaderView = table.horizontalHeader()
+        vh: QHeaderView = table.verticalHeader()
+        # колонки по содержимому
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # URL
+        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Status
+        # последняя колонка заполняет остаток (чтоб красиво тянулась)
+        hh.setStretchLastSection(True)
+        # строки по содержимому
+        vh.setSectionResizeMode(QHeaderView.ResizeToContents)
 
         # 5) Демонстрационные задачи
         self.add_task_row("https://example.com")
@@ -77,6 +88,11 @@ class ScraperTabController(QWidget):
 
         self._row_by_task_id[task_id] = row
 
+        # поджать размеры сразу
+        self.ui.taskTable.resizeRowToContents(row)
+        self.ui.taskTable.resizeColumnToContents(0)
+        self.ui.taskTable.resizeColumnToContents(1)
+
     def _find_row_by_task_id(self, task_id: str) -> int:
         return self._row_by_task_id.get(task_id, -1)
 
@@ -86,6 +102,9 @@ class ScraperTabController(QWidget):
         item = self.ui.taskTable.item(row, 1)
         if item:
             item.setText(text)
+            # обновить размеры под новое содержимое
+            self.ui.taskTable.resizeRowToContents(row)
+            self.ui.taskTable.resizeColumnToContents(1)
 
     # ---------- Слоты кнопок ----------
     @Slot()
