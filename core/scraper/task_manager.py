@@ -1,11 +1,10 @@
 # core/scraper/task_manager.py
 from __future__ import annotations
-from time import monotonic
-from PySide6.QtCore import QObject, Signal, QThread
-from typing import Dict, Optional, Iterable
+from PySide6.QtCore import QObject, Signal, QThreadPool
+from typing import Dict, Optional
 
 from .task_types import ScrapeTask, TaskStatus
-from .task_worker import TaskWorker
+from .runnables import WorkerSignals, ScraperRunnable
 
 
 class TaskManager(QObject):
@@ -21,8 +20,12 @@ class TaskManager(QObject):
     def __init__(self):
         super().__init__()
         self._tasks: Dict[str, ScrapeTask] = {}
-        self._threads: Dict[str, QThread] = {}
-        self._workers: Dict[str, TaskWorker] = {}
+        self.pool = QThreadPool.globalInstance()
+        self.max_concurrent_tasks = 4
+        self.pool.setMaxThreadCount(self.max_concurrent_tasks)
+
+        self._runnables: Dict[str, ScraperRunnable] = {}
+
 
     # ---------- CRUD задач ----------
     def create_task(self, url: str, params: Optional[dict] = None) -> str:
@@ -37,87 +40,50 @@ class TaskManager(QObject):
         return list(self._tasks.values())
 
     # ---------- Управление исполнением ----------
-    def start_task(self, task_id: str) -> None:
-        if task_id in self._threads:
-            # уже запущена
-            return
-        task = self._tasks.get(task_id)
-        if not task:
-            return
 
-        # Подготовка воркера и треда
-        worker = TaskWorker(task)
-        thread = QThread()
-        worker.moveToThread(thread)
-
-        # Проброс сигналов воркера -> менеджер
-        worker.task_log.connect(self.task_log)
-        worker.task_status.connect(self._on_worker_status)
-        worker.task_progress.connect(self.task_progress)
-        worker.task_result.connect(self.task_result)
-        worker.task_error.connect(self.task_error)
-        worker.task_finished.connect(self._on_worker_finished)
-
-        # Старт/стоп связка
-        thread.started.connect(worker.run)
-
-        # Запоминаем ссылки (чтобы не освободило GC)
-        self._workers[task_id] = worker
-        self._threads[task_id] = thread
-
-        # Запуск
-        print(f"DEBUG: запускаю задачу {task_id} для {task.url}")
-        thread.start()
 
     # ---------- Управление исполнением ----------
     def start_all(self) -> None:
         for task in self._tasks.values():
-            if task.status in (TaskStatus.PENDING, TaskStatus.STOPPED, TaskStatus.ERROR, TaskStatus.DONE):
+            if task.status in (TaskStatus.PENDING, TaskStatus.STOPPED, TaskStatus.FAILED, TaskStatus.DONE):
                 self.start_task(task.id)
 
-    def start_task(self, task_id: str) -> None:
+    def start_task(self, task_id: str) -> bool:
         # уже бежит?
-        if task_id in self._threads:
-            return
+        if task_id in self._runnables:
+            return False
         task = self._tasks.get(task_id)
         if not task:
             raise ValueError(f"No such task: {task_id}")
-        if task.status == TaskStatus.RUNNING:
-            return
-        self._start_worker(task_id, task)
+        # если уже RUNNING — не дублируем
+        if getattr(task, "status", None) == TaskStatus.RUNNING:
+            return False
 
-    def _start_worker(self, task_id: str, task: ScrapeTask) -> None:
-        # Подготовка воркера и треда
-        worker = TaskWorker(task)
-        thread = QThread()
-        worker.moveToThread(thread)
+        # Готовим сигналы и раннабл
+        signals = WorkerSignals()
+        signals.task_log.connect(self.task_log)
+        signals.task_status.connect(self._on_worker_status)
+        signals.task_progress.connect(self.task_progress)
+        signals.task_result.connect(self.task_result)
+        signals.task_error.connect(self.task_error)
+        signals.task_finished.connect(self._on_worker_finished)
 
-        # Проброс сигналов воркера -> менеджер
-        worker.task_log.connect(self.task_log)
-        worker.task_status.connect(self._on_worker_status)
-        worker.task_progress.connect(self.task_progress)
-        worker.task_result.connect(self.task_result)
-        worker.task_error.connect(self.task_error)
-        worker.task_finished.connect(self._on_worker_finished)
+        runnable = ScraperRunnable(task, signals)
+        self._runnables[task_id] = runnable
 
-        # Старт связка
-        thread.started.connect(worker.run)
+        self.pool.start(runnable)
+        return True
 
-        # Запоминаем ссылки
-        self._workers[task_id] = worker
-        self._threads[task_id] = thread
-
-        # Запуск
-        thread.start()
 
     def stop_task(self, task_id: str) -> None:
-        worker = self._workers.get(task_id)
-        if worker:
-            worker.request_stop()
+        r = self._runnables.get(task_id)
+        if r:
+            r.request_stop()
 
     def stop_all(self) -> None:
-        for task_id in list(self._workers.keys()):
-            self.stop_task(task_id)
+        for r in list(self._runnables.values()):
+            r.request_stop()
+
             
     def reset_task(self, task_id: str) -> bool:
         """Сбрасывает задачу в состояние PENDING, очищает прогресс/результат.
@@ -129,30 +95,23 @@ class TaskManager(QObject):
 
         # если запущена — корректно останавливаем
         try:
-            if getattr(task, "status", None) == "RUNNING":
+            if getattr(task, "status", None) == TaskStatus.PENDING:
                 self.stop_task(task_id)
         except Exception:
             pass
 
         # Обнуляем поля
-        task.status = "PENDING"
+        task.status = "Pending"
         task.progress = 0
         task.result = None
         task.error = None
         task.started_at = None
         task.finished_at = None
-
-        # Удаляем воркер, если остался
-        worker = self._workers.pop(task_id, None)
-        if worker is not None:
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-
-        # Сообщаем в UI
+        
+        self._runnables.pop(task_id, None)  # на всякий случай убрать ссылку
         self.task_reset.emit(task_id)
         return True
+
 
     def restart_task(self, task_id: str) -> bool:
         """Сбрасывает и сразу запускает задачу."""
@@ -177,86 +136,49 @@ class TaskManager(QObject):
         if task.status == TaskStatus.RUNNING and task.started_at is None:
             from datetime import datetime
             task.started_at = datetime.utcnow()
-        if task.status in (TaskStatus.DONE, TaskStatus.ERROR, TaskStatus.STOPPED):
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.STOPPED):
             from datetime import datetime
             task.finished_at = datetime.utcnow()
         self.task_status.emit(task_id, status_str)
 
     def _on_worker_finished(self, task_id: str) -> None:
-        thread = self._threads.pop(task_id, None)
-        worker = self._workers.pop(task_id, None)
-        if thread:
-            thread.quit()
-            thread.wait()
-            thread.deleteLater()
-        # worker освободится GC
+        # раннабл сам завершился — убираем из реестра
+        self._runnables.pop(task_id, None)
+
 
     def is_running(self, task_id: str) -> bool:
-        return task_id in self._threads
+        return task_id in self._runnables
+
 
     def remove_task(self, task_id: str) -> bool:
-        """Остановить (если бежит) и удалить задачу из менеджера."""
         # если бежит — мягко останавливаем
-        if task_id in self._workers:
+        if task_id in self._runnables:
             self.stop_task(task_id)
-        # удалить из реестров (тред/воркер доудалятся в _on_worker_finished)
         existed = self._tasks.pop(task_id, None) is not None
-        # лог
+        self._runnables.pop(task_id, None)
         try:
             self.task_log.emit(task_id, "INFO", "Task removed")
         except Exception:
             pass
         return existed
+
     
     # Контроль Тредов и Потоков для безопасного завершения
     
     def active_task_ids(self):
-        """Какие задачи сейчас имеют активные треды."""
-        return list(self._threads.keys())
+        return list(self._runnables.keys())
 
     def is_idle(self) -> bool:
-        """Нет активных тредов/воркеров."""
-        return not self._threads
+        return not self._runnables
 
     def shutdown(self, timeout_ms: int = 5000) -> dict:
-        """
-        Мягко останавливает все задачи и ждёт завершения потоков.
-        Возвращает итоговую сводку:
-          {
-            "stopped": <int>,   # скольким воркерам отправили request_stop
-            "joined": <int>,    # скольких реально дождались (thread.wait)
-            "left": [task_id],  # у кого тред всё ещё жив по истечении таймаута
-          }
-        """
         summary = {"stopped": 0, "joined": 0, "left": []}
+        if self._runnables:
+            for r in list(self._runnables.values()):
+                r.request_stop()
+            summary["stopped"] = len(self._runnables)
 
-        # 1) Попросим всех остановиться
-        if self._workers:
-            self.stop_all()
-            summary["stopped"] = len(self._workers)
-
-        # 2) Ждём завершения тредов с таймаутом
-        deadline = monotonic() + (timeout_ms / 1000.0)
-        # Снимем срез, потому что _on_worker_finished будет чистить словари
-        pending = dict(self._threads)
-        for task_id, thread in pending.items():
-            remain_ms = int(max(0.0, deadline - monotonic()) * 1000)
-            if remain_ms <= 0:
-                break
-            # Если воркер уже сам выполз — _on_worker_finished его почистит
-            # На всякий случай попросим тред завершиться, если он ещё жив
-            try:
-                thread.quit()  # безопасно: вдруг у него есть цикл событий
-            except Exception:
-                pass
-            # Ждём
-            if thread.wait(remain_ms):
-                summary["joined"] += 1
-            else:
-                summary["left"].append(task_id)
-
-        # 3) Лёгкая уборка хвостов (если какие-то ещё числятся)
-        # Они завершатся при выходе процесса; мы просто не уронем приложение.
+        self.pool.waitForDone(timeout_ms)  # без if
+        summary["left"] = list(self._runnables.keys())
+        summary["joined"] = summary["stopped"] - len(summary["left"])
         return summary
-
-
