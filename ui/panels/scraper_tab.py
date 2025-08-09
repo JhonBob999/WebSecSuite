@@ -2,6 +2,7 @@
 from __future__ import annotations  # ← должен быть первым
 from datetime import datetime
 from pathlib import Path
+from dialogs.params_dialog import ParamsDialog
 import os
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication
@@ -313,6 +314,10 @@ class ScraperTabController(QWidget):
                         QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
                 return
 
+            if col == COL_PARAMS:
+                self._ctx_edit_params_dialog(row)
+                return
+
         except Exception as e:
             try:
                 self.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
@@ -405,30 +410,35 @@ class ScraperTabController(QWidget):
 
     # ---------- Таблица и строки ----------
     def add_task_row(self, url: str, params: dict | None = None) -> None:
-        task_id = self.task_manager.create_task(url, params or {})
+        params = params or {}
+        task_id = self.task_manager.create_task(url, params)
 
         row = self.ui.taskTable.rowCount()
         self.ui.taskTable.insertRow(row)
 
-        # URL-ячейка (сохраняем task_id в UserRole)
+        # URL-ячейка (храним task_id в UserRole)
         url_item = QTableWidgetItem("")
         url_item.setData(Qt.UserRole, task_id)
         self.ui.taskTable.setItem(row, COL_URL, url_item)
 
-        # Базовые значения
+        # Базовые колонки
         self.set_url_cell(row, url)
         self.set_status_cell(row, TaskStatus.PENDING.value)
         self.set_code_cell(row, None)
         self.set_time_cell(row, None)
         self.set_result_cell(row, None)
 
-        # Новые индикаторы: cookies/params
-        has_params = bool(params and any(k in params for k in ("headers", "proxy", "user_agent", "timeout", "retries")))
-        self.set_params_cell(row, has_params, params_tip=str({k:v for k,v in (params or {}).items() if k in ("method","proxy","user_agent","timeout","retries")}))
+        # Индикатор PARAMS (показываем только ключевые поля в tooltip)
+        params_light = {k: params.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if params.get(k)}
+        self.set_params_cell(row, bool(params_light), str(params_light) if params_light else "")
 
-        self.set_cookies_cell(row, False, "")  # пока нет данных — заполним в on_task_result
+        # Индикатор COOKIES (на старте пусто, заполним в on_task_result по Set-Cookie)
+        self.set_cookies_cell(row, False, "")
 
+        # Индексы строк
         self._row_by_task_id[task_id] = row
+
+        # Автоподгон
         self.ui.taskTable.resizeRowToContents(row)
 
     # ---------- Хелперы для выделения/ID и батч-операций ----------
@@ -952,9 +962,33 @@ class ScraperTabController(QWidget):
         QMessageBox.information(self, "Cookies", text[:6000])
 
     def _ctx_edit_params_dialog(self, row: int):
-        # Заглушка: позже заменим на полноценный ParamsDialog
         task_id = self._task_id_by_row(row)
         task = self.task_manager.get_task(task_id) if task_id else None
-        p = getattr(task, "params", {}) if task else {}
-        text = "Current params:\n" + "\n".join(f"{k}: {v}" for k, v in (p or {}).items())
-        QMessageBox.information(self, "Edit Params", text or "No params.\n(Will implement editor dialog)")
+        current = dict(getattr(task, "params", {}) or {})
+
+        # Открываем твой диалог
+        dlg = ParamsDialog(self, initial=current)  # если у тебя без аргумента initial — убери его
+        if dlg.exec() == QDialog.Accepted:
+            # Забираем новые значения
+            new_params = getattr(dlg, "data", None)
+            if new_params is None and hasattr(dlg, "get_data"):
+                new_params = dlg.get_data()
+            new_params = new_params or {}
+
+            # Сохраняем в задачу
+            if hasattr(self.task_manager, "update_task_params"):
+                # идеально, если у менеджера есть такой метод
+                try:
+                    self.task_manager.update_task_params(task_id, new_params)
+                except Exception as e:
+                    self.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
+            else:
+                # прямое сохранение, если метода пока нет
+                if task is not None:
+                    setattr(task, "params", new_params)
+
+            # Обновим ячейку Params (иконку/tooltip)
+            light = {k: new_params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if new_params.get(k)}
+            self.set_params_cell(row, bool(light), str(light) if light else "")
+            self.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
+

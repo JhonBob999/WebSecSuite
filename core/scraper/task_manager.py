@@ -38,6 +38,13 @@ class TaskManager(QObject):
 
     def get_all_tasks(self):
         return list(self._tasks.values())
+    
+    def update_task_params(self, task_id: str, params: dict) -> bool:
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        task.params = dict(params or {})
+        return True
 
     # ---------- Управление исполнением ----------
 
