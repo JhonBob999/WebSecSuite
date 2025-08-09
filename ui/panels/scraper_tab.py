@@ -1,6 +1,8 @@
 # ui/panels/scraper_tab.py
-from __future__ import annotations
+from __future__ import annotations  # ← должен быть первым
+from datetime import datetime
 from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu
 
 from .scraper_panel_ui import Ui_scraper_panel
@@ -39,7 +41,7 @@ class ScraperTabController(QWidget):
         self.ui.taskTable.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(False)
-        
+
         # контекстное меню
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(self.on_context_menu)
@@ -47,12 +49,9 @@ class ScraperTabController(QWidget):
         # 👉 Автоподгон размеров
         hh: QHeaderView = table.horizontalHeader()
         vh: QHeaderView = table.verticalHeader()
-        # колонки по содержимому
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # URL
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Status
-        # последняя колонка заполняет остаток (чтоб красиво тянулась)
         hh.setStretchLastSection(True)
-        # строки по содержимому
         vh.setSectionResizeMode(QHeaderView.ResizeToContents)
 
         # 5) Демонстрационные задачи
@@ -64,19 +63,99 @@ class ScraperTabController(QWidget):
         assert hasattr(self.ui, "btnStart"), "В .ui нет кнопки btnStart"
         assert hasattr(self.ui, "btnStop"), "В .ui нет кнопки btnStop"
         assert hasattr(self.ui, "btnExport"), "В .ui нет кнопки btnExport"
-        
-        # Подключаем кнопку Add Task
         assert hasattr(self.ui, "btnAddTask"), "В .ui нет кнопки btnAddTask"
-        
-        # Кнопки — подключаем
+
         self.ui.btnAddTask.clicked.connect(self.on_add_task_clicked)
         self.ui.btnStart.clicked.connect(self.on_start_clicked)
         self.ui.btnStop.clicked.connect(self.on_stop_clicked)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.btnDelete.clicked.connect(self.on_delete_clicked)
 
+        # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР (п.2 из next_step)
+        self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
+        self.log_filter = {"INFO", "WARN", "ERROR"}
+        self.MAX_LOG_LINES = 5000
+
+        self._init_ui_connections()
+
+    # ---------- ИНИЦИАЛИЗАЦИЯ КНОПОК ФИЛЬТРОВ ----------
+    def _init_ui_connections(self):
+        # Кнопки фильтров (toggle)
+        if hasattr(self.ui, "btnInfo"):
+            self.ui.btnInfo.toggled.connect(lambda checked: self._toggle_level("INFO", checked))
+        if hasattr(self.ui, "btnWarn"):
+            self.ui.btnWarn.toggled.connect(lambda checked: self._toggle_level("WARN", checked))
+        if hasattr(self.ui, "btnError"):
+            self.ui.btnError.toggled.connect(lambda checked: self._toggle_level("ERROR", checked))
+        # Clear — очищает экран, но НЕ буфер
+        if hasattr(self.ui, "btnClearLog"):
+            self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
+
+    def _toggle_level(self, level: str, enabled: bool):
+        level = level.upper()
+        if enabled:
+            self.log_filter.add(level)
+        else:
+            self.log_filter.discard(level)
+        self.refresh_log_view()
+
+    def _clear_log_screen(self):
+        if hasattr(self.ui, "logOutput"):
+            self.ui.logOutput.clear()
+
+    def refresh_log_view(self):
+        """Перерисовать logOutput из буфера с учётом фильтра."""
+        if not hasattr(self.ui, "logOutput"):
+            return
+        lines = []
+        for ts, level, text in self.log_buffer:
+            if level in self.log_filter:
+                lines.append(f"[{ts}] [{level}] {text}")
+        self.ui.logOutput.setPlainText("\n".join(lines))
+        sb = self.ui.logOutput.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def append_log(self, level: str, text: str):
+        """Единая точка входа: добавить строку в буфер и (если видно) на экран."""
+        level = (level or "INFO").upper()
+        if level not in {"INFO", "WARN", "ERROR"}:
+            level = "INFO"
+        ts = datetime.now().strftime("%H:%M:%S")
+
+        self.log_buffer.append((ts, level, str(text)))
+        # Ограничиваем размер буфера
+        if len(self.log_buffer) > self.MAX_LOG_LINES:
+            del self.log_buffer[:1000]
+
+        # Если уровень включен — дописываем инкрементально
+        if hasattr(self.ui, "logOutput") and level in self.log_filter:
+            cursor = self.ui.logOutput.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertText(f"[{ts}] [{level}] {text}\n")
+            self.ui.logOutput.setTextCursor(cursor)
+            self.ui.logOutput.ensureCursorVisible()
+
+    # Обратная совместимость: старые вызовы self.append_log_line("...") с префиксами
+    def append_log_line(self, text: str) -> None:
+        """
+        Поддерживает текущие вызовы вида:
+          "[WARN] ..." / "[ERROR] ..." / "[INFO] ..." / "[UI] ..."
+        Извлекает уровень, остальное — как текст.
+        """
+        raw = str(text or "")
+        lvl = "INFO"
+        if raw.startswith("[WARN]"):
+            lvl, raw = "WARN", raw[6:].lstrip()
+        elif raw.startswith("[ERROR]"):
+            lvl, raw = "ERROR", raw[7:].lstrip()
+        elif raw.startswith("[INFO]"):
+            lvl, raw = "INFO", raw[6:].lstrip()
+        else:
+            # special tags типа [UI], [RESULT] — оставим как INFO
+            pass
+        self.append_log(lvl, raw)
+
     # ---------- Таблица и строки ----------
-    
     def add_task_row(self, url: str, params: dict | None = None) -> None:
         task_id = self.task_manager.create_task(url, params or {})
 
@@ -108,12 +187,10 @@ class ScraperTabController(QWidget):
         item = self.ui.taskTable.item(row, 1)
         if item:
             item.setText(text)
-            # обновить размеры под новое содержимое
             self.ui.taskTable.resizeRowToContents(row)
             self.ui.taskTable.resizeColumnToContents(1)
-            
+
     # ---------- Хелперы для выделения/ID и батч-операций ----------
-    
     def _selected_rows(self):
         sel = self.ui.taskTable.selectionModel()
         if not sel or not sel.hasSelection():
@@ -151,16 +228,14 @@ class ScraperTabController(QWidget):
         self.append_log_line(f"[UI] Stopped {len(rows)} task(s)")
 
     def delete_selected_tasks(self):
-        # можно просто вызвать on_delete_clicked(), если он уже есть
         self.on_delete_clicked()
 
-    # ---------- Контестное меню для taskTable ----------
+    # ---------- Контекстное меню ----------
     def on_context_menu(self, pos):
         table = self.ui.taskTable
         global_pos = table.viewport().mapToGlobal(pos)
 
         row_under_cursor = table.rowAt(pos.y())
-        # если кликнули по строке, а она не в выделении — выделим её одну
         if row_under_cursor >= 0:
             if row_under_cursor not in self._selected_rows():
                 table.clearSelection()
@@ -176,7 +251,6 @@ class ScraperTabController(QWidget):
         menu.addSeparator()
         act_add   = menu.addAction("Add task")
 
-        # доступность по контексту
         act_start.setEnabled(has_selection)
         act_stop.setEnabled(has_selection)
         act_del.setEnabled(has_selection)
@@ -193,9 +267,7 @@ class ScraperTabController(QWidget):
         elif action == act_add:
             self.on_add_task_clicked()
 
-
     # ---------- Слоты кнопок ----------
-    
     @Slot()
     def on_start_clicked(self):
         table = self.ui.taskTable
@@ -230,16 +302,15 @@ class ScraperTabController(QWidget):
     @Slot()
     def on_export_clicked(self):
         self.append_log_line("[UI] Export clicked (stub)")
-        
+
     @Slot()
     def on_add_task_clicked(self):
         dlg = AddTaskDialog(self)  # наше модальное окно
         if dlg.exec() == QDialog.Accepted and dlg.data:
             data = dlg.data
-            # Добавляем задачу в таблицу и TaskManager
             self.add_task_row(data["url"], params=data)
             self.append_log_line(f"[INFO] Added task → {data['url']}")
-                   
+
     @Slot()
     def on_delete_clicked(self):
         table = self.ui.taskTable
@@ -248,7 +319,6 @@ class ScraperTabController(QWidget):
             self.append_log_line("[WARN] Select a row to delete")
             return
 
-        # берём выбранные строки (поддержит и мульти-выбор, если включишь ExtendedSelection)
         rows = sorted({idx.row() for idx in sel.selectedRows()}, reverse=True)
 
         for row in rows:
@@ -265,9 +335,8 @@ class ScraperTabController(QWidget):
 
         self._rebuild_row_index_map()
         self.append_log_line(f"[INFO] Deleted {len(rows)} task(s)")
-        
-    # ---------- Хелпер для пересборки индексов ----------        
 
+    # ---------- Пересборка индексов ----------
     def _rebuild_row_index_map(self):
         self._row_by_task_id.clear()
         for row in range(self.ui.taskTable.rowCount()):
@@ -279,10 +348,10 @@ class ScraperTabController(QWidget):
                 self._row_by_task_id[task_id] = row
 
     # ---------- Обработчики сигналов менеджера ----------
-    
     @Slot(str, str, str)
     def on_task_log(self, task_id: str, level: str, text: str):
-        self.append_log_line(f"[{level}][{task_id[:8]}] {text}")
+        # уровень идёт отдельным аргументом → используем его как фильтр
+        self.append_log(level, f"[{task_id[:8]}] {text}")
 
     @Slot(str, str)
     def on_task_status(self, task_id: str, status_str: str):
@@ -304,11 +373,3 @@ class ScraperTabController(QWidget):
     @Slot(str, str)
     def on_task_error(self, task_id: str, error_str: str):
         self.append_log_line(f"[ERROR][{task_id[:8]}] {error_str}")
-
-    # ---------- Логи ----------
-    
-    def append_log_line(self, text: str) -> None:
-        self.ui.logOutput.appendPlainText(text)
-        # автоскролл
-        sb = self.ui.logOutput.verticalScrollBar()
-        sb.setValue(sb.maximum())

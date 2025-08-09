@@ -17,13 +17,13 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QHeaderView, QLabel,
     QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget)
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 class Ui_scraper_panel(object):
     def setupUi(self, scraper_panel):
         if not scraper_panel.objectName():
             scraper_panel.setObjectName(u"scraper_panel")
-        scraper_panel.resize(1500, 950)
+        scraper_panel.resize(1668, 899)
         self.horizontalLayout = QHBoxLayout(scraper_panel)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
         self.verticalLayout = QVBoxLayout()
@@ -50,6 +50,31 @@ class Ui_scraper_panel(object):
         self.lbl_logs.setObjectName(u"lbl_logs")
 
         self.verticalLayout.addWidget(self.lbl_logs)
+
+        self.horizontalLayout_3 = QHBoxLayout()
+        self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
+        self.btnInfo = QToolButton(scraper_panel)
+        self.btnInfo.setObjectName(u"btnInfo")
+
+        self.horizontalLayout_3.addWidget(self.btnInfo)
+
+        self.btnWarn = QToolButton(scraper_panel)
+        self.btnWarn.setObjectName(u"btnWarn")
+
+        self.horizontalLayout_3.addWidget(self.btnWarn)
+
+        self.btnError = QToolButton(scraper_panel)
+        self.btnError.setObjectName(u"btnError")
+
+        self.horizontalLayout_3.addWidget(self.btnError)
+
+        self.btnClearLog = QToolButton(scraper_panel)
+        self.btnClearLog.setObjectName(u"btnClearLog")
+
+        self.horizontalLayout_3.addWidget(self.btnClearLog)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_3)
 
         self.logOutput = QPlainTextEdit(scraper_panel)
         self.logOutput.setObjectName(u"logOutput")
@@ -105,6 +130,10 @@ class Ui_scraper_panel(object):
         ___qtablewidgetitem1 = self.taskTable.horizontalHeaderItem(1)
         ___qtablewidgetitem1.setText(QCoreApplication.translate("scraper_panel", u"Status", None));
         self.lbl_logs.setText(QCoreApplication.translate("scraper_panel", u"Logs", None))
+        self.btnInfo.setText(QCoreApplication.translate("scraper_panel", u"INFO", None))
+        self.btnWarn.setText(QCoreApplication.translate("scraper_panel", u"WARN", None))
+        self.btnError.setText(QCoreApplication.translate("scraper_panel", u"ERROR", None))
+        self.btnClearLog.setText(QCoreApplication.translate("scraper_panel", u"CLEAR", None))
         self.btnAddTask.setText(QCoreApplication.translate("scraper_panel", u"Add Task", None))
         self.btnStart.setText(QCoreApplication.translate("scraper_panel", u"Start", None))
         self.btnStop.setText(QCoreApplication.translate("scraper_panel", u"Stop", None))
