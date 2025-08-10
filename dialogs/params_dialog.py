@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 import json, re, os, sys
 from pathlib import Path
+from dialogs.params_dialog_cookies_tab import CookiesTab
 
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox,
@@ -28,9 +29,12 @@ def _resource_path(rel: str) -> Path:
 class ParamsDialog(QDialog):
     applied = Signal(dict)           # просто сохранить
     applied_and_run = Signal(dict)   # сохранить и сразу запустить
-    def __init__(self, parent: QWidget | None = None, initial: Dict[str, Any] | None = None):
+    def __init__(self, parent: QWidget | None = None, initial: Dict[str, Any] | None = None, task_url=""):
         super().__init__(parent)
+        self.task_url = task_url or ""
         self.setWindowTitle("Edit Params")
+        self.resize(1200, 720)
+        self.setMinimumSize(1000, 600)
         self.setModal(True)
         initial = dict(initial or {})
         
@@ -123,6 +127,10 @@ class ParamsDialog(QDialog):
         self.proxy.textChanged.connect(lambda _: self._mark_invalid(self.proxy, False))
         self.user_agent.textChanged.connect(lambda _: self._mark_invalid(self.user_agent, False))
         self.headers.textChanged.connect(lambda: self._mark_invalid(self.headers, False))
+        
+        #Подключение Cookie окна
+        self.tab_cookies = CookiesTab(self, initial_params=initial, task_url=self.task_url)
+        self.tabs.addTab(self.tab_cookies, "Cookies")
 
         self._data: Dict[str, Any] = {}
 
@@ -260,11 +268,12 @@ class ParamsDialog(QDialog):
             "retries": int(self.retries.value()),
             "save_as_default": self.save_as_default.isChecked(),
         }
+
         # proxy
         try:
             params["proxy"] = self._normalize_proxy(self.proxy.text())
             self._mark_invalid(self.proxy, False)
-        except ValueError as e:
+        except ValueError:
             self._mark_invalid(self.proxy, True)
             raise
 
@@ -272,9 +281,29 @@ class ParamsDialog(QDialog):
         try:
             params["headers"] = self._parse_headers(self.headers.toPlainText())
             self._mark_invalid(self.headers, False)
-        except ValueError as e:
+        except ValueError:
             self._mark_invalid(self.headers, True)
             raise
+
+        # COOKIES (если вкладка есть)
+        if hasattr(self, "tab_cookies") and self.tab_cookies is not None:
+            cookie_params = self.tab_cookies.collect_params()
+            mode = cookie_params.get("cookie_mode", "auto")
+            cookie_file = (cookie_params.get("cookie_file") or "").strip()
+
+            # Валидация custom-режима
+            if mode == "custom":
+                # подсветим поле пути во вкладке Cookies, если оно пустое
+                try:
+                    # есть ли метод _mark_invalid у диалога — используем его для единого стиля
+                    self._mark_invalid(self.tab_cookies.cookie_path_edit, not bool(cookie_file))
+                except Exception:
+                    pass
+                if not cookie_file:
+                    raise ValueError("Cookie mode = Custom: укажите путь к cookie-файлу.")
+
+            # Сливаем в общий словарь
+            params.update(cookie_params)
 
         return params
     

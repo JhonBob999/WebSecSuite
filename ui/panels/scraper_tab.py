@@ -1050,8 +1050,9 @@ class ScraperTabController(QWidget):
         task_id = self._task_id_by_row(row)
         task = self.task_manager.get_task(task_id) if task_id else None
         current = dict(getattr(task, "params", {}) or {})
+        url = getattr(task, "url", "")
 
-        dlg = ParamsDialog(self, initial=current)
+        dlg = ParamsDialog(self, initial=current, task_url=url)
 
         # Новый путь: если у диалога есть сигналы — пользуемся ими
         if hasattr(dlg, "applied"):
