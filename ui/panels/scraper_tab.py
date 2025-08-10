@@ -1291,74 +1291,72 @@ class ScraperTabController(QWidget):
         
     # --- ALL TASKS ACTIONS ---
 
+    def _iter_all_task_ids(self) -> list[str]:
+        """Вернуть все task_id из менеджера (без зависимости от таблицы)."""
+        tm = self.task_manager
+        if hasattr(tm, "all_tasks"):
+            return [t.id for t in tm.all_tasks()]
+        if hasattr(tm, "_tasks"):
+            return list(tm._tasks.keys())
+        if hasattr(tm, "tasks"):
+            return list(tm.tasks.keys())
+        return []
+
     def start_all_tasks(self):
-        """Запускает все задачи, которые не RUNNING. Разрешаем повторный старт DONE/FAILED."""
-        table = self.ui.taskTable
-        started = 0
-        for row in range(table.rowCount()):
-            tid = self._task_id_by_row(row)
-            if not tid:
-                continue
-            task = self.task_manager.get_task(tid)
-            status = getattr(task, "status", "PENDING")
-            # Стартуем всё, что не RUNNING (включая DONE/FAILED для повторного прогона)
-            if status in ("PENDING", "STOPPED", "FAILED", "DONE"):
-                try:
+        """Запускает все задачи, которые не RUNNING. Разрешаем повторный старт DONE/FAILED/PENDING/STOPPED."""
+        started = errors = 0
+        for tid in self._iter_all_task_ids():
+            try:
+                task = self.task_manager.get_task(tid)
+                status = self._status_name(getattr(task, "status", "PENDING"))
+                if status != "RUNNING":
                     self.task_manager.start_task(tid)
                     started += 1
-                except Exception as e:
-                    self.append_log_line(f"[ERROR] start_all_tasks({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Start all: queued {started} task(s)")
-
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] start_all({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Start all: queued {started} task(s), errors {errors}")
 
     def stop_all_tasks(self):
         """Кооперативно останавливает все RUNNING/PENDING задачи."""
-        table = self.ui.taskTable
-        stopped = 0
-        for row in range(table.rowCount()):
-            tid = self._task_id_by_row(row)
-            if not tid:
-                continue
-            task = self.task_manager.get_task(tid)
-            status = getattr(task, "status", "PENDING")
-            if status in ("RUNNING", "PENDING"):
-                try:
+        stopped = errors = 0
+        for tid in self._iter_all_task_ids():
+            try:
+                task = self.task_manager.get_task(tid)
+                status = self._status_name(getattr(task, "status", "PENDING"))
+                if status in {"RUNNING", "PENDING"}:
                     self.task_manager.stop_task(tid)
                     stopped += 1
-                except Exception as e:
-                    self.append_log_line(f"[ERROR] stop_all_tasks({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s)")
-
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] stop_all({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s), errors {errors}")
 
     def restart_all_tasks(self):
         """
         Перезапуск всех задач:
-        - если есть TaskManager.restart_task → используем его
-        - иначе: stop_task → start_task (мягко; менеджер сам дождётся остановки воркера)
+        - если есть TaskManager.restart_task → используем его;
+        - иначе: stop_task (если RUNNING/PENDING) → start_task.
         """
-        table = self.ui.taskTable
-        restarted = 0
         use_native = hasattr(self.task_manager, "restart_task")
+        restarted = errors = 0
 
-        for row in range(table.rowCount()):
-            tid = self._task_id_by_row(row)
-            if not tid:
-                continue
+        for tid in self._iter_all_task_ids():
             try:
                 if use_native:
                     self.task_manager.restart_task(tid)
                 else:
-                    # Универсальный путь: остановить если бежит, затем стартовать
                     task = self.task_manager.get_task(tid)
-                    status = getattr(task, "status", "PENDING")
-                    if status in ("RUNNING", "PENDING"):
+                    status = self._status_name(getattr(task, "status", "PENDING"))
+                    if status in {"RUNNING", "PENDING"}:
                         self.task_manager.stop_task(tid)
                     self.task_manager.start_task(tid)
                 restarted += 1
             except Exception as e:
-                self.append_log_line(f"[ERROR] restart_all_tasks({tid[:8]}): {e}")
+                errors += 1
+                self.append_log_line(f"[ERROR] restart_all({tid[:8]}): {e}")
 
-        self.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s)")
+        self.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s), errors {errors}")
                     
     @Slot()
     def on_start_clicked(self):
