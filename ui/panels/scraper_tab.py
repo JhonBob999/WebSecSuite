@@ -1051,29 +1051,65 @@ class ScraperTabController(QWidget):
         task = self.task_manager.get_task(task_id) if task_id else None
         current = dict(getattr(task, "params", {}) or {})
 
-        # Открываем твой диалог
-        dlg = ParamsDialog(self, initial=current)  # если у тебя без аргумента initial — убери его
-        if dlg.exec() == QDialog.Accepted:
-            # Забираем новые значения
+        dlg = ParamsDialog(self, initial=current)
+
+        # Новый путь: если у диалога есть сигналы — пользуемся ими
+        if hasattr(dlg, "applied"):
+            dlg.applied.connect(lambda params, r=row, tid=task_id: 
+                                self._on_params_applied_ctx(r, tid, params, run=False))
+        if hasattr(dlg, "applied_and_run"):
+            dlg.applied_and_run.connect(lambda params, r=row, tid=task_id: 
+                                        self._on_params_applied_ctx(r, tid, params, run=True))
+
+        result = dlg.exec()
+
+        # Fallback-режим: если сигналов нет (или не сработали), но диалог закрыт по OK — читаем data
+        if result == QDialog.Accepted:
             new_params = getattr(dlg, "data", None)
             if new_params is None and hasattr(dlg, "get_data"):
                 new_params = dlg.get_data()
-            new_params = new_params or {}
+            if new_params:
+                self._on_params_applied_ctx(row, task_id, new_params, run=False)
 
-            # Сохраняем в задачу
+    def _on_params_applied_ctx(self, row: int, task_id: str, params: dict, run: bool):
+        # сохранить параметры в задачу
+        try:
             if hasattr(self.task_manager, "update_task_params"):
-                # идеально, если у менеджера есть такой метод
-                try:
-                    self.task_manager.update_task_params(task_id, new_params)
-                except Exception as e:
-                    self.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
+                self.task_manager.update_task_params(task_id, params)
             else:
-                # прямое сохранение, если метода пока нет
+                task = self.task_manager.get_task(task_id)
                 if task is not None:
-                    setattr(task, "params", new_params)
+                    setattr(task, "params", params)
+        except Exception as e:
+            self.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
+            return
 
-            # Обновим ячейку Params (иконку/tooltip)
-            light = {k: new_params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if new_params.get(k)}
+        # обновить ячейку Params (иконка ⚙ + tooltip)
+        light = {k: params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if params.get(k)}
+        try:
             self.set_params_cell(row, bool(light), str(light) if light else "")
-            self.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
+        except Exception:
+            pass
 
+        self.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
+
+        # Apply & Run → безопасный перезапуск
+        if run:
+            # если есть нативный метод — используем его
+            if getattr(self.task_manager, "restart_task", None):
+                try:
+                    self.task_manager.restart_task(task_id)
+                    self.append_log_line(f"[INFO] Task restarted with new params ({task_id[:8]})")
+                    return
+                except Exception as e:
+                    self.append_log_line(f"[WARN] restart_task failed: {e}")
+            # fallback: стоп (если бежит) → старт
+            try:
+                self.task_manager.stop_task(task_id)
+            except Exception:
+                pass
+            try:
+                self.task_manager.start_task(task_id)
+                self.append_log_line(f"[INFO] Task started with new params ({task_id[:8]})")
+            except Exception as e:
+                self.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")

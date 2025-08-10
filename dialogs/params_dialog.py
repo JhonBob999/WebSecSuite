@@ -1,147 +1,245 @@
 # dialogs/params_dialog.py
 from __future__ import annotations
 
-# === SECTION === Imports & Typing
 from typing import Any, Dict
-import json, re
+import json, re, os, sys
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox,
-    QDialogButtonBox, QVBoxLayout, QLabel, QWidget, QTextEdit
+    QDialogButtonBox, QVBoxLayout, QLabel, QWidget, QTextEdit, QTabWidget, QMessageBox, QPushButton
 )
+from PySide6.QtCore import Qt , Signal
 
-# === SECTION === Constants & Validators
-DEFAULT_UA = "WebSecSuite/1.0 (+https://github.com/JhonBob999/WebSecSuite)"
+DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 # http/https/socks5/socks5h, с опциональными кредами
 PROXY_RE = re.compile(r"^(https?|socks5h?|socks5)://(?:[^@\s/]+@)?[^:\s/]+:\d{2,5}$", re.IGNORECASE)
 
+# --- helper для поиска файла рядом с проектом/билдом (PyInstaller совместимо)
+def _resource_path(rel: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path.cwd()))
+    p = base / rel
+    if p.exists():
+        return p
+    # пробуем от корня проекта
+    return Path.cwd() / rel
 
-# === SECTION === Dialog
+
 class ParamsDialog(QDialog):
-    """
-    Редактор параметров запроса.
-    Таймаут — в секундах (для единообразия с остальной частью проекта).
-    Headers можно вводить:
-      • JSON-объектом: {"Accept": "text/html", "DNT": "1"}
-      • По строкам:     Key: Value   (по одной паре на строку)
-      • В одну строку:  k: v | k2: v2
-    """
+    applied = Signal(dict)           # просто сохранить
+    applied_and_run = Signal(dict)   # сохранить и сразу запустить
     def __init__(self, parent: QWidget | None = None, initial: Dict[str, Any] | None = None):
         super().__init__(parent)
         self.setWindowTitle("Edit Params")
         self.setModal(True)
         initial = dict(initial or {})
+        
 
-        # --- Method
+        # ---------- Поля (модели) ----------
+        # Method
         self.method = QComboBox()
         self.method.addItems(["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
         init_method = str(initial.get("method", "")).upper()
         if init_method and init_method in [self.method.itemText(i) for i in range(self.method.count())]:
             self.method.setCurrentText(init_method)
 
-        # --- Proxy / User-Agent
+        # Proxy / User-Agent
         self.proxy = QLineEdit(str(initial.get("proxy", "") or ""))
         self.user_agent = QLineEdit(str(initial.get("user_agent", "") or ""))
 
-        # --- Timeout (seconds)
-        self.timeout = QSpinBox()
-        self.timeout.setRange(1, 600)  # 1..600 секунд
-        self.timeout.setSuffix(" s")
-        self.timeout.setValue(int(initial.get("timeout", 20)))  # дефолт: 20s
+        # --- НОВОЕ: пресеты UA
+        self.ua_preset = QComboBox()
+        self.ua_map: Dict[str, str] = self._load_ua_presets()  # name -> UA
+        self._fill_ua_preset_combo(self.ua_map)
 
-        # --- Retries
-        self.retries = QSpinBox()
-        self.retries.setRange(0, 10)
+        self.user_agent = QLineEdit(str(initial.get("user_agent", "") or ""))
+        if not self.user_agent.text().strip():
+            self.user_agent.setText(DEFAULT_UA)
+
+        self.timeout = QSpinBox(); self.timeout.setRange(1, 600); self.timeout.setSuffix(" s")
+        self.timeout.setValue(int(initial.get("timeout", 20)))
+
+        self.retries = QSpinBox(); self.retries.setRange(0, 10)
         self.retries.setValue(int(initial.get("retries", 1)))
 
-        # --- Headers (QTextEdit для удобства)
         self.headers = QTextEdit()
         hdr = initial.get("headers", {})
         if isinstance(hdr, dict):
-            # Отобразим как k: v | k2: v2 (компактно), но парсер понимает и JSON, и построчно
             compact = " | ".join(f"{k}: {v}" for k, v in hdr.items())
             self.headers.setPlainText(compact)
         else:
             self.headers.setPlainText(str(hdr or ""))
 
-        # --- Save as default
         self.save_as_default = QCheckBox("Save as default for new tasks")
         self.save_as_default.setChecked(bool(initial.get("save_as_default", False)))
 
-        # === SECTION === Layout
-        form = QFormLayout()
-        form.addRow("Method:", self.method)
-        form.addRow("Proxy:", self.proxy)
-        form.addRow("User-Agent:", self.user_agent)
-        form.addRow("Timeout:", self.timeout)
-        form.addRow("Retries:", self.retries)
-        form.addRow(QLabel("Headers (JSON или 'Key: Value' построчно / через |):"))
-        form.addRow(self.headers)
-        form.addRow(self.save_as_default)
+        # ---------- Вкладки ----------
+        self.tabs = QTabWidget()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        # Basic
+        w_basic = QWidget(self)
+        f_basic = QFormLayout(w_basic)
+        f_basic.addRow("Method:", self.method)
+        f_basic.addRow("UA preset:", self.ua_preset)  
+        f_basic.addRow("User-Agent:", self.user_agent)
+        f_basic.addRow("Timeout:", self.timeout)
+        f_basic.addRow("Retries:", self.retries)
+        self.tabs.addTab(w_basic, "Basic")
 
+        # Headers
+        w_headers = QWidget(self)
+        v_headers = QVBoxLayout(w_headers)
+        v_headers.addWidget(QLabel("Headers (JSON или 'Key: Value' построчно / через |):"))
+        v_headers.addWidget(self.headers)
+        self.tabs.addTab(w_headers, "Headers")
+
+        # Advanced
+        w_adv = QWidget(self)
+        f_adv = QFormLayout(w_adv)
+        f_adv.addRow("Proxy:", self.proxy)
+        f_adv.addRow(self.save_as_default)
+        self.tabs.addTab(w_adv, "Advanced")
+
+        # ---------- Кнопки ----------
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply_run = QPushButton("Apply && Run")
+        self.buttons.addButton(self.btn_apply, QDialogButtonBox.AcceptRole)
+        self.buttons.addButton(self.btn_apply_run, QDialogButtonBox.AcceptRole)
+        self.buttons.rejected.connect(self.reject)
+        self.btn_apply.clicked.connect(self.on_apply_clicked)
+        self.btn_apply_run.clicked.connect(self.on_apply_run_clicked)
+
+        # ---------- Корневой layout ----------
         root = QVBoxLayout(self)
-        root.addLayout(form)
-        root.addWidget(buttons)
+        root.addWidget(self.tabs)
+        root.addWidget(self.buttons)
+        # --- связи пресетов ---
+        self.ua_preset.currentTextChanged.connect(self._on_ua_preset_changed)
+        # если initial содержит user_agent, попробуем выбрать соответствующий пресет
+        self._select_preset_for_initial(self.user_agent.text())
+        
+        # Очистка подсветки ошибок по вводу
+        self.proxy.textChanged.connect(lambda _: self._mark_invalid(self.proxy, False))
+        self.user_agent.textChanged.connect(lambda _: self._mark_invalid(self.user_agent, False))
+        self.headers.textChanged.connect(lambda: self._mark_invalid(self.headers, False))
 
         self._data: Dict[str, Any] = {}
 
-    # === SECTION === Public API
+    # === Public API ===
     @property
     def data(self) -> Dict[str, Any]:
         """Итоговый словарь параметров после accept()."""
         return self._data
+    
+    # ---------- UA presets ----------
+    def _load_ua_presets(self) -> Dict[str, str]:
+        """
+        Возвращает плоский словарь {display_name: ua_string}.
+        Поддерживает 2 формата JSON: «плоский» и «сгруппированный».
+        """
+        path = _resource_path("assets/presets/user_agents.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            # fallback — минимальный набор
+            return {
+                "Desktop (Chrome)": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Desktop (Firefox)": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+                "Mobile (Android)": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "Mobile (iOS)": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+                "Tor (Generic)": "Mozilla/5.0 (Windows NT 10.0; rv:115.0) Gecko/20100101 Firefox/115.0",
+            }
 
-    # === SECTION === Helpers (headers/proxy parsing)
+        # плоский словарь?
+        if isinstance(raw, dict) and all(isinstance(v, str) for v in raw.values()):
+            return raw
+
+        # сгруппированный словарь?
+        flat: Dict[str, str] = {}
+        if isinstance(raw, dict):
+            for group, data in raw.items():
+                if isinstance(data, dict):
+                    for name, ua in data.items():
+                        if isinstance(ua, str):
+                            flat[f"{group} ({name})"] = ua
+        return flat
+    
+    def _fill_ua_preset_combo(self, ua_map: Dict[str, str]) -> None:
+        self.ua_preset.clear()
+        self.ua_preset.addItem("Custom")  # режим ручного ввода
+        for name in sorted(ua_map.keys()):
+            self.ua_preset.addItem(name)
+
+    def _on_ua_preset_changed(self, name: str) -> None:
+        if name == "Custom":
+            self.user_agent.setReadOnly(False)
+            self.user_agent.setCursorPosition(len(self.user_agent.text()))
+            return
+        ua = self.ua_map.get(name, "")
+        self.user_agent.setText(ua or DEFAULT_UA)
+        self.user_agent.setReadOnly(True)
+
+    def _select_preset_for_initial(self, current_ua: str) -> None:
+        """
+        Если initial.user_agent совпадает с одним из пресетов — выбрать его.
+        Иначе — оставить Custom.
+        """
+        current = (current_ua or "").strip()
+        for i in range(1, self.ua_preset.count()):  # пропускаем Custom (index 0)
+            name = self.ua_preset.itemText(i)
+            if self.ua_map.get(name, "").strip() == current:
+                self.ua_preset.setCurrentIndex(i)
+                self.user_agent.setReadOnly(True)
+                return
+        self.ua_preset.setCurrentIndex(0)  # Custom
+        self.user_agent.setReadOnly(False)
+
+    # ---------- ВАЛИДАЦИЯ И СБОР ДАННЫХ ----------
     def _parse_headers(self, text: str) -> Dict[str, str]:
-        """
-        Порядок попыток:
-          1) JSON-объект
-          2) Построчно: 'Key: Value'
-          3) В одну строку через '|': 'k: v | k2: v2'
-        """
+        """Возвращает dict заголовков или выбрасывает ValueError с описанием ошибки."""
         text = (text or "").strip()
         if not text:
             return {}
 
-        # 1) JSON
-        try:
-            obj = json.loads(text)
-            if isinstance(obj, dict):
-                # всё в str
-                return {str(k): "" if v is None else str(v) for k, v in obj.items()}
-        except Exception:
-            pass
+        # Если пользователь явно пытался ввести JSON (есть фигурные скобки) — требуем корректный JSON
+        if "{" in text or "}" in text:
+            try:
+                obj = json.loads(text)
+            except Exception as e:
+                raise ValueError(f"Headers JSON parse error: {e}")
+            if not isinstance(obj, dict):
+                raise ValueError("Headers JSON must be an object {key: value}.")
+            return {str(k): "" if v is None else str(v) for k, v in obj.items()}
 
-        # 2) Построчно
+        # Построчно
         if "\n" in text:
             hdrs: Dict[str, str] = {}
-            for raw in text.splitlines():
+            for idx, raw in enumerate(text.splitlines(), start=1):
                 line = raw.strip()
                 if not line:
                     continue
                 if ":" not in line:
-                    # допустим строка без двоеточия — считаем пустым значением
-                    hdrs[line] = ""
-                    continue
+                    raise ValueError(f"Headers line {idx}: missing ':'")
                 k, v = line.split(":", 1)
-                hdrs[k.strip()] = v.strip()
+                k, v = k.strip(), v.strip()
+                if not k:
+                    raise ValueError(f"Headers line {idx}: empty key")
+                hdrs[k] = v
             return hdrs
 
-        # 3) Через "|"
+        # В одну строку через |
         hdrs: Dict[str, str] = {}
-        for chunk in text.split("|"):
-            p = chunk.strip()
-            if not p:
-                continue
-            if ":" in p:
-                k, v = p.split(":", 1)
-                hdrs[k.strip()] = v.strip()
-            else:
-                hdrs[p] = ""
+        parts = [chunk.strip() for chunk in text.split("|") if chunk.strip()]
+        for idx, p in enumerate(parts, start=1):
+            if ":" not in p:
+                raise ValueError(f"Headers part {idx}: expected 'Key: Value'")
+            k, v = p.split(":", 1)
+            k, v = k.strip(), v.strip()
+            if not k:
+                raise ValueError(f"Headers part {idx}: empty key")
+            hdrs[k] = v
         return hdrs
 
     def _normalize_proxy(self, proxy: str | None) -> str | None:
@@ -150,10 +248,65 @@ class ParamsDialog(QDialog):
             return None
         if PROXY_RE.match(proxy):
             return proxy
-        # Не валидный — оставляем как None (или можно всплывашку делать выше по стеку)
+        # невалидный → None (валидацию с подсказкой добавим на следующем шаге)
         return None
+    
+    def _collect_params(self) -> Dict[str, Any]:
+        """Собирает и валидирует поля. Выбрасывает ValueError при ошибке."""
+        params: Dict[str, Any] = {
+            "method": self.method.currentText(),
+            "user_agent": (self.user_agent.text().strip() or DEFAULT_UA),
+            "timeout": int(self.timeout.value()),
+            "retries": int(self.retries.value()),
+            "save_as_default": self.save_as_default.isChecked(),
+        }
+        # proxy
+        try:
+            params["proxy"] = self._normalize_proxy(self.proxy.text())
+            self._mark_invalid(self.proxy, False)
+        except ValueError as e:
+            self._mark_invalid(self.proxy, True)
+            raise
 
-    # === SECTION === Accept
+        # headers
+        try:
+            params["headers"] = self._parse_headers(self.headers.toPlainText())
+            self._mark_invalid(self.headers, False)
+        except ValueError as e:
+            self._mark_invalid(self.headers, True)
+            raise
+
+        return params
+    
+    # ---------- КНОПКИ ----------
+    def on_apply_clicked(self) -> None:
+        try:
+            data = self._collect_params()
+        except ValueError as e:
+            QMessageBox.warning(self, "Validation error", str(e))
+            return
+        self._data = data
+        self.applied.emit(data)
+        self.accept()  # закрываем как обычный Apply (можно оставить open, если хочешь)
+
+    def on_apply_run_clicked(self) -> None:
+        try:
+            data = self._collect_params()
+        except ValueError as e:
+            QMessageBox.warning(self, "Validation error", str(e))
+            return
+        self._data = data
+        self.applied_and_run.emit(data)
+        self.accept()
+
+    # ---------- УТИЛИТЫ ----------
+    def _mark_invalid(self, widget: QWidget, invalid: bool) -> None:
+        if invalid:
+            widget.setStyleSheet("border: 1px solid #d9534f;")  # красная рамка
+        else:
+            widget.setStyleSheet("")
+
+    # === Accept ===
     def accept(self) -> None:
         hdr_dict = self._parse_headers(self.headers.toPlainText())
 
