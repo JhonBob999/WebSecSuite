@@ -91,6 +91,13 @@ class Ui_scraper_panel(object):
         self.lineEditLogFilter = QLineEdit(scraper_panel)
         self.lineEditLogFilter.setObjectName(u"lineEditLogFilter")
         self.lineEditLogFilter.setGeometry(QRect(1300, 430, 311, 31))
+        self.lbl_search = QLabel(scraper_panel)
+        self.lbl_search.setObjectName(u"lbl_search")
+        self.lbl_search.setGeometry(QRect(1300, 400, 91, 31))
+        font2 = QFont()
+        font2.setPointSize(17)
+        font2.setBold(True)
+        self.lbl_search.setFont(font2)
 
         self.retranslateUi(scraper_panel)
 
@@ -123,5 +130,6 @@ class Ui_scraper_panel(object):
         self.btnClearLog.setText(QCoreApplication.translate("scraper_panel", u"CLEAR", None))
         self.btnPause.setText(QCoreApplication.translate("scraper_panel", u"Pause", None))
         self.btnResume.setText(QCoreApplication.translate("scraper_panel", u"Resume", None))
+        self.lbl_search.setText(QCoreApplication.translate("scraper_panel", u"Search", None))
     # retranslateUi
 

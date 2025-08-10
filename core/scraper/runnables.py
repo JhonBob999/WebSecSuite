@@ -10,6 +10,7 @@ import httpx
 from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
+from core.cookies.storage import load_cookiejar, save_cookiejar
 
 
 # === SECTION === Signals
@@ -25,11 +26,6 @@ class WorkerSignals(QObject):
 
 # === SECTION === Scraper Runnable
 class ScraperRunnable(QRunnable):
-    """
-    Исполняемая задача парсинга/запроса.
-    Ожидается, что self.task имеет поля: id, url, method, headers, proxy, timeout, ...
-    """
-
     # --- Lifecycle ---
     def __init__(self, task: Any, signals: WorkerSignals):
         super().__init__()
@@ -115,27 +111,40 @@ class ScraperRunnable(QRunnable):
         proxy = getattr(self.task, "proxy", None) or None
         timeout = getattr(self.task, "timeout", None)
 
+        # --- NEW: читаем параметры для cookies из task.params (если есть)
+        params = getattr(self.task, "params", {}) or {}
+        cookie_file = params.get("cookie_file") or getattr(self.task, "cookie_file", None)
+        auto_save_cookies = params.get("auto_save_cookies", True)
+
         self.signals.task_status.emit(tid, "Running")
         self.signals.task_progress.emit(tid, 0)
         t0_total = time.perf_counter()
 
         try:
-            # Кооперативная остановка / пауза до старта запроса
+            # стоп/пауза до старта запроса
             if self._check_stop(tid):
-                self.signals.task_finished.emit(tid)
-                return
+                self.signals.task_finished.emit(tid); return
             if not self._pause_gate(tid):
-                self.signals.task_finished.emit(tid)
-                return
+                self.signals.task_finished.emit(tid); return
 
-            # Лог запроса
+            # --- NEW: автозагрузка cookies по cookie_file или домену из URL
+            jar, cookie_path, loaded = load_cookiejar(url=url, cookie_file=cookie_file)
+            self.signals.task_log.emit(tid, "INFO", f"Cookies loaded: {loaded} from {cookie_path}")
+
+            # лог запроса
             self.signals.task_log.emit(tid, "INFO", f"Request {method} {url}")
 
             # === HTTP request ===
             # httpx >= 0.28: proxy=, follow_redirects=True
             t0_req = time.perf_counter()
-            with httpx.Client(timeout=timeout, headers=headers, proxy=proxy, follow_redirects=True) as client:
+            with httpx.Client(timeout=timeout, headers=headers, proxy=proxy,
+                          follow_redirects=True, cookies=jar) as client:
                 resp = client.request(method, url)
+                # --- NEW: автосохранение cookies (пока клиент ещё открыт)
+                if auto_save_cookies:
+                    saved = save_cookiejar(cookie_path, client.cookies)
+                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {cookie_path}")
+                    
             req_ms = int((time.perf_counter() - t0_req) * 1000)
 
             # Кооперативные пауза/стоп после запроса
