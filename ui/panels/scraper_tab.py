@@ -13,7 +13,7 @@ from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
-from utils.log_highlighter import LogHighlighter
+
 
 # --- индексы колонок (оставляем твой минимализм) ---
 COL_URL     = 0
