@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from dialogs.params_dialog import ParamsDialog
 import os
-from PySide6.QtCore import Qt, Slot, QSettings, QUrl
+from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox
 
@@ -13,6 +13,7 @@ from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
+from utils.log_highlighter import LogHighlighter
 
 # --- индексы колонок (оставляем твой минимализм) ---
 COL_URL     = 0
@@ -72,6 +73,10 @@ class LogHighlighter(QSyntaxHighlighter):
 
         self.f_taskid = QTextCharFormat()
         self.f_taskid.setForeground(QColor("#808080"))  # серый для [abcd1234]
+        
+        self._search_regex = QRegularExpression()
+        self._search_fmt = QTextCharFormat()
+        self._search_fmt.setBackground(QColor(255, 255, 0, 100))
 
     def highlightBlock(self, text: str):
         # Уровни
@@ -99,6 +104,27 @@ class LogHighlighter(QSyntaxHighlighter):
             if len(token) == 10 and all(c in "0123456789abcdef" for c in token[1:-1].lower()):
                 self.setFormat(i, j - i + 1, self.f_taskid)
             start = j + 1
+            
+        # --- ДОПОЛНИТЕЛЬНАЯ ПОДСВЕТКА ПОИСКА ---
+        if hasattr(self, "_search_regex") and self._search_regex.isValid() and self._search_regex.pattern():
+            it = self._search_regex.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), self._search_fmt)
+            
+    def set_pattern(self, text: str, *, regex_mode=False, case_sensitive=False):
+        if not text:
+            self._search_regex = QRegularExpression()
+            self.rehighlight()
+            return
+        pattern = text if regex_mode else QRegularExpression.escape(text)
+        rx = QRegularExpression(pattern)
+        rx.setPatternOptions(
+            QRegularExpression.NoPatternOption if case_sensitive
+            else QRegularExpression.CaseInsensitiveOption
+        )
+        self._search_regex = rx
+        self.rehighlight()
 
 
 class ScraperTabController(QWidget):
@@ -111,6 +137,10 @@ class ScraperTabController(QWidget):
         
         # Хайлайтер подключение
         self._log_hl = LogHighlighter(self.ui.logOutput.document())
+        # создаём хайлайтер и цепляем к документу логов
+        self.ui.lineEditLogFilter.setClearButtonEnabled(True)
+        self.ui.lineEditLogFilter.textChanged.connect(self._on_filter_text_changed)
+        
         # Подключение настроек таблиц
         self.settings = QSettings("WebSecSuite", "WebSecSuite")  # имя можешь поменять
         self._setup_task_table()
@@ -187,6 +217,15 @@ class ScraperTabController(QWidget):
         # Clear — очищает экран, но НЕ буфер
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
+            
+            
+    def _on_filter_text_changed(self, text: str):
+        # базовая версия: без regex и без учёта регистра
+        self._log_hl.set_pattern(
+            text,
+            regex_mode=False,
+            case_sensitive=False
+        )
             
      # --- настройка таблицы, один раз ---
     def _setup_task_table(self):

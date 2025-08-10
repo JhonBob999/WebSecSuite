@@ -15,9 +15,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QHeaderView, QLabel, QPlainTextEdit,
-    QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem,
-    QToolButton, QWidget)
+from PySide6.QtWidgets import (QApplication, QHeaderView, QLabel, QLineEdit,
+    QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
+    QTableWidgetItem, QToolButton, QWidget)
 
 class Ui_scraper_panel(object):
     def setupUi(self, scraper_panel):
@@ -27,11 +27,11 @@ class Ui_scraper_panel(object):
         scraper_panel.setMaximumSize(QSize(1680, 16777215))
         self.logOutput = QPlainTextEdit(scraper_panel)
         self.logOutput.setObjectName(u"logOutput")
-        self.logOutput.setGeometry(QRect(880, 455, 781, 421))
+        self.logOutput.setGeometry(QRect(880, 465, 781, 411))
         self.logOutput.setReadOnly(True)
         self.lbl_logs = QLabel(scraper_panel)
         self.lbl_logs.setObjectName(u"lbl_logs")
-        self.lbl_logs.setGeometry(QRect(1620, 450, 51, 31))
+        self.lbl_logs.setGeometry(QRect(1620, 460, 51, 31))
         font = QFont()
         font.setPointSize(12)
         font.setBold(True)
@@ -81,13 +81,16 @@ class Ui_scraper_panel(object):
         self.btnAddTask.setGeometry(QRect(10, 470, 75, 24))
         self.btnClearLog = QToolButton(scraper_panel)
         self.btnClearLog.setObjectName(u"btnClearLog")
-        self.btnClearLog.setGeometry(QRect(1615, 430, 48, 22))
+        self.btnClearLog.setGeometry(QRect(1615, 430, 48, 31))
         self.btnPause = QPushButton(scraper_panel)
         self.btnPause.setObjectName(u"btnPause")
         self.btnPause.setGeometry(QRect(90, 500, 75, 24))
         self.btnResume = QPushButton(scraper_panel)
         self.btnResume.setObjectName(u"btnResume")
         self.btnResume.setGeometry(QRect(10, 500, 75, 24))
+        self.lineEditLogFilter = QLineEdit(scraper_panel)
+        self.lineEditLogFilter.setObjectName(u"lineEditLogFilter")
+        self.lineEditLogFilter.setGeometry(QRect(1300, 430, 311, 31))
 
         self.retranslateUi(scraper_panel)
 
