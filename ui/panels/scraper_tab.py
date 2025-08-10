@@ -2,17 +2,21 @@
 from __future__ import annotations  # ← должен быть первым
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
-import os
-from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression
+from functools import partial
+import os, json, httpx, subprocess
+from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
+from core.cookies import storage
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
+from utils.context_menu import build_task_table_menu
 
 
 # --- индексы колонок (оставляем твой минимализм) ---
@@ -622,95 +626,740 @@ class ScraperTabController(QWidget):
         pass
 
     # --------------- Ячейки таблици -----------------
-        
-        
-
-
 
     # ---------- Контекстное меню ----------
-    def on_context_menu(self, pos):
+    def on_context_menu(self, pos: QPoint):
         table = self.ui.taskTable
-        global_pos = table.viewport().mapToGlobal(pos)
 
-        row_under_cursor = table.rowAt(pos.y())
-        if row_under_cursor >= 0 and row_under_cursor not in self._selected_rows():
-            table.clearSelection()
-            table.selectRow(row_under_cursor)
+        # Разрешаем открывать меню и на пустом месте: будут доступны пункты для "all"
+        # (build_task_table_menu сам решит, что включить/выключить)
+        rows = sorted({idx.row() for idx in table.selectedIndexes()})
+        count = len(rows)
 
-        has_selection = len(self._selected_rows()) > 0
-        single_row = has_selection and len(self._selected_rows()) == 1
-        row = self._selected_rows()[0] if single_row else -1
+        # ---- Сбор контекста по задачам (для build_task_table_menu) ----
+        has_running = False
+        has_stopped = False
+        all_done = True
+        has_params_cell = True
+        has_cookie_file = False
+        any_startable = False
+        any_stoppable = False
 
-        menu = QMenu(self)
+        for r in rows:
+            task_id = self._task_id_by_row(r)
+            task = self.task_manager.get_task(task_id) if task_id else None
+            status = getattr(task, "status", "PENDING")
+            s = self._status_name(status)
 
-        # ▶ Действия запуска
-        act_start   = menu.addAction("Start selected")
-        act_stop    = menu.addAction("Stop selected")
-        act_pause   = menu.addAction("Pause selected")    # ← добавлено
-        act_resume  = menu.addAction("Resume selected")   # ← добавлено
-        act_restart = menu.addAction("Restart selected")
-        act_reset   = menu.addAction("Reset selected")
-        menu.addSeparator()
+            has_running |= (s == "RUNNING")
+            has_stopped |= (s in {"PENDING", "STOPPED", "FAILED"})
+            all_done &= (s == "DONE")
 
-        # ▶ Переходы/копирование
-        act_open_url   = menu.addAction("Open URL in browser")
-        act_copy_url   = menu.addAction("Copy URL")
-        act_open_res   = menu.addAction("Open Result Folder")
-        act_copy_hdrs  = menu.addAction("Copy Response Headers")
-        menu.addSeparator()
+            # можно стартовать всё, что не RUNNING
+            any_startable |= (s != "RUNNING")
+            # можно останавливать RUNNING/PENDING
+            any_stoppable |= (s in {"RUNNING", "PENDING"})
 
-        # ▶ Просмотр детальной инфы
-        act_view_hdrs  = menu.addAction("View Response Headers…")
-        act_view_redir = menu.addAction("View Redirects…")
-        act_view_cookies = menu.addAction("View Cookies…")
-        menu.addSeparator()
+            # params
+            params = getattr(task, "params", {}) if task else {}
+            has_params_cell &= (params is not None)
 
-        # ▶ Настройки задачи
-        act_edit_params = menu.addAction("Edit Params…")
-        act_delete   = menu.addAction("Delete selected")
+            # cookies
+            ck_file = params.get("cookie_file")
+            has_cookie_file |= bool(ck_file)
 
-        # доступность
-        for a in (act_start, act_stop, act_pause, act_resume, act_restart, act_reset, act_delete,
-                act_open_url, act_copy_url, act_open_res, act_copy_hdrs,
-                act_view_hdrs, act_view_redir, act_view_cookies, act_edit_params):
-            a.setEnabled(has_selection)
+        selection_info = {
+            "rows": rows,
+            "count": count,
+            "has_running": has_running,
+            "has_stopped": has_stopped,
+            "all_done": all_done,
+            "has_params_cell": has_params_cell,
+            "has_cookie_file": has_cookie_file,
+        }
 
-        action = menu.exec(global_pos)
-        if action is None:
+        # Сбор меню и набора действий
+        menu, acts = build_task_table_menu(self, selection_info)
+
+        # ---------- Подключение экшенов (без лишних лямбд) ----------
+        # Tasks: selection
+        acts["start_selected"].triggered.connect(partial(self._start_selected, rows))
+        acts["stop_selected"].triggered.connect(partial(self._stop_selected, rows))
+        acts["restart_selected"].triggered.connect(partial(self._restart_selected, rows))
+
+        # Tasks: all
+        acts["start_all"].triggered.connect(self.start_all_tasks)
+        acts["stop_all"].triggered.connect(self.stop_all_tasks)
+        acts["restart_all"].triggered.connect(self.restart_all_tasks)
+
+        # CRUD / Params
+        if count == 1:
+            acts["edit_params"].triggered.connect(partial(self._ctx_edit_params_dialog, rows[0]))
+            acts["open_browser"].triggered.connect(partial(self._open_in_browser, rows[0]))
+            acts["copy_url"].triggered.connect(partial(self._copy_from_row, rows[0], "url"))
+            acts["copy_final_url"].triggered.connect(partial(self._copy_from_row, rows[0], "final_url"))
+            acts["copy_title"].triggered.connect(partial(self._copy_from_row, rows[0], "title"))
+            acts["copy_headers"].triggered.connect(partial(self._copy_headers, rows[0]))
+            acts["view_headers"].triggered.connect(partial(self._view_headers_dialog, rows[0]))
+            acts["view_redirect_chain"].triggered.connect(partial(self._view_redirect_chain_dialog, rows[0]))
+        acts["duplicate"].triggered.connect(partial(self._duplicate_tasks, rows))
+        acts["remove"].triggered.connect(partial(self._remove_tasks, rows))
+
+        # Export
+        acts["export_selected"].triggered.connect(partial(self._export_data, "Selected"))
+        acts["export_completed"].triggered.connect(partial(self._export_data, "Completed"))
+        acts["export_all"].triggered.connect(partial(self._export_data, "All"))
+
+        # Data ops
+        acts["clear_results"].triggered.connect(partial(self._clear_results, rows))
+
+        # Cookies
+        acts["view_cookies"].triggered.connect(partial(self._view_cookies, rows[0]) if count >= 1 else lambda: None)
+        acts["open_cookie_dir"].triggered.connect(self._open_cookie_dir)
+        acts["reload_cookies"].triggered.connect(partial(self._reload_cookies, rows))
+        acts["clear_cookies"].triggered.connect(partial(self._clear_cookies, rows))
+
+        # Показ меню
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+
+    # ==============================
+    #  Служебные утилиты контекста
+    # ==============================
+
+    def _status_name(self, s) -> str:
+        """Единообразное имя статуса (Enum/str → UPPER)."""
+        name = getattr(s, "name", None)
+        if name:
+            return name.upper()
+        s = str(s)
+        if s.upper().startswith("TASKSTATUS."):
+            s = s.split(".")[-1]
+        return s.strip().upper() if s else "PENDING"
+
+
+    # ==============================
+    #  Слоты действий «Selected»
+    #  (для кнопок и хоткеев)
+    # ==============================
+
+    @Slot()
+    def _ctx_start_selected(self):
+        self._start_selected(self._selected_rows())
+
+    @Slot()
+    def _ctx_stop_selected(self):
+        self._stop_selected(self._selected_rows())
+
+    @Slot()
+    def _ctx_restart_selected(self):
+        self._restart_selected(self._selected_rows())
+
+
+    # ==============================
+    #  Массовые операции над задачами
+    # ==============================
+
+    def _rows_to_task_ids(self, rows: list[int]) -> list[tuple[int, str]]:
+        """Сопоставить строки с task_id, пропуская пустые и логируя проблемы."""
+        out = []
+        for r in rows:
+            tid = self._task_id_by_row(r)
+            if not tid:
+                self.append_log_line(f"[WARN] No task_id for row {r}")
+                continue
+            out.append((r, tid))
+        return out
+
+    def _start_selected(self, rows: list[int]):
+        pairs = self._rows_to_task_ids(rows)
+        started = skipped = errors = 0
+        for _, tid in pairs:
+            try:
+                self.task_manager.start_task(tid)
+                started += 1
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] start_selected({tid[:8]}): {e}")
+        if skipped:
+            self.append_log_line(f"[WARN] Start selected: skipped {skipped} task(s)")
+        self.append_log_line(f"[INFO] Start selected: queued {started}, errors {errors}")
+
+    def _stop_selected(self, rows: list[int]):
+        pairs = self._rows_to_task_ids(rows)
+        stopped = skipped = errors = 0
+        for _, tid in pairs:
+            try:
+                task = self.task_manager.get_task(tid)
+                s = self._status_name(getattr(task, "status", "PENDING"))
+                if s in {"RUNNING", "PENDING"}:
+                    self.task_manager.stop_task(tid)  # кооперативная остановка
+                    stopped += 1
+                else:
+                    skipped += 1  # DONE/FAILED/STOPPED — останавливать нечего
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] stop_selected({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}")
+
+    def _restart_selected(self, rows: list[int]):
+        pairs = self._rows_to_task_ids(rows)
+        restarted = errors = 0
+        has_restart = hasattr(self.task_manager, "restart_task")
+        for _, tid in pairs:
+            try:
+                if has_restart:
+                    self.task_manager.restart_task(tid)
+                else:
+                    # Фолбэк: мягко остановить и снова запустить
+                    try:
+                        self.task_manager.stop_task(tid)
+                    finally:
+                        self.task_manager.start_task(tid)
+                restarted += 1
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] restart_selected({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Restart selected: {restarted} task(s), errors {errors}")
+
+    def _duplicate_tasks(self, rows: list[int]):
+        """Дублирование выделенных задач (название во мн. числе для читаемости)."""
+        pairs = self._rows_to_task_ids(rows)
+        ok = errors = 0
+        # поддержим и duplicate_task(task), и duplicate_tasks(task)
+        dup_one = getattr(self.task_manager, "duplicate_task", None)
+        dup_many = getattr(self.task_manager, "duplicate_tasks", None)
+
+        for _, tid in pairs:
+            task = self.task_manager.get_task(tid)
+            if not task:
+                continue
+            try:
+                if callable(dup_one):
+                    dup_one(task)
+                elif callable(dup_many):
+                    dup_many(task)
+                else:
+                    raise RuntimeError("No duplicate_task(s) method in TaskManager")
+                ok += 1
+            except Exception as e:
+                errors += 1
+                self.append_log_line(f"[ERROR] duplicate({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Duplicated: {ok}, errors {errors}")
+
+    def _remove_tasks(self, rows: list[int]):
+        """Удаление задач из менеджера и таблицы. Гарантированно в обратном порядке строк."""
+        pairs = self._rows_to_task_ids(rows)
+        if not pairs:
+            return
+        # Снимем перерисовку, удалим строки «пакетом»
+        table = self.ui.taskTable
+        table.setUpdatesEnabled(False)
+        removed = errors = 0
+        try:
+            # Сначала удалим из менеджера
+            for _, tid in pairs:
+                try:
+                    self.task_manager.remove_task(tid)
+                    removed += 1
+                except Exception as e:
+                    errors += 1
+                    self.append_log_line(f"[ERROR] remove_task({tid[:8]}): {e}")
+
+            # Затем удалим строки из таблицы (по убыванию индексов)
+            for r, _ in sorted(pairs, key=lambda x: x[0], reverse=True):
+                try:
+                    table.removeRow(r)
+                except Exception as e:
+                    errors += 1
+                    self.append_log_line(f"[ERROR] removeRow({r}): {e}")
+        finally:
+            table.setUpdatesEnabled(True)
+
+        self.append_log_line(f"[INFO] Removed rows: {removed}, errors {errors}")
+
+
+    # ==============================
+    #  Экспорт данных
+    # ==============================
+
+    def _all_tasks_list(self):
+        """Унифицированный способ получить список задач из TaskManager."""
+        tm = self.task_manager
+        if hasattr(tm, "all_tasks"):
+            return list(tm.all_tasks())
+        if hasattr(tm, "iter_tasks"):
+            return list(tm.iter_tasks())
+        if hasattr(tm, "_tasks"):
+            return list(tm._tasks.values())
+        if hasattr(tm, "tasks"):
+            return list(tm.tasks.values())
+        return []
+
+    def _tasks_for_mode(self, mode: str):
+        """Вернуть список задач для экспорта по режиму."""
+        if mode == "Selected":
+            ids = [self._task_id_by_row(r) for r in self._selected_rows()]
+            return [self.task_manager.get_task(tid) for tid in ids if tid and self.task_manager.get_task(tid)]
+
+        if mode == "Completed":
+            out = []
+            for t in self._all_tasks_list():
+                s = self._status_name(getattr(t, "status", ""))
+                if s == "DONE":
+                    out.append(t)
+            return out
+
+        return self._all_tasks_list()
+
+    def _task_to_record(self, t) -> dict:
+        """Привести объект задачи к плоскому dict для экспорта (без потерь ключей из result)."""
+        payload = getattr(t, "result", {}) or {}
+        rec = dict(payload)  # все, что пришло из воркера
+        rec.setdefault("task_id", getattr(t, "id", ""))
+        rec.setdefault("url", getattr(t, "url", ""))
+        rec.setdefault("title", payload.get("title") or getattr(t, "title", ""))
+        rec["final_url"]   = payload.get("final_url") or rec.get("url", "")
+        rec["status_code"] = payload.get("status_code")
+        rec["content_len"] = payload.get("content_len")
+        return rec
+
+    def _ask_export_path(self, mode: str):
+        """Показать Save As и вернуть (path:str, ext:str) или (None, None) при отмене."""
+        import os, time
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtCore import QSettings
+
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        default_name = f"export_{mode.lower()}_{ts}.csv"  # CSV по умолчанию
+        settings = QSettings("WebSecSuite", "Scraper")
+        last_dir = settings.value("export/last_dir", str(Path("data") / "exports"))
+        Path(last_dir).mkdir(parents=True, exist_ok=True)
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save results", str(Path(last_dir) / default_name),
+            "CSV (*.csv);;JSON (*.json);;Excel (*.xlsx)"
+        )
+        if not path:
+            return None, None
+
+        # запоминаем папку
+        settings.setValue("export/last_dir", str(Path(path).parent))
+
+        ext = Path(path).suffix.lower()
+        if ext not in {".csv", ".json", ".xlsx"}:
+            if "JSON" in selected_filter:
+                ext = ".json"; path = str(Path(path).with_suffix(".json"))
+            elif "Excel" in selected_filter:
+                ext = ".xlsx"; path = str(Path(path).with_suffix(".xlsx"))
+            else:
+                ext = ".csv"; path = str(Path(path).with_suffix(".csv"))
+        return path, ext
+
+    def _export_data(self, mode: str):
+        """
+        Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт.
+        Сначала пробуем core.scraper.exporter, затем — встроенный фолбэк.
+        """
+        tasks = self._tasks_for_mode(mode)
+        if not tasks:
+            self.append_log_line(f"[WARN] Export: no tasks for mode '{mode}'")
             return
 
-        if action == act_start:
-            self.start_selected_tasks()
-        elif action == act_stop:
-            self.stop_selected_tasks()
-        elif action == act_pause:          # ← добавлено
-            self.pause_selected_tasks()
-        elif action == act_resume:         # ← добавлено
-            self.resume_selected_tasks()
-        elif action == act_restart:
-            self.restart_selected_tasks()
-        elif action == act_reset:
-            self.reset_selected_tasks()
-        elif action == act_delete:
-            self.delete_selected_tasks()
-        elif action == act_open_url and single_row:
-            self._ctx_open_url(row)
-        elif action == act_copy_url and single_row:
-            self._ctx_copy_url(row)
-        elif action == act_open_res and single_row:
-            self._ctx_open_result_folder(row)
-        elif action == act_copy_hdrs and single_row:
-            self._ctx_copy_response_headers(row)
-        elif action == act_view_hdrs and single_row:
-            self._ctx_view_headers_dialog(row)
-        elif action == act_view_redir and single_row:
-            self._ctx_view_redirects_dialog(row)
-        elif action == act_view_cookies and single_row:
-            self._ctx_view_cookies_dialog(row)
-        elif action == act_edit_params and single_row:
-            self._ctx_edit_params_dialog(row)
+        path, ext = self._ask_export_path(mode)
+        if not path:
+            return
 
-    # ---------- Слоты кнопок ----------
+        # Попытка модульного экспортера
+        used_builtin = False
+        try:
+            from core.scraper import exporter
+            if ext == ".csv" and hasattr(exporter, "export_csv"):
+                exporter.export_csv(tasks, path); used_builtin = True
+            elif ext == ".json" and hasattr(exporter, "export_json"):
+                exporter.export_json(tasks, path); used_builtin = True
+            elif ext == ".xlsx" and hasattr(exporter, "export_xlsx"):
+                exporter.export_xlsx(tasks, path); used_builtin = True
+            elif hasattr(exporter, "export_tasks"):
+                try:
+                    exporter.export_tasks(tasks, path=path, fmt=ext.lstrip("."))
+                    used_builtin = True
+                except TypeError:
+                    exporter.export_tasks(tasks, filename=path, format=ext.lstrip("."))
+                    used_builtin = True
+        except Exception as e:
+            self.append_log_line(f"[WARN] Built‑in exporter error: {e}. Will fallback.")
+
+        if used_builtin:
+            self.append_log_line(f"[INFO] Exported ({mode}) → {path}")
+            return
+
+        # ---- Фолбэк: сбор записей ----
+        records, keys = [], set()
+        for t in tasks:
+            rec = self._task_to_record(t)
+            keys.update(rec.keys())
+            records.append(rec)
+
+        # Запись JSON
+        if ext == ".json":
+            import json, tempfile, os
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)  # атомарная запись
+            self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+            return
+
+        # Запись XLSX (если openpyxl доступен), иначе — в CSV
+        if ext == ".xlsx":
+            try:
+                from openpyxl import Workbook
+                wb = Workbook(); ws = wb.active
+                headers = sorted(keys); ws.append(headers)
+                for rec in records:
+                    ws.append([("" if rec.get(k) is None else str(rec.get(k))) for k in headers])
+                wb.save(path)
+                self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+                return
+            except Exception as e:
+                self.append_log_line(f"[WARN] XLSX export failed ({e}). Saving as CSV instead.")
+                from pathlib import Path as _P
+                path = str(_P(path).with_suffix(".csv"))
+                ext = ".csv"
+
+        # Запись CSV
+        headers = sorted(keys)
+        import csv as _csv, tempfile, os
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=headers)
+            w.writeheader()
+            for rec in records:
+                w.writerow({k: ("" if rec.get(k) is None else str(rec.get(k))) for k in headers})
+        os.replace(tmp, path)  # атомарная запись
+        self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+
+    # ==============================
+    #  Данные / буфер обмена / диалоги
+    # ==============================
+
+    def _row_to_task(self, row: int):
+        """Безопасно вернуть (task_id, task) по строке; иначе (None, None)."""
+        tid = self._task_id_by_row(row)
+        if not tid:
+            return None, None
+        task = self.task_manager.get_task(tid)
+        if not task:
+            return None, None
+        return tid, task
+
+    def _get_result_payload(self, row: int) -> dict:
+        _, task = self._row_to_task(row)
+        return (getattr(task, "result", {}) or {}) if task else {}
+
+    def _json_pretty(self, data) -> str:
+        try:
+            return json.dumps(data, indent=4, ensure_ascii=False)
+        except Exception:
+            return str(data)
+
+    def _clear_results(self, rows: list[int]):
+        table = self.ui.taskTable
+        table.setUpdatesEnabled(False)
+        cleared = 0
+        try:
+            for r in rows:
+                tid, task = self._row_to_task(r)
+                if not task:
+                    continue
+                setattr(task, "result", None)
+                cleared += 1
+                # при желании можно сразу очистить UI‑колонки результата:
+                # self.set_code_cell(r, None)
+                # self.set_url_cell(r, "", "")
+                # self.set_status_cell(r, "PENDING")
+        finally:
+            table.setUpdatesEnabled(True)
+        self.append_log_line(f"[INFO] Cleared results for {cleared} task(s)")
+
+    def _open_in_browser(self, row: int):
+        url = self.get_url_from_row(row)
+        if not url:
+            self.append_log_line("[WARN] Open in browser: empty URL")
+            return
+        ok = QDesktopServices.openUrl(QUrl(url))
+        if not ok:
+            import webbrowser
+            webbrowser.open(url)
+
+    def get_url_from_row(self, row: int) -> str:
+        payload = self._get_result_payload(row)
+        return payload.get("final_url") or payload.get("url") or ""
+
+    def _get_field_from_row(self, row: int, field: str):
+        payload = self._get_result_payload(row)
+        return payload.get(field) or ""
+
+    def _copy_from_row(self, row: int, field: str):
+        val = self._get_field_from_row(row, field)
+        if not val:
+            self.append_log_line(f"[WARN] Copy {field}: empty")
+            return
+        QGuiApplication.clipboard().setText(str(val))
+        # лог не раздуваем: показываем обрезку до 120 символов
+        shown = str(val)
+        if len(shown) > 120:
+            shown = shown[:117] + "..."
+        self.append_log_line(f"[INFO] Copied {field}: {shown}")
+
+    def _copy_headers(self, row: int):
+        payload = self._get_result_payload(row)
+        hdrs = (payload or {}).get("headers") or {}
+        self._copy_text_block(hdrs)
+
+    def _copy_text_block(self, data):
+        QGuiApplication.clipboard().setText(self._json_pretty(data))
+        # без избыточных логов — это вспомогательный метод
+
+    def _view_headers_dialog(self, row: int):
+        payload = self._get_result_payload(row)
+        hdrs = (payload or {}).get("headers") or {}
+        self._show_json_dialog("Response Headers", hdrs)
+
+    def _view_redirect_chain_dialog(self, row: int):
+        payload = self._get_result_payload(row)
+        chain = (payload or {}).get("redirect_chain") or []
+        title = f"Redirect chain ({len(chain)})"
+        self._show_json_dialog(title, chain)
+
+    def _show_json_dialog(self, title: str, data):
+        text = self._json_pretty(data)
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(title)
+        dlg.setIcon(QMessageBox.Information)
+        dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        # Для больших объёмов лучше уводить текст в detailedText (скролл) — не обязательно.
+        if len(text) > 4000:
+            dlg.setText(f"{title} — content is large, see details.")
+            dlg.setDetailedText(text)
+        else:
+            dlg.setText(text)
+        dlg.exec()
+
+    # ==============================
+    #  Cookies
+    # ==============================
+
+    def _cookie_path_for(self, url: str, cookie_file: str | None) -> Path:
+        """
+        Вернуть абсолютный путь к cookie-файлу:
+        - если передан cookie_file — используем его;
+        - иначе строим auto-путь по домену: data/cookies/cookies_<domain>.json.
+        """
+        if cookie_file:
+            p = Path(cookie_file)
+            return p if p.is_absolute() else (Path("data") / "cookies" / p)
+        host = (urlparse(url).hostname or "default").lstrip(".")
+        return Path("data") / "cookies" / f"cookies_{host}.json"
+
+
+    def _open_cookie_dir(self):
+        path = Path("data") / "cookies"
+        path.mkdir(parents=True, exist_ok=True)
+
+        # Кроссплатформенно через Qt; на Windows откроет Проводник
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
+        if not ok:
+            # резерв на всякий случай
+            if os.name == "nt":
+                subprocess.Popen(f'explorer "{path.resolve()}"')
+            else:
+                subprocess.Popen(["xdg-open", str(path.resolve())])
+
+
+    def _reload_cookies(self, rows: list[int]):
+        """Перезагрузка cookie из файлов для выбранных задач (в память задачи/сессии)."""
+        reloaded = skipped = 0
+        for r in rows:
+            tid = self._task_id_by_row(r)
+            if not tid:
+                skipped += 1
+                continue
+            task = self.task_manager.get_task(tid)
+            if not task:
+                skipped += 1
+                continue
+
+            params = getattr(task, "params", {}) or {}
+            url = getattr(task, "url", "") or ""
+            cookie_file = params.get("cookie_file")
+
+            # 1) загрузим jar (storage сам решает: по cookie_file или по домену)
+            try:
+                jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
+            except Exception as e:
+                self.append_log_line(f"[ERROR] Cookies reload({tid[:8]}): {e}")
+                continue
+
+            # 2) положим в задачу (унифицированно используем httpx.Cookies)
+            try:
+                cookies = httpx.Cookies()
+                for c in storage.jar_iter(jar):  # если есть helper; иначе конвертируем напрямую
+                    cookies.set(c.name, c.value, domain=c.domain, path=c.path, expires=c.expires)
+                setattr(task, "cookies", cookies)
+                reloaded += 1
+
+                # Если cookie_file не указан и storage выбрал auto-путь — пропишем его в params
+                if not cookie_file:
+                    params["cookie_file"] = str(path)
+                    setattr(task, "params", params)
+
+                self.append_log_line(f"[INFO] Cookies reloaded({tid[:8]}): {loaded} from {path}")
+            except Exception as e:
+                self.append_log_line(f"[ERROR] Cookies attach({tid[:8]}): {e}")
+
+        self.append_log_line(f"[INFO] Cookies reloaded for {reloaded} task(s), skipped {skipped}")
+
+
+    def _clear_cookies(self, rows: list[int]):
+        """Очистка cookie в памяти задач (файлы не трогаем)."""
+        cleared = skipped = 0
+        for r in rows:
+            tid = self._task_id_by_row(r)
+            if not tid:
+                skipped += 1
+                continue
+            task = self.task_manager.get_task(tid)
+            if not task:
+                skipped += 1
+                continue
+            try:
+                setattr(task, "cookies", httpx.Cookies())  # чистая банка
+                cleared += 1
+            except Exception as e:
+                self.append_log_line(f"[ERROR] Cookies clear({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Cookies cleared for {cleared} task(s), skipped {skipped}")
+
+
+    def _view_cookies(self, row: int):
+        """Показать cookies задачи (из файла, не из памяти) в удобном JSON."""
+        task_id = self._task_id_by_row(row)
+        if not task_id:
+            return
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            return
+
+        params = getattr(task, "params", {}) or {}
+        url = getattr(task, "url", "") or ""
+        cookie_file = params.get("cookie_file")
+
+        try:
+            jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
+        except Exception as e:
+            self.append_log_line(f"[ERROR] Cookies view({task_id[:8]}): {e}")
+            QMessageBox.warning(self, "Cookies", f"Failed to load cookies:\n{e}")
+            return
+
+        if loaded == 0:
+            QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path}")
+            return
+
+        try:
+            data = storage.jar_to_json(jar)
+            pretty = json.dumps(data, indent=4, ensure_ascii=False)
+        except Exception:
+            pretty = "Could not serialize cookies."
+
+        title = f"Cookies — {loaded} item(s)"
+        text = f"Path: {path}\nLoaded: {loaded}\n\n{pretty}"
+
+        # Для больших наборов отдаём в detailedText, чтобы не подвешивать QMessageBox
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(title)
+        dlg.setIcon(QMessageBox.Information)
+        dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        if len(text) > 4000:
+            dlg.setText(f"{title}\nPath: {path}\nLoaded: {loaded}\n\n(See details)")
+            dlg.setDetailedText(pretty)
+        else:
+            dlg.setText(text)
+        dlg.exec()
+
+        
+    # --- ALL TASKS ACTIONS ---
+
+    def start_all_tasks(self):
+        """Запускает все задачи, которые не RUNNING. Разрешаем повторный старт DONE/FAILED."""
+        table = self.ui.taskTable
+        started = 0
+        for row in range(table.rowCount()):
+            tid = self._task_id_by_row(row)
+            if not tid:
+                continue
+            task = self.task_manager.get_task(tid)
+            status = getattr(task, "status", "PENDING")
+            # Стартуем всё, что не RUNNING (включая DONE/FAILED для повторного прогона)
+            if status in ("PENDING", "STOPPED", "FAILED", "DONE"):
+                try:
+                    self.task_manager.start_task(tid)
+                    started += 1
+                except Exception as e:
+                    self.append_log_line(f"[ERROR] start_all_tasks({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Start all: queued {started} task(s)")
+
+
+    def stop_all_tasks(self):
+        """Кооперативно останавливает все RUNNING/PENDING задачи."""
+        table = self.ui.taskTable
+        stopped = 0
+        for row in range(table.rowCount()):
+            tid = self._task_id_by_row(row)
+            if not tid:
+                continue
+            task = self.task_manager.get_task(tid)
+            status = getattr(task, "status", "PENDING")
+            if status in ("RUNNING", "PENDING"):
+                try:
+                    self.task_manager.stop_task(tid)
+                    stopped += 1
+                except Exception as e:
+                    self.append_log_line(f"[ERROR] stop_all_tasks({tid[:8]}): {e}")
+        self.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s)")
+
+
+    def restart_all_tasks(self):
+        """
+        Перезапуск всех задач:
+        - если есть TaskManager.restart_task → используем его
+        - иначе: stop_task → start_task (мягко; менеджер сам дождётся остановки воркера)
+        """
+        table = self.ui.taskTable
+        restarted = 0
+        use_native = hasattr(self.task_manager, "restart_task")
+
+        for row in range(table.rowCount()):
+            tid = self._task_id_by_row(row)
+            if not tid:
+                continue
+            try:
+                if use_native:
+                    self.task_manager.restart_task(tid)
+                else:
+                    # Универсальный путь: остановить если бежит, затем стартовать
+                    task = self.task_manager.get_task(tid)
+                    status = getattr(task, "status", "PENDING")
+                    if status in ("RUNNING", "PENDING"):
+                        self.task_manager.stop_task(tid)
+                    self.task_manager.start_task(tid)
+                restarted += 1
+            except Exception as e:
+                self.append_log_line(f"[ERROR] restart_all_tasks({tid[:8]}): {e}")
+
+        self.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s)")
+                    
     @Slot()
     def on_start_clicked(self):
         table = self.ui.taskTable

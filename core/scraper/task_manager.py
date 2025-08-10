@@ -4,6 +4,8 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 from typing import Dict, Optional, Iterable, List
 from datetime import datetime
+import copy
+import uuid
 
 from PySide6.QtCore import QObject, Signal, QThreadPool
 
@@ -21,6 +23,7 @@ class TaskManager(QObject):
     task_error = Signal(str, str)           # (task_id, error_str)
     task_reset = Signal(str)                # (task_id)
     task_restarted = Signal(str)            # (task_id)
+    task_added = Signal(object)   # Task
 
     # === SECTION === Init & state
     def __init__(self):
@@ -70,6 +73,73 @@ class TaskManager(QObject):
         except Exception:
             pass
         return existed
+    
+    def duplicate_tasks(self, task_or_id):
+        """
+        Клонирует задачу:
+        - deep copy
+        - новый id и имя "(copy)"
+        - сброс статусов/результатов/прогресса
+        - добавляет в self._tasks
+        - эмитит task_added(new_task)
+        """
+        # источник
+        src = self.get_task(task_or_id) if isinstance(task_or_id, str) else task_or_id
+        if src is None:
+            raise ValueError("duplicate_task: source task not found")
+
+        new_task = copy.deepcopy(src)
+
+        # новый id/имя
+        new_task.id = uuid.uuid4().hex
+        if getattr(new_task, "name", None):
+            new_task.name = f"{new_task.name} (copy)"
+
+        # сброс состояния
+        if hasattr(new_task, "status"):
+            new_task.status = TaskStatus.PENDING
+        for attr, val in [
+            ("result", None),
+            ("progress", 0),
+            ("error", None),
+            ("final_url", None),
+            ("status_code", None),
+            ("content_len", None),
+            ("timings", None),
+            ("redirect_chain", None),
+            ("headers", None),
+            ("started_at", None),
+            ("finished_at", None),
+        ]:
+            if hasattr(new_task, attr):
+                setattr(new_task, attr, val)
+
+        # убрать возможные ссылки на раннаблы/потоки
+        for attr in ("worker", "runnable", "_future", "_thread"):
+            if hasattr(new_task, attr):
+                setattr(new_task, attr, None)
+
+        # даты
+        if hasattr(new_task, "created_at"):
+            new_task.created_at = datetime.utcnow()
+
+        # клон params
+        if hasattr(new_task, "params") and new_task.params is not None:
+            try:
+                new_task.params = copy.deepcopy(new_task.params)
+            except Exception:
+                pass
+
+        # сохранить
+        self._tasks[new_task.id] = new_task
+
+        # уведомить UI
+        try:
+            self.task_added.emit(new_task)
+        except Exception:
+            pass
+
+        return new_task
 
     # === SECTION === Start/Stop (single & bulk)
     def start_task(self, task_id: str) -> bool:
