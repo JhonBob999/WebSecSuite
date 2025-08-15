@@ -15,9 +15,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QHeaderView, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
-    QTableWidgetItem, QToolButton, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QHeaderView, QLabel,
+    QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy,
+    QTableWidget, QTableWidgetItem, QToolButton, QWidget)
 
 class Ui_scraper_panel(object):
     def setupUi(self, scraper_panel):
@@ -81,7 +81,7 @@ class Ui_scraper_panel(object):
         self.btnAddTask.setGeometry(QRect(10, 470, 75, 24))
         self.btnClearLog = QToolButton(scraper_panel)
         self.btnClearLog.setObjectName(u"btnClearLog")
-        self.btnClearLog.setGeometry(QRect(1200, 430, 48, 31))
+        self.btnClearLog.setGeometry(QRect(1370, 430, 81, 31))
         self.btnPause = QPushButton(scraper_panel)
         self.btnPause.setObjectName(u"btnPause")
         self.btnPause.setGeometry(QRect(90, 500, 75, 24))
@@ -100,23 +100,35 @@ class Ui_scraper_panel(object):
         self.lbl_search.setFont(font2)
         self.btnFindNext = QPushButton(scraper_panel)
         self.btnFindNext.setObjectName(u"btnFindNext")
-        self.btnFindNext.setGeometry(QRect(1360, 430, 80, 31))
+        self.btnFindNext.setGeometry(QRect(1280, 430, 80, 31))
         self.btnFindPrev = QPushButton(scraper_panel)
         self.btnFindPrev.setObjectName(u"btnFindPrev")
-        self.btnFindPrev.setGeometry(QRect(1270, 430, 80, 31))
+        self.btnFindPrev.setGeometry(QRect(1200, 430, 80, 31))
         self.lblMatches = QLabel(scraper_panel)
         self.lblMatches.setObjectName(u"lblMatches")
-        self.lblMatches.setGeometry(QRect(1270, 400, 71, 31))
+        self.lblMatches.setGeometry(QRect(1200, 400, 71, 31))
         font3 = QFont()
         font3.setPointSize(11)
         font3.setBold(True)
         self.lblMatches.setFont(font3)
         self.lblFindHits = QLabel(scraper_panel)
         self.lblFindHits.setObjectName(u"lblFindHits")
-        self.lblFindHits.setGeometry(QRect(1340, 400, 61, 31))
+        self.lblFindHits.setGeometry(QRect(1280, 400, 61, 31))
         font4 = QFont()
         font4.setPointSize(11)
         self.lblFindHits.setFont(font4)
+        self.cbFindCase = QCheckBox(scraper_panel)
+        self.cbFindCase.setObjectName(u"cbFindCase")
+        self.cbFindCase.setGeometry(QRect(1480, 380, 81, 21))
+        self.cbFindWhole = QCheckBox(scraper_panel)
+        self.cbFindWhole.setObjectName(u"cbFindWhole")
+        self.cbFindWhole.setGeometry(QRect(1480, 440, 81, 21))
+        self.cbFindRegex = QCheckBox(scraper_panel)
+        self.cbFindRegex.setObjectName(u"cbFindRegex")
+        self.cbFindRegex.setGeometry(QRect(1480, 410, 81, 21))
+        self.btnExportMatches = QPushButton(scraper_panel)
+        self.btnExportMatches.setObjectName(u"btnExportMatches")
+        self.btnExportMatches.setGeometry(QRect(1570, 430, 91, 31))
 
         self.retranslateUi(scraper_panel)
 
@@ -146,7 +158,7 @@ class Ui_scraper_panel(object):
         self.btnStop.setText(QCoreApplication.translate("scraper_panel", u"Stop", None))
         self.btnStart.setText(QCoreApplication.translate("scraper_panel", u"Start", None))
         self.btnAddTask.setText(QCoreApplication.translate("scraper_panel", u"Add Task", None))
-        self.btnClearLog.setText(QCoreApplication.translate("scraper_panel", u"CLEAR", None))
+        self.btnClearLog.setText(QCoreApplication.translate("scraper_panel", u"Clear Logs", None))
         self.btnPause.setText(QCoreApplication.translate("scraper_panel", u"Pause", None))
         self.btnResume.setText(QCoreApplication.translate("scraper_panel", u"Resume", None))
         self.lbl_search.setText(QCoreApplication.translate("scraper_panel", u"Search", None))
@@ -154,5 +166,9 @@ class Ui_scraper_panel(object):
         self.btnFindPrev.setText(QCoreApplication.translate("scraper_panel", u"Previous", None))
         self.lblMatches.setText(QCoreApplication.translate("scraper_panel", u"Matches:", None))
         self.lblFindHits.setText(QCoreApplication.translate("scraper_panel", u"<html><head/><body><p align=\"center\"><span style=\" font-size:11pt; font-weight:700;\">0 / 0</span></p></body></html>", None))
+        self.cbFindCase.setText(QCoreApplication.translate("scraper_panel", u"FindCase", None))
+        self.cbFindWhole.setText(QCoreApplication.translate("scraper_panel", u"FindWhole", None))
+        self.cbFindRegex.setText(QCoreApplication.translate("scraper_panel", u"FindRegex", None))
+        self.btnExportMatches.setText(QCoreApplication.translate("scraper_panel", u"Export Matches", None))
     # retranslateUi
 

@@ -189,14 +189,14 @@
   <widget class="QToolButton" name="btnClearLog">
    <property name="geometry">
     <rect>
-     <x>1200</x>
+     <x>1370</x>
      <y>430</y>
-     <width>48</width>
+     <width>81</width>
      <height>31</height>
     </rect>
    </property>
    <property name="text">
-    <string>CLEAR</string>
+    <string>Clear Logs</string>
    </property>
   </widget>
   <widget class="QPushButton" name="btnPause">
@@ -257,7 +257,7 @@
   <widget class="QPushButton" name="btnFindNext">
    <property name="geometry">
     <rect>
-     <x>1360</x>
+     <x>1280</x>
      <y>430</y>
      <width>80</width>
      <height>31</height>
@@ -270,7 +270,7 @@
   <widget class="QPushButton" name="btnFindPrev">
    <property name="geometry">
     <rect>
-     <x>1270</x>
+     <x>1200</x>
      <y>430</y>
      <width>80</width>
      <height>31</height>
@@ -283,7 +283,7 @@
   <widget class="QLabel" name="lblMatches">
    <property name="geometry">
     <rect>
-     <x>1270</x>
+     <x>1200</x>
      <y>400</y>
      <width>71</width>
      <height>31</height>
@@ -302,7 +302,7 @@
   <widget class="QLabel" name="lblFindHits">
    <property name="geometry">
     <rect>
-     <x>1340</x>
+     <x>1280</x>
      <y>400</y>
      <width>61</width>
      <height>31</height>
@@ -315,6 +315,58 @@
    </property>
    <property name="text">
     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;&lt;span style=&quot; font-size:11pt; font-weight:700;&quot;&gt;0 / 0&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+  </widget>
+  <widget class="QCheckBox" name="cbFindCase">
+   <property name="geometry">
+    <rect>
+     <x>1480</x>
+     <y>380</y>
+     <width>81</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>FindCase</string>
+   </property>
+  </widget>
+  <widget class="QCheckBox" name="cbFindWhole">
+   <property name="geometry">
+    <rect>
+     <x>1480</x>
+     <y>440</y>
+     <width>81</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>FindWhole</string>
+   </property>
+  </widget>
+  <widget class="QCheckBox" name="cbFindRegex">
+   <property name="geometry">
+    <rect>
+     <x>1480</x>
+     <y>410</y>
+     <width>81</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>FindRegex</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="btnExportMatches">
+   <property name="geometry">
+    <rect>
+     <x>1570</x>
+     <y>430</y>
+     <width>91</width>
+     <height>31</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Export Matches</string>
    </property>
   </widget>
  </widget>

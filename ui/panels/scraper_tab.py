@@ -5,10 +5,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
 from functools import partial
-import os, json, httpx, subprocess
-from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint
-from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox
+import os, json, httpx, subprocess, re, io
+from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint, QTimer, QDateTime
+from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QShortcut, QKeySequence
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox, QTextEdit
 
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
@@ -177,6 +177,32 @@ class ScraperTabController(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.ui.taskTable.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setAlternatingRowColors(True)
+        
+        # --- FIND STATE (для логов) ---
+        self._find_positions = []  # list[(start, length)]
+        self._find_current = -1    # индекс текущего совпадения
+        self._find_debounce = QTimer(self)  # чтобы не дёргать поиск на каждый символ
+        self._find_debounce.setSingleShot(True)
+        self._find_debounce.setInterval(150)
+        
+        self.ui.lineEditLogFilter.textChanged.connect(self._on_find_text_changed)
+        self._find_debounce.timeout.connect(self._rebuild_find_matches)
+
+        self.ui.btnFindPrev.clicked.connect(lambda: self._goto_match(-1))
+        self.ui.btnFindNext.clicked.connect(lambda: self._goto_match(+1))
+        self.ui.btnExportMatches.clicked.connect(self._export_log_matches)
+
+        # Горячие клавиши: F3 — далее, Shift+F3 — назад
+        QShortcut(QKeySequence("F3"), self.ui.logOutput, activated=lambda: self._goto_match(+1))
+        QShortcut(QKeySequence("Shift+F3"), self.ui.logOutput, activated=lambda: self._goto_match(-1))
+        # хоткей: Ctrl+E
+        QShortcut(QKeySequence("Ctrl+E"), self.ui.logOutput, activated=self._export_log_matches)
+        
+        # в __init__ ScraperTabController (после создания _find_debounce)
+        self.ui.cbFindCase.toggled.connect(lambda _: self._find_debounce.start())
+        self.ui.cbFindRegex.toggled.connect(lambda _: self._find_debounce.start())
+        self.ui.cbFindWhole.toggled.connect(lambda _: self._find_debounce.start())
+
 
         # контекстное меню
         table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -222,6 +248,10 @@ class ScraperTabController(QWidget):
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
             
+    def _on_find_text_changed(self, _):
+        # живую подсветку ты уже делаешь — здесь дополняем навигацией
+        self._find_debounce.start()
+            
             
     def _on_filter_text_changed(self, text: str):
         # базовая версия: без regex и без учёта регистра
@@ -230,6 +260,232 @@ class ScraperTabController(QWidget):
             regex_mode=False,
             case_sensitive=False
         )
+        
+    def _rebuild_find_matches(self):
+        text = self.ui.lineEditLogFilter.text()
+        doc = self.ui.logOutput.document()
+        plain = doc.toPlainText()
+
+        self._find_positions.clear()
+        self._find_current = -1
+        self._set_find_error(False)
+
+        # Пустой поиск — очистка
+        if not text:
+            self._apply_log_find_selections([])
+            self._update_find_label()
+            return
+
+        # Флаги из UI
+        use_regex = self.ui.cbFindRegex.isChecked()
+        case_sensitive = self.ui.cbFindCase.isChecked()
+        whole_word = self.ui.cbFindWhole.isChecked()
+
+        # Регистровые флаги
+        flags = 0 if case_sensitive else re.IGNORECASE
+
+        try:
+            if use_regex:
+                pattern = text
+                # Если просили "целое слово" — мягко добавим \b, если пользователь сам не поставил
+                if whole_word:
+                    if not pattern.startswith(r"\b"):
+                        pattern = r"\b" + pattern
+                    if not pattern.endswith(r"\b"):
+                        pattern = pattern + r"\b"
+                rx = re.compile(pattern, flags)
+            else:
+                # Без регулярок: экранируем и при whole word оборачиваем в \b … \b
+                pattern = re.escape(text)
+                if whole_word:
+                    pattern = rf"\b{pattern}\b"
+                rx = re.compile(pattern, flags)
+
+            matches = list(rx.finditer(plain))
+            self._find_positions = [(m.start(), m.end() - m.start()) for m in matches]
+
+        except re.error:
+            # Некорректный regex — подсветим ошибку
+            self._set_find_error(True)
+            self._apply_log_find_selections([])
+            return
+
+        # Текущее совпадение — первое, если есть
+        if self._find_positions:
+            self._find_current = 0
+
+        self._apply_log_find_selections(self._find_positions, self._find_current)
+        self._update_find_label()
+        self._ensure_current_visible()
+        
+    def _apply_log_find_selections(self, positions, current_index=-1):
+        edit = self.ui.logOutput
+        doc = edit.document()
+
+        # Блеклая подсветка для всех совпадений
+        fmt_all = QTextCharFormat()
+        fmt_all.setBackground(Qt.yellow)
+        fmt_all.setProperty(QTextCharFormat.FullWidthSelection, False)
+
+        # Яркая рамка/подсветка для текущего
+        fmt_cur = QTextCharFormat()
+        fmt_cur.setBackground(Qt.darkYellow)
+        fmt_cur.setUnderlineStyle(QTextCharFormat.SingleUnderline)
+
+        sels = []
+        for i, (start, length) in enumerate(positions):
+            cur = QTextCursor(doc)
+            cur.setPosition(start)
+            cur.setPosition(start + length, QTextCursor.KeepAnchor)
+
+            s = QTextEdit.ExtraSelection()
+            s.cursor = cur
+            s.format = fmt_cur if i == current_index else fmt_all
+            sels.append(s)
+
+        # Сочетается с твоим syntax highlighter — ExtraSelections поверх
+        edit.setExtraSelections(sels)
+        
+        
+    def _goto_match(self, step: int):
+        if not self._find_positions:
+            return
+        self._find_current = (self._find_current + step) % len(self._find_positions)
+        self._apply_log_find_selections(self._find_positions, self._find_current)
+        self._update_find_label()
+        self._ensure_current_visible()
+        
+    def _ensure_current_visible(self):
+        if self._find_current < 0 or self._find_current >= len(self._find_positions):
+            return
+        start, length = self._find_positions[self._find_current]
+        doc = self.ui.logOutput.document()
+        cur = QTextCursor(doc)
+        cur.setPosition(start)
+        cur.setPosition(start + length, QTextCursor.KeepAnchor)
+        self.ui.logOutput.setTextCursor(cur)
+        self.ui.logOutput.ensureCursorVisible()
+        
+    def _update_find_label(self):
+        total = len(self._find_positions)
+        cur = (self._find_current + 1) if total and self._find_current >= 0 else 0
+        self.ui.lblFindHits.setText(f"{cur} / {total}")
+        # Активность кнопок
+        enabled = total > 0
+        self.ui.btnFindPrev.setEnabled(enabled)
+        self.ui.btnFindNext.setEnabled(enabled)
+        
+    def _set_find_error(self, is_error: bool):
+        le = self.ui.lineEditLogFilter
+        if is_error:
+            le.setStyleSheet("QLineEdit { border: 1px solid #dc3545; }")
+            self.ui.lblFindHits.setText("ERR")
+            self.ui.btnFindPrev.setEnabled(False)
+            self.ui.btnFindNext.setEnabled(False)
+        else:
+            le.setStyleSheet("")
+            
+    def _current_find_regex(self):
+        """Строим regex из текущего текста и флагов (те же правила, что в _rebuild_find_matches)."""
+        text = self.ui.lineEditLogFilter.text()
+        if not text:
+            return None
+
+        use_regex = self.ui.cbFindRegex.isChecked()
+        case_sensitive = self.ui.cbFindCase.isChecked()
+        whole_word = self.ui.cbFindWhole.isChecked()
+        flags = 0 if case_sensitive else re.IGNORECASE
+
+        try:
+            if use_regex:
+                pattern = text
+                if whole_word:
+                    # добавляем \b только если пользователь сам не поставил
+                    if not pattern.startswith(r"\b"):
+                        pattern = r"\b" + pattern
+                    if not pattern.endswith(r"\b"):
+                        pattern = pattern + r"\b"
+                rx = re.compile(pattern, flags)
+            else:
+                pattern = re.escape(text)
+                if whole_word:
+                    pattern = rf"\b{pattern}\b"
+                rx = re.compile(pattern, flags)
+            return rx
+        except re.error:
+            return None
+        
+    def append_log(self, level: str, text: str):
+        ts = QDateTime.currentDateTime().toString("HH:mm:ss")
+        line = f"[{ts}] [{level}] {text}"
+        self.ui.logOutput.appendPlainText(line)
+        
+    def _ask_export_path_log(self):
+        ts = QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")
+        suggested = os.path.join("data", "exports", f"log_search_{ts}.txt")
+        os.makedirs(os.path.dirname(suggested), exist_ok=True)
+        path, _ = QFileDialog.getSaveFileName(
+            self.ui.taskTable, "Export matches", suggested, "Text (*.txt);;JSON (*.json)"
+        )
+        return path or ""
+
+
+    
+    
+    def _export_log_matches(self):
+        rx = self._current_find_regex()
+        if rx is None:
+            QMessageBox.information(self.ui.taskTable, "Export", "Nothing to export: empty pattern or invalid regex.")
+            return
+
+        doc = self.ui.logOutput.document()
+        block = doc.begin()
+        results = []
+        ln = 1
+
+        # пробегаем блоки без создания гигантских списков
+        while block.isValid():
+            line = block.text()
+            if rx.search(line):
+                results.append((ln, line))
+            block = block.next()
+            ln += 1
+
+        if not results:
+            QMessageBox.information(self.ui.taskTable, "Export", "0 matches — nothing to export.")
+            return
+
+        path = self._ask_export_path_log()
+        if not path:
+            return
+
+        try:
+            # атомарная запись
+            tmp = path + ".tmp"
+            if path.lower().endswith(".json"):
+                payload = [{"line_no": n, "text": t} for (n, t) in results]
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            else:
+                # UTF-8 with BOM чтобы Windows/Excel открывали без «кракозябр»
+                buf = io.open(tmp, "w", encoding="utf-8-sig", newline="\n")
+                with buf as f:
+                    for n, t in results:
+                        f.write(f"[{n}] {t}\n")
+
+            os.replace(tmp, path)
+            self.append_log_line(f"[INFO] Exported matches: {len(results)} → {path}")
+            # открыть папку с выделенным файлом
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+            except Exception:
+                pass
+
+        except Exception as e:
+            QMessageBox.critical(self.ui.taskTable, "Export error", str(e))
+
+
+
             
      # --- настройка таблицы, один раз ---
     def _setup_task_table(self):
@@ -411,7 +667,7 @@ class ScraperTabController(QWidget):
         level = (level or "INFO").upper()
         if level not in {"INFO", "WARN", "ERROR"}:
             level = "INFO"
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = QDateTime.currentDateTime().toString("HH:mm:ss")
 
         self.log_buffer.append((ts, level, str(text)))
         # Ограничиваем размер буфера
