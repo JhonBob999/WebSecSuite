@@ -1,0 +1,88 @@
+STEP A — ФУНДАМЕНТ: СЕТЕВОЙ СТЕК И СТАБИЛЬНОСТЬ
+Дата начала: 2025-08-15
+Цель спринта:
+- Убрать гонки и утечки в C++ ядре.
+- Включить поддержку таймаутов, follow-redirects, HTTP/2/ALPN.
+- Ввести backoff/ретраи.
+- Создать и внедрить Result schema с редирект-цепочкой и таймингами.
+- Обеспечить корректную интеграцию с Python/UI.
+
+---
+ЗАДАЧИ (C++ ядро)
+1. **Потокобезопасность**
+   - В `scraper.cpp` метод `Scraper::add_task` обернуть работу с `tasks_` в `std::lock_guard<std::mutex>`.
+   - Проверить все места изменения общих коллекций (`tasks_`, `results_`) и добавить блокировки.
+
+2. **RAII для CURL**
+   - Создать обёртку `using CurlHandle = std::unique_ptr<CURL, CurlDeleter>` в `curl_handle.hpp`.
+   - Все инициализации `curl_easy_init()` обернуть в CurlHandle.
+   - После `curl_easy_perform()` проверять код возврата, при ошибке логировать/прерывать.
+
+3. **Сетевые опции по умолчанию**
+   - `CURLOPT_FOLLOWLOCATION` = 1L
+   - `CURLOPT_MAXREDIRS` = 10L
+   - `CURLOPT_CONNECTTIMEOUT` = 10L
+   - `CURLOPT_TIMEOUT` = 30L
+   - `CURLOPT_HTTP_VERSION` = CURL_HTTP_VERSION_2TLS
+   - `CURLOPT_SSL_ENABLE_ALPN` = 1L
+   - По возможности: `CURLOPT_PIPEWAIT`, `CURLOPT_TCP_FASTOPEN`.
+
+4. **Backoff и ретраи**
+   - Реализовать повтор запроса при временных ошибках (timeout, connection reset, 5xx).
+   - Алгоритм: экспоненциальный backoff + jitter.
+   - Лимит повторов — 3 (настраиваемо).
+
+5. **Подготовка к приоритетной очереди**
+   - Обновить WorkerPool для поддержки динамического размера пула.
+   - Задел под PriorityQueue (интерфейсы без реализации логики приоритетов).
+
+---
+ЗАДАЧИ (Python/UI интеграция)
+1. **Result schema**
+   - Файл `core/schemas.py`:
+     ```python
+     class RedirectHop(BaseModel):
+         url: str
+         status_code: int
+
+     class Timings(BaseModel):
+         dns_ms: float
+         connect_ms: float
+         tls_ms: float
+         ttfb_ms: float
+         total_ms: float
+
+     class Result(BaseModel):
+         final_url: str
+         status_code: int
+         redirects: List[RedirectHop] = []
+         size: int
+         headers: Dict[str, str]
+         timings: Timings
+         error_class: Optional[str] = None
+     ```
+
+2. **ScraperTabController**
+   - Создать метод `_apply_task_result(row, result)`:
+     - final_url → колонка URL
+     - status_code → колонка Status Code
+     - size → колонка Size
+     - redirects → tooltip с количеством переходов
+     - timings.total_ms → колонка Time
+
+3. **Логи**
+   - `append_log_line` дополнять task_id, уровень, error_class.
+   - Пример: `[12:00:00] [INFO] [abcd1234] Timeout after 30s (ConnectTimeout)`.
+
+4. **Экспорт**
+   - Включить в предпросмотр и экспорт все поля Result (timings, redirects, size, headers).
+
+---
+DoD (Definition of Done)
+- [ ] Нет data race в TSAN (или ручная проверка).
+- [ ] Нет утечек памяти при исключениях.
+- [ ] HTTP/2 и ALPN включены, редиректы работают, таймауты применяются.
+- [ ] Backoff при временных ошибках выполняется и логируется.
+- [ ] UI показывает final_url, статус, размер, время, количество редиректов.
+- [ ] Экспорт содержит новые поля.
+- [ ] Прогнаны smoke-тесты: простой сайт, редирект, 404, таймаут, медленный ответ, HSTS, сжатие, JSON API, TLS-ошибка, блок WAF.
