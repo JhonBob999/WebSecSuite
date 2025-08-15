@@ -429,8 +429,6 @@ class ScraperTabController(QWidget):
         )
         return path or ""
 
-
-    
     
     def _export_log_matches(self):
         rx = self._current_find_regex()
