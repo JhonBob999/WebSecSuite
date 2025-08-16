@@ -1,18 +1,15 @@
 # ui/panels/scraper_tab.py
 from __future__ import annotations  # ← должен быть первым
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
 from functools import partial
-from contextlib import contextmanager
 from copy import deepcopy
-import os, json, httpx, subprocess, re, io
-from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint, QTimer, QDateTime
-from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QShortcut, QKeySequence
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox, QTextEdit
+import os, json, httpx, subprocess, re
+from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
+from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QBrush
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QFileDialog, QInputDialog, QMessageBox, QTextEdit
 from ui.constants import Col, TaskStatus, status_text, status_brush, code_color, code_text, build_col_index_from_headers
-from ui.constants import Col, build_col_index_from_headers
 from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
 from .scraper_panel_ui import Ui_scraper_panel
@@ -162,8 +159,8 @@ class ScraperTabController(QWidget):
         # 👉 Автоподгон размеров
         hh: QHeaderView = table.horizontalHeader()
         vh: QHeaderView = table.verticalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # URL
-        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Status
+        hh.setSectionResizeMode(Col.URL, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(Col.Status, QHeaderView.ResizeToContents)
         hh.setStretchLastSection(True)
         vh.setSectionResizeMode(QHeaderView.ResizeToContents)
 
@@ -406,27 +403,33 @@ class ScraperTabController(QWidget):
         return it
 
     def set_url_cell(self, row: int, url: str, page_title: str | None = None):
-        it = self._ensure_item(row, self._c("URL"))
+        it = self._ensure_item(row, Col.URL)
         it.setText(self._shorten_url(url))
         tip = url if not page_title else f"{url}\nTitle: {page_title}"
         it.setToolTip(tip)
 
-    def set_status_cell(self, row: int, status: str):
-        it = self._ensure_item(row, self._c("Status"))
-        # нормализуем к UPPER и берём красивый ярлык
-        s_upper = self._status_name(status)         # уже есть в файле
-        nice    = status_label(s_upper)
-        it.setText(nice)
-        color = CLR_STATUS.get(nice.split()[0], QColor("#bdc3c7"))
-        it.setData(Qt.ForegroundRole, color)
-        font = it.font()
-        font.setBold(nice.startswith(("Running", "Failed")))
-        it.setFont(font)
-        it.setToolTip(nice)
+    def set_status_cell(self, row: int, status: str) -> None:
+        table = self.ui.taskTable
+        col = Col.Status   # ← финальная форма
+        item = table.item(row, col)
+        if item is None:
+            item = self._ensure_item(row, col)
+
+        text = status_text(status)
+        item.setText(text)
+
+        brush = status_brush(status)
+        item.setBackground(brush if brush else QBrush())
+
+        bold = str(status).upper() in (TaskStatus.RUNNING, TaskStatus.FAILED)
+        f = item.font()
+        f.setBold(bold)
+        item.setFont(f)
+        item.setToolTip(text)
 
 
     def set_code_cell(self, row: int, code: int | str | None):
-        it = self._ensure_item(row, self._c("Code"))
+        it = self._ensure_item(row, Col.Code)
         if code in (None, ""):
             it.setText(""); it.setToolTip(""); it.setData(Qt.ForegroundRole, None)
             return
@@ -439,7 +442,7 @@ class ScraperTabController(QWidget):
         it.setToolTip(f"{code_i} {code_text(code_i)}".strip())
 
     def set_time_cell(self, row: int, elapsed_ms: float | int | None):
-        it = self._ensure_item(row, self._c("Time"))
+        it = self._ensure_item(row, Col.Time)
         if elapsed_ms is None:
             it.setText(""); it.setToolTip(""); return
         ms = float(elapsed_ms)
@@ -448,12 +451,12 @@ class ScraperTabController(QWidget):
         it.setToolTip(f"Elapsed: {int(ms)} ms")
         
     def set_cookies_cell(self, row: int, has_cookies: bool, cookies_tip: str = ""):
-        it = self._ensure_item(row, self._c("Cookies"))
+        it = self._ensure_item(row, Col.Cookies)
         it.setText("✔" if has_cookies else "")
         it.setToolTip(cookies_tip or ("Set-Cookie present" if has_cookies else ""))
 
     def set_params_cell(self, row: int, has_params: bool, params_tip: str = ""):
-        it = self._ensure_item(row, self._c("Params"))
+        it = self._ensure_item(row, Col.Params)
         it.setText("⚙" if has_params else "")
         it.setToolTip(params_tip or ("Custom params" if has_params else ""))
 
@@ -461,8 +464,8 @@ class ScraperTabController(QWidget):
     def on_task_cell_double_clicked(self, row: int, col: int):
         table = self.ui.taskTable
         try:
-            if col == self._c("URL"):
-                url_item = table.item(row, self._c("URL"))
+            if col == Col.URL:
+                url_item = table.item(row, Col.URL)
                 if not url_item:
                     return
                 tip = (url_item.toolTip() or url_item.text() or "").strip()
@@ -471,16 +474,16 @@ class ScraperTabController(QWidget):
                     QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
                 return
 
-            if col == self._c("Results"):
-                res_item = table.item(row, self._c("Results"))
+            if col == Col.Results:
+                res_item = table.item(row, Col.Results)
                 # Если Results уже заполнен — показываем JSON (tooltip), НО НИЧЕГО не открываем
                 if res_item and (res_item.text() or res_item.toolTip()):
                     tip = (res_item.toolTip() or "").strip()
                     if tip:
-                        self._show_json_dialog("Result", tip)
+                        self._show_json_dialog(Col.Results, tip)
                     return
                 # Иначе (пусто) — фолбэк: открыть URL
-                url_item = table.item(row, self._c("URL"))
+                url_item = table.item(row, Col.URL)
                 if url_item:
                     tip = (url_item.toolTip() or url_item.text() or "").strip()
                     full_url = tip.split("\n", 1)[0].strip()
@@ -488,7 +491,7 @@ class ScraperTabController(QWidget):
                         QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
                 return
 
-            if col == self._c("Params"):
+            if col == Col.Params:
                 self._ctx_edit_params_dialog(row)
                 return
 
@@ -586,11 +589,11 @@ class ScraperTabController(QWidget):
         # URL-ячейка (храним task_id в UserRole)
         url_item = QTableWidgetItem("")
         url_item.setData(Qt.UserRole, task_id)
-        self.ui.taskTable.setItem(row, self._c("URL"), url_item)
+        self.ui.taskTable.setItem(row, Col.URL, url_item)
 
         # Базовые колонки
         self.set_url_cell(row, url)
-        self.set_status_cell(row, STATUS["PENDING"])
+        self.set_status_cell(row, TaskStatus.PENDING)
         self.set_code_cell(row, None)
         self.set_time_cell(row, None)
         self.set_result_cell(row, None)
@@ -612,7 +615,7 @@ class ScraperTabController(QWidget):
     def set_result_cell(self, row, payload):
         """Совместимость со старым кодом — перенаправляем в set_results_cell."""
         self.set_results_cell(row, payload)
-        it = self.ui.taskTable.item(row, self._c("Results"))
+        it = self.ui.taskTable.item(row, Col.Results)
         self.log.append_log_line(f"[DEBUG] Results set? {bool(it)} text={it.text() if it else None}")
 
 
@@ -624,7 +627,7 @@ class ScraperTabController(QWidget):
         return sorted({idx.row() for idx in sel.selectedRows()})
 
     def _task_id_by_row(self, row: int) -> str | None:
-        it = self.ui.taskTable.item(row, self._c("URL"))
+        it = self.ui.taskTable.item(row, Col.URL)
         return it.data(Qt.UserRole) if it else None
 
     def start_selected_tasks(self):
@@ -721,10 +724,23 @@ class ScraperTabController(QWidget):
         row = self._find_row_by_task_id(task_id)
         if row < 0:
             return
+
         task = self.task_manager._tasks.get(task_id)
         if not task:
             return
-        self.set_status_cell(row, getattr(task, "status", "") or "")
+
+        # Берём статус только из TaskStatus (если невалидный — ставим PENDING)
+        status = getattr(task, "status", None)
+        if status not in {
+            TaskStatus.PENDING,
+            TaskStatus.RUNNING,
+            TaskStatus.DONE,
+            TaskStatus.FAILED,
+            TaskStatus.STOPPED,
+        }:
+            status = TaskStatus.PENDING
+
+        self.set_status_cell(row, status)
 
     def _find_row_by_task_id(self, task_id: str) -> int:
         return self._row_by_task_id.get(task_id, -1)
@@ -865,14 +881,21 @@ class ScraperTabController(QWidget):
     # ==============================
 
     def _status_name(self, s) -> str:
-        """Единообразное имя статуса (Enum/str → UPPER)."""
-        name = getattr(s, "name", None)
-        if name:
-            return name.upper()
-        s = str(s)
+        """Единообразное имя статуса (TaskStatus | str → UPPER)."""
+        if not s:
+            return TaskStatus.PENDING.name
+
+        # Enum TaskStatus
+        if hasattr(s, "name"):
+            return s.name.upper()
+
+        # Строка вида "TaskStatus.DONE" или просто "done"
+        s = str(s).strip()
+        if not s:
+            return TaskStatus.PENDING.name
         if s.upper().startswith("TASKSTATUS."):
-            s = s.split(".")[-1]
-        return s.strip().upper() if s else "PENDING"
+            s = s.split(".", 1)[-1]
+        return s.upper()
 
 
     # ==============================
@@ -928,7 +951,8 @@ class ScraperTabController(QWidget):
         for _, tid in pairs:
             try:
                 task = self.task_manager.get_task(tid)
-                s = self._status_name(getattr(task, "status", "PENDING"))
+                status = getattr(task, "status", TaskStatus.PENDING)
+                s = self._status_name(status)
                 if s in CAN_STOP:
                     self.task_manager.stop_task(tid)  # кооперативная остановка
                     stopped += 1
@@ -937,7 +961,10 @@ class ScraperTabController(QWidget):
             except Exception as e:
                 errors += 1
                 self.log.append_log_line(f"[ERROR] stop_selected({tid[:8]}): {e}")
-        self.log.append_log_line(f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}")
+        self.log.append_log_line(
+            f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}"
+        )
+
 
     def _restart_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
@@ -1042,8 +1069,8 @@ class ScraperTabController(QWidget):
         if mode == "Completed":
             out = []
             for t in self._all_tasks_list():
-                s = self._status_name(getattr(t, "status", ""))
-                if s == "DONE":
+                status = getattr(t, "status", "")
+                if status == TaskStatus.DONE:
                     out.append(t)
             return out
 
@@ -1198,7 +1225,7 @@ class ScraperTabController(QWidget):
         Возвращает (task_id, task) для строки row.
         Читает task_id из UserRole URL-ячейки. Task — через публичный API TaskManager.
         """
-        it = self.ui.taskTable.item(row, self._c("URL"))
+        it = self.ui.taskTable.item(row, Col.URL)
         if not it:
             return None, None
         task_id = it.data(Qt.UserRole)
@@ -1523,12 +1550,14 @@ class ScraperTabController(QWidget):
 
     def start_all_tasks(self):
         """Запускает все задачи, которые не RUNNING. Разрешаем повторный старт DONE/FAILED/PENDING/STOPPED."""
+        from ui.constants import TaskStatus
+
         started = errors = 0
         for tid in self._iter_all_task_ids():
             try:
                 task = self.task_manager.get_task(tid)
-                status = self._status_name(getattr(task, "status", "PENDING"))
-                if status != "RUNNING":
+                status = getattr(task, "status", TaskStatus.PENDING)
+                if status != TaskStatus.RUNNING:
                     self.task_manager.start_task(tid)
                     started += 1
             except Exception as e:
@@ -1536,20 +1565,25 @@ class ScraperTabController(QWidget):
                 self.log.append_log_line(f"[ERROR] start_all({tid[:8]}): {e}")
         self.log.append_log_line(f"[INFO] Start all: queued {started} task(s), errors {errors}")
 
+
     def stop_all_tasks(self):
         """Кооперативно останавливает все RUNNING/PENDING задачи."""
+        from ui.constants import TaskStatus
+
         stopped = errors = 0
         for tid in self._iter_all_task_ids():
             try:
                 task = self.task_manager.get_task(tid)
-                status = self._status_name(getattr(task, "status", "PENDING"))
-                if status in {"RUNNING", "PENDING"}:
+                status = getattr(task, "status", TaskStatus.PENDING)
+                if status in {TaskStatus.RUNNING, TaskStatus.PENDING}:
                     self.task_manager.stop_task(tid)
                     stopped += 1
             except Exception as e:
                 errors += 1
                 self.log.append_log_line(f"[ERROR] stop_all({tid[:8]}): {e}")
-        self.log.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s), errors {errors}")
+        self.log.append_log_line(
+            f"[INFO] Stop all: requested stop for {stopped} task(s), errors {errors}")
+
 
     def restart_all_tasks(self):
         """
@@ -1557,6 +1591,8 @@ class ScraperTabController(QWidget):
         - если есть TaskManager.restart_task → используем его;
         - иначе: stop_task (если RUNNING/PENDING) → start_task.
         """
+        from ui.constants import TaskStatus  # убедись, что импорт есть вверху
+
         use_native = hasattr(self.task_manager, "restart_task")
         restarted = errors = 0
 
@@ -1566,8 +1602,8 @@ class ScraperTabController(QWidget):
                     self.task_manager.restart_task(tid)
                 else:
                     task = self.task_manager.get_task(tid)
-                    status = self._status_name(getattr(task, "status", "PENDING"))
-                    if status in {"RUNNING", "PENDING"}:
+                    status = getattr(task, "status", TaskStatus.PENDING)
+                    if status in (TaskStatus.RUNNING, TaskStatus.PENDING):
                         self.task_manager.stop_task(tid)
                     self.task_manager.start_task(tid)
                 restarted += 1
@@ -1575,7 +1611,9 @@ class ScraperTabController(QWidget):
                 errors += 1
                 self.log.append_log_line(f"[ERROR] restart_all({tid[:8]}): {e}")
 
-        self.log.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s), errors {errors}")
+        self.log.append_log_line(
+            f"[INFO] Restart all: requested restart for {restarted} task(s), errors {errors}")
+
                     
     @Slot()
     def on_start_clicked(self):
@@ -1592,7 +1630,7 @@ class ScraperTabController(QWidget):
             return
 
         for row in rows:
-            item = table.item(row, self._c("URL")) # колонка URL
+            item = table.item(row, Col.URL) # колонка URL
             if not item:
                 continue
             task_id = item.data(Qt.UserRole)
@@ -1644,7 +1682,8 @@ class ScraperTabController(QWidget):
         if dlg.exec() == QDialog.Accepted and dlg.data:
             data = dlg.data
             self.add_task_row(data["url"], params=data)
-            self.log.append_log_line(f"[INFO] Added task → {data['url']}")
+            self.log.append("INFO", f"Added task → {data['url']}", tag="UI")
+
 
     @Slot()
     def on_delete_clicked(self):
@@ -1657,7 +1696,7 @@ class ScraperTabController(QWidget):
         rows = sorted({idx.row() for idx in sel.selectedRows()}, reverse=True)
 
         for row in rows:
-            item = table.item(row, self._c("URL"))  # колонка с URL и UserRole=task_id
+            item = table.item(row, Col.URL)  # колонка с URL и UserRole=task_id
             if not item:
                 continue
             task_id = item.data(Qt.UserRole)
@@ -1676,7 +1715,7 @@ class ScraperTabController(QWidget):
         self._row_by_task_id.clear()
         table = self.ui.taskTable
         for row in range(table.rowCount()):
-            it = table.item(row, self._c("URL"))
+            it = table.item(row, Col.URL)
             if not it:
                 continue
             task_id = it.data(Qt.UserRole)
@@ -1700,8 +1739,8 @@ class ScraperTabController(QWidget):
     def on_task_progress(self, task_id: str, value: int):
         row = self._find_row_by_task_id(task_id)
         if row >= 0:
-            base = "Running"
-            st_item = self.ui.taskTable.item(row, self._c("Status")) 
+            base = TaskStatus.RUNNING
+            st_item = self.ui.taskTable.item(row, Col.Status) 
             if st_item and st_item.text():
                 base = st_item.text().split()[0]
             self.set_status_cell(row, f"{base} {value}%")
@@ -1722,7 +1761,7 @@ class ScraperTabController(QWidget):
         self.task_results[row] = deepcopy(payload)
 
         # 2) Базовые ячейки
-        self.set_status_cell(row, STATUS["DONE"])
+        self.set_status_cell(row, TaskStatus.DONE)
 
         url_val = payload.get("final_url") or payload.get("url") or ""
         if not url_val:
@@ -1738,9 +1777,9 @@ class ScraperTabController(QWidget):
 
         # Подсказка по редиректам в статусе
         redirects = payload.get("redirect_chain", []) or []
-        st_item = self.ui.taskTable.item(row, self._c("Status"))
+        st_item = self.ui.taskTable.item(row, Col.Status)
         if st_item:
-            st_item.setToolTip(f"{STATUS['DONE']} • redirects: {len(redirects)}")
+            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
 
         # 3) Cookies по заголовку Set-Cookie
         headers = payload.get("headers", {}) or {}
@@ -1752,6 +1791,7 @@ class ScraperTabController(QWidget):
 
         # 4) >>> ЗАПОЛНЯЕМ КОЛОНКУ Results <<<
         self.set_results_cell(row, payload)
+
 
         
     def set_results_cell(self, row: int, payload: dict):
@@ -1776,7 +1816,7 @@ class ScraperTabController(QWidget):
             it.setToolTip(tip)
         it.setTextAlignment(Qt.AlignCenter)
 
-        self.ui.taskTable.setItem(row, self._c("Results"), it)
+        self.ui.taskTable.setItem(row, Col.Results, it)
         self.ui.taskTable.resizeRowToContents(row)
         
     def _records_from_rows(self, rows) -> list[dict]:
@@ -1803,10 +1843,11 @@ class ScraperTabController(QWidget):
             rec.setdefault("title", payload.get("title"))
             rec.setdefault("content_len", payload.get("content_len"))
             records.append(rec)
-        # Диагностика в логи — увидишь сколько записей собрали
-        self.log.append_log_line(f"[DEBUG] DataPreview: collected {len(records)} record(s) from {len(list(rows)) if not isinstance(rows, range) else self.ui.taskTable.rowCount()} rows")
-        return records
 
+        # Диагностика в логи
+        total_rows = len(rows) if not isinstance(rows, range) else self.ui.taskTable.rowCount()
+        self.log.append_log_line(f"[DEBUG] DataPreview: collected {len(records)} record(s) from {total_rows} rows")
+        return records
 
     @Slot(str, str)
     def on_task_error(self, task_id: str, error_str: str):
@@ -1816,7 +1857,7 @@ class ScraperTabController(QWidget):
     #--------------- CTX ОБРАБОТЧИКИ -------------------#
     
     def _ctx_open_url(self, row: int):
-        it = self.ui.taskTable.item(row, self._c("URL"))
+        it = self.ui.taskTable.item(row, Col.URL)
         if not it:
             return
         tip = (it.toolTip() or it.text() or "").strip()
@@ -1825,7 +1866,7 @@ class ScraperTabController(QWidget):
             QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
 
     def _ctx_copy_url(self, row: int):
-        it = self.ui.taskTable.item(row, self._c("URL"))
+        it = self.ui.taskTable.item(row, Col.URL)
         if not it:
             return
         tip = (it.toolTip() or it.text() or "").strip()
@@ -1835,7 +1876,7 @@ class ScraperTabController(QWidget):
             self.log.append_log_line("[INFO] URL copied to clipboard")
 
     def _ctx_open_result_folder(self, row: int):
-        it = self.ui.taskTable.item(row, self._c("Results"))
+        it = self.ui.taskTable.item(row, Col.Results)
         path = ((it.toolTip() or it.text()) if it else "").strip()
         if not path:
             # фолбэк — попробуем открыть папку экспорта
