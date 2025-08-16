@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
 from functools import partial
+from copy import deepcopy
 import os, json, httpx, subprocess, re, io
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QShortcut, QKeySequence
@@ -139,6 +140,9 @@ class ScraperTabController(QWidget):
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
         
+        # Хранилище результатов задач для предпросмотра
+        self.task_results = {}  # ключ: row, значение: deepcopy(payload)
+        
         # Хайлайтер подключение
         self._log_hl = LogHighlighter(self.ui.logOutput.document())
         # создаём хайлайтер и цепляем к документу логов
@@ -185,6 +189,11 @@ class ScraperTabController(QWidget):
         self._find_debounce.setSingleShot(True)
         self._find_debounce.setInterval(150)
         
+        # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР (п.2 из next_step)
+        self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
+        self.log_filter = {"INFO", "WARN", "ERROR"}
+        self.MAX_LOG_LINES = 5000
+        
         self.ui.lineEditLogFilter.textChanged.connect(self._on_find_text_changed)
         self._find_debounce.timeout.connect(self._rebuild_find_matches)
 
@@ -215,6 +224,14 @@ class ScraperTabController(QWidget):
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Status
         hh.setStretchLastSection(True)
         vh.setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+        self._col_url     = self._col_index("URL")
+        self._col_status  = self._col_index("Status")
+        self._col_code    = self._col_index("Code")
+        self._col_time    = self._col_index("Time")
+        self._col_results = self._col_index("Results")
+        COL_RESULT = self._col_results
+        self._col_cookies = self._col_index("Cookies")
 
         # 5) Демонстрационные задачи
         self.add_task_row("https://delfi.lv")
@@ -234,13 +251,59 @@ class ScraperTabController(QWidget):
         self.ui.btnDelete.clicked.connect(self.on_delete_clicked)
         self.ui.btnPause.clicked.connect(self.on_pause_clicked)    # ← добавлено
         self.ui.btnResume.clicked.connect(self.on_resume_clicked)  # ← добавлено
+        # подключение кнопки (в __init__)
+        self.ui.btnDataPreview.clicked.connect(self._open_data_preview_all)
 
-        # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР (п.2 из next_step)
-        self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
-        self.log_filter = {"INFO", "WARN", "ERROR"}
-        self.MAX_LOG_LINES = 5000
 
         self._init_ui_connections()
+
+
+    def _snapshot_records(self, only_selected: bool) -> list[dict]:
+        from copy import deepcopy
+        rows = self._selected_rows() if only_selected else range(self.ui.taskTable.rowCount())
+        records: list[dict] = []
+        for row in rows:
+            task = self._row_to_task(row)
+            if not task:
+                continue
+            payload = getattr(task, "result", None) or {}
+            if not payload:
+                continue
+            rec = deepcopy(payload)
+            t = (payload.get("timings") or {})
+            rec["request_ms"] = t.get("request_ms")
+            rc = payload.get("redirect_chain") or []
+            rec["redirects"] = len(rc)
+            rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
+            rec.setdefault("status_code", payload.get("status_code"))
+            rec.setdefault("title", payload.get("title"))
+            rec.setdefault("content_len", payload.get("content_len"))
+            records.append(rec)
+        return records
+
+    def _open_data_preview_all(self):
+        from dialogs.data_preview_dialog import DataPreviewDialog
+        table = self.ui.taskTable
+        rows_all = range(table.rowCount())
+
+        dlg = DataPreviewDialog(
+            self,
+            fetch_all=lambda: self._records_from_rows(range(self.ui.taskTable.rowCount())),
+            fetch_selected=lambda: self._records_from_rows(self._selected_rows()),
+        )
+        dlg.set_records(self._records_from_rows(rows_all))
+        dlg.show()
+
+        
+    def _col_index(self, header_text: str) -> int:
+        hh = self.ui.taskTable.horizontalHeader()
+        cols = self.ui.taskTable.columnCount()
+        for i in range(cols):
+            it = self.ui.taskTable.horizontalHeaderItem(i)
+            if it and it.text().strip().lower() == header_text.strip().lower():
+                return i
+        return -1
+
 
     # ---------- ИНИЦИАЛИЗАЦИЯ КНОПОК ФИЛЬТРОВ ----------
     def _init_ui_connections(self):
@@ -558,14 +621,6 @@ class ScraperTabController(QWidget):
         text = f"{int(ms)} ms" if ms < 1000 else f"{ms/1000:.2f} s"
         it.setText(text)
         it.setToolTip(f"Elapsed: {int(ms)} ms")
-
-    def set_result_cell(self, row: int, path_or_flag: str | None):
-        it = self._ensure_item(row, COL_RESULT)
-        if not path_or_flag:
-            it.setText(""); it.setToolTip(""); return
-        p = str(path_or_flag)
-        it.setText(Path(p).name)
-        it.setToolTip(p)
         
     def set_cookies_cell(self, row: int, has_cookies: bool, cookies_tip: str = ""):
         it = self._ensure_item(row, COL_COOKIES)
@@ -593,11 +648,13 @@ class ScraperTabController(QWidget):
 
             if col == COL_RESULT:
                 res_item = table.item(row, COL_RESULT)
-                path = ((res_item.toolTip() or res_item.text()) if res_item else "").strip()
-                if path:
-                    self._open_path(path)
+                # Если Results уже заполнен — показываем JSON (tooltip), НО НИЧЕГО не открываем
+                if res_item and (res_item.text() or res_item.toolTip()):
+                    tip = (res_item.toolTip() or "").strip()
+                    if tip:
+                        self._show_json_dialog("Result", tip)
                     return
-                # фолбэк: открыть URL, если пути нет
+                # Иначе (пусто) — фолбэк: открыть URL
                 url_item = table.item(row, COL_URL)
                 if url_item:
                     tip = (url_item.toolTip() or url_item.text() or "").strip()
@@ -732,6 +789,14 @@ class ScraperTabController(QWidget):
 
         # Автоподгон
         self.ui.taskTable.resizeRowToContents(row)
+        
+        
+    def set_result_cell(self, row, payload):
+        """Совместимость со старым кодом — перенаправляем в set_results_cell."""
+        self.set_results_cell(row, payload)
+        it = self.ui.taskTable.item(row, self._col_results)
+        self.append_log_line(f"[DEBUG] Results set? {bool(it)} text={it.text() if it else None}")
+
 
     # ---------- Хелперы для выделения/ID и батч-операций ----------
     def _selected_rows(self):
@@ -1389,18 +1454,53 @@ class ScraperTabController(QWidget):
         self._show_json_dialog(title, chain)
 
     def _show_json_dialog(self, title: str, data):
-        text = self._json_pretty(data)
+        # 1) Нормализация -> pretty string
+        pretty = ""
+        try:
+            if isinstance(data, (dict, list)):
+                pretty = json.dumps(data, ensure_ascii=False, indent=2)
+            elif isinstance(data, (bytes, bytearray)):
+                s = data.decode("utf-8", errors="replace")
+                try:
+                    pretty = json.dumps(json.loads(s), ensure_ascii=False, indent=2)
+                except Exception:
+                    pretty = s
+            elif isinstance(data, str):
+                s = data.strip()
+                try:
+                    # если это JSON-строка — красиво форматуем
+                    pretty = json.dumps(json.loads(s), ensure_ascii=False, indent=2)
+                except Exception:
+                    pretty = s
+            else:
+                pretty = str(data)
+        except Exception as e:
+            pretty = f"<failed to format: {e}>"
+
+        # 2) Диалог
         dlg = QMessageBox(self)
         dlg.setWindowTitle(title)
         dlg.setIcon(QMessageBox.Information)
-        dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        # Для больших объёмов лучше уводить текст в detailedText (скролл) — не обязательно.
-        if len(text) > 4000:
-            dlg.setText(f"{title} — content is large, see details.")
-            dlg.setDetailedText(text)
+
+        # Моноширинный шрифт
+        mono = QFont("Consolas, Courier New, Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        dlg.setFont(mono)
+
+        # 3) Если текст очень длинный — уводим в Details (скролл)
+        if len(pretty) > 4000:
+            dlg.setText(f"{title}: content is large — see details below.")
+            dlg.setDetailedText(pretty)
         else:
-            dlg.setText(text)
+            dlg.setText(pretty)
+
+        # Разрешаем копирование текста
+        dlg.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+
         dlg.exec()
+
 
     # ==============================
     #  Cookies
@@ -1788,10 +1888,11 @@ class ScraperTabController(QWidget):
         self.append_log(level, f"[{task_id[:8]}] {text}")
 
     @Slot(str, str)
-    def on_task_status(self, task_id: str, status_str: str):
+    def on_task_status(self, task_id, status):
         row = self._find_row_by_task_id(task_id)
-        if row >= 0:
-            self.set_status_cell(row, status_str)
+        if row < 0:
+            return
+        self.set_status_cell(row, status)
 
     @Slot(str, int)
     def on_task_progress(self, task_id: str, value: int):
@@ -1805,7 +1906,9 @@ class ScraperTabController(QWidget):
 
     @Slot(str, dict)
     def on_task_result(self, task_id: str, payload: dict):
-        # Красивый блок в логи (с учётом final_url/content_len/timings.request_ms + redirects)
+        from copy import deepcopy
+
+        # Логи — короткий блок
         pretty = self._format_result_short(payload)
         self.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
 
@@ -1813,10 +1916,12 @@ class ScraperTabController(QWidget):
         if row < 0:
             return
 
-        # Ставим статус
+        # 1) Сохраняем результат для Data Preview
+        self.task_results[row] = deepcopy(payload)
+
+        # 2) Базовые ячейки
         self.set_status_cell(row, "Done")
 
-        # URL: предпочитаем final_url (после редиректов), фолбэк — исходный из задачи
         url_val = payload.get("final_url") or payload.get("url") or ""
         if not url_val:
             task = self.task_manager.get_task(task_id)
@@ -1824,10 +1929,8 @@ class ScraperTabController(QWidget):
                 url_val = getattr(task, "url", "") or url_val
         self.set_url_cell(row, url_val, payload.get("title"))
 
-        # Код ответа
         self.set_code_cell(row, payload.get("status_code"))
 
-        # Время запроса (берём timings.request_ms)
         timings = payload.get("timings", {}) or {}
         self.set_time_cell(row, timings.get("request_ms"))
 
@@ -1837,7 +1940,7 @@ class ScraperTabController(QWidget):
         if st_item:
             st_item.setToolTip(f"Done • redirects: {len(redirects)}")
 
-        # Cookies: по заголовку 'Set-Cookie'
+        # 3) Cookies по заголовку Set-Cookie
         headers = payload.get("headers", {}) or {}
         low_headers = {k.lower(): v for k, v in headers.items()}
         set_cookie_val = low_headers.get("set-cookie")
@@ -1845,18 +1948,69 @@ class ScraperTabController(QWidget):
         tip = f"Set-Cookie: {set_cookie_val}" if isinstance(set_cookie_val, str) else ""
         self.set_cookies_cell(row, has_cookies, tip)
 
-        # Params: есть ли кастомные параметры у задачи
-        task = self.task_manager.get_task(task_id)
-        has_params = False
-        params_tip = ""
-        if task:
-            p = getattr(task, "params", {}) or {}
-            has_params = bool(p) and any(k in p for k in ("headers", "proxy", "user_agent", "timeout", "retries", "method"))
-            if has_params:
-                light = {k: p.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if k in p}
-                params_tip = str(light)
-        self.set_params_cell(row, has_params, params_tip)
+        # 4) >>> ЗАПОЛНЯЕМ КОЛОНКУ Results <<<
+        self.set_results_cell(row, payload)
 
+        
+    def set_results_cell(self, row: int, payload: dict):
+        # проверим, что колонка Results существует
+        if getattr(self, "_col_results", -1) < 0:
+            self.append_log_line("[ERROR] 'Results' column not found")
+            return
+
+        text, tip = "", ""
+        if payload:
+            redirects = len(payload.get("redirect_chain") or [])
+            size = payload.get("content_len") or 0
+            code = payload.get("status_code")
+            # аккуратный текст без «OK», если кода нет
+            code_str = str(code) if code is not None else "—"
+            text = f"{code_str} · {size}B · r={redirects}"
+
+            # полный JSON в tooltip (с защитой)
+            try:
+                import json
+                tip = json.dumps(payload, ensure_ascii=False, indent=2)
+            except Exception as e:
+                tip = f"<failed to build JSON: {e}>"
+
+        it = QTableWidgetItem(text)
+        if tip and tip != text:
+            it.setToolTip(tip)
+
+        # числа/краткое резюме по центру выглядит лучше
+        it.setTextAlignment(Qt.AlignCenter)
+
+        self.ui.taskTable.setItem(row, self._col_results, it)
+        self.ui.taskTable.resizeRowToContents(row)
+        
+    def _records_from_rows(self, rows) -> list[dict]:
+        records: list[dict] = []
+        for row in rows:
+            # 1) payload из on_task_result (то, что мы сохраняем для Preview)
+            payload = (self.task_results.get(row) if hasattr(self, "task_results") else None)
+
+            # 2) фолбэк — из объекта задачи (если воркер писал self.task.result)
+            if not payload:
+                task = self._row_to_task(row) if hasattr(self, "_row_to_task") else None
+                payload = getattr(task, "result", None) if task else None
+
+            if not payload:
+                continue
+
+            rec = deepcopy(payload)
+            t = (payload.get("timings") or {})
+            rc = payload.get("redirect_chain") or []
+            rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
+            rec["request_ms"] = t.get("request_ms")
+            rec["redirects"] = len(rc)
+            rec.setdefault("status_code", payload.get("status_code"))
+            rec.setdefault("title", payload.get("title"))
+            rec.setdefault("content_len", payload.get("content_len"))
+            records.append(rec)
+        # Диагностика в логи — увидишь сколько записей собрали
+        self.append_log_line(f"[DEBUG] DataPreview: collected {len(records)} record(s) from {len(list(rows)) if not isinstance(rows, range) else self.ui.taskTable.rowCount()} rows")
+        return records
 
 
     @Slot(str, str)

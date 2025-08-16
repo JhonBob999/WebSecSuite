@@ -129,6 +129,9 @@ class Ui_scraper_panel(object):
         self.btnExportMatches = QPushButton(scraper_panel)
         self.btnExportMatches.setObjectName(u"btnExportMatches")
         self.btnExportMatches.setGeometry(QRect(1570, 430, 91, 31))
+        self.btnDataPreview = QPushButton(scraper_panel)
+        self.btnDataPreview.setObjectName(u"btnDataPreview")
+        self.btnDataPreview.setGeometry(QRect(170, 500, 80, 24))
 
         self.retranslateUi(scraper_panel)
 
@@ -170,5 +173,6 @@ class Ui_scraper_panel(object):
         self.cbFindWhole.setText(QCoreApplication.translate("scraper_panel", u"FindWhole", None))
         self.cbFindRegex.setText(QCoreApplication.translate("scraper_panel", u"FindRegex", None))
         self.btnExportMatches.setText(QCoreApplication.translate("scraper_panel", u"Export Matches", None))
+        self.btnDataPreview.setText(QCoreApplication.translate("scraper_panel", u"Data Preview", None))
     # retranslateUi
 
