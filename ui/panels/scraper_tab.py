@@ -136,21 +136,19 @@ class ScraperTabController(QWidget):
         self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
         self.log_filter = {"INFO", "WARN", "ERROR"}
         self.MAX_LOG_LINES = 5000
-        self.log = LogPanel(self.ui.logOutput)
-        self.log.set_filter_widgets(
-        line_edit=self.ui.lineEditLogFilter,
-        btn_prev=self.ui.btnFindPrev,
-        btn_next=self.ui.btnFindNext,
-        counter_label=self.ui.lblFindHits,     # <-- вот это главное
-        export_button=self.ui.btnExportMatches # <-- и это
-        )
-
         
-        # в __init__ ScraperTabController (после создания _find_debounce)
-        self.ui.cbFindCase.toggled.connect(lambda _: self._find_debounce.start())
-        self.ui.cbFindRegex.toggled.connect(lambda _: self._find_debounce.start())
-        self.ui.cbFindWhole.toggled.connect(lambda _: self._find_debounce.start())
-
+        self.log = LogPanel(
+        self.ui.logOutput,
+        line_edit=self.ui.lineEditLogFilter,
+        cb_case=self.ui.cbFindCase,
+        cb_regex=self.ui.cbFindRegex,
+        cb_whole=self.ui.cbFindWhole,
+        counter_label=self.ui.lblFindHits,        # используем lblFindHits, раз он у тебя главный
+        export_btn=self.ui.btnExportMatches,      # кнопка экспорта
+        root_dir="data/logs",
+        )
+        self.ui.btnFindPrev.clicked.connect(self.log.navigate_prev)
+        self.ui.btnFindNext.clicked.connect(self.log.navigate_next)
 
         # контекстное меню
         table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -240,17 +238,12 @@ class ScraperTabController(QWidget):
         # Clear — очищает экран, но НЕ буфер
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
-            
-            
+                     
     def _on_filter_text_changed(self, text: str):
-        # базовая версия: без regex и без учёта регистра
-        self._log_hl.set_pattern(
-            text,
-            regex_mode=False,
-            case_sensitive=False
-        )
-        
-        
+        # проксируем к новой системе поиска
+        if hasattr(self, "log"):
+            self.log._on_filter_changed(text)
+
     def _apply_log_find_selections(self, positions, current_index=-1):
         edit = self.ui.logOutput
         doc = edit.document()

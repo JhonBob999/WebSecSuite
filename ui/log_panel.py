@@ -1,44 +1,129 @@
-# ui/log_panel.py
-from __future__ import annotations
-from typing import Iterable, Set, Tuple, List
+from typing import Set, List, Tuple, Optional, Iterable
+from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QLineEdit, QCheckBox, QLabel, QPushButton
+from PySide6.QtGui import QKeySequence, QTextCursor, QShortcut
 from PySide6.QtCore import QDateTime, QRegularExpression
-from PySide6.QtGui import QTextCursor, QShortcut, QKeySequence
-from PySide6.QtWidgets import QPlainTextEdit, QTextEdit
-
 
 class LogPanel:
     # максимум строк, хранимых в буфере (для экспорта/поиска и т.п.)
     MAX_LOG_LINES = 100_000
 
-    def __init__(self, text_edit: QPlainTextEdit | QTextEdit):
+    def __init__(
+        self,
+        text_edit: QPlainTextEdit | QTextEdit,
+        line_edit: Optional[QLineEdit] = None,
+        *,
+        cb_case: Optional[QCheckBox] = None,
+        cb_regex: Optional[QCheckBox] = None,
+        cb_whole: Optional[QCheckBox] = None,
+        counter_label: Optional[QLabel] = None,
+        export_btn: Optional[QPushButton] = None,
+        root_dir: str = "data/logs"
+    ):
         self.text_edit = text_edit
-        self.log_filter: Set[str] = {"INFO", "WARN", "ERROR"}  # какие уровни выводим в виджет
-        self.log_buffer: List[Tuple[str, str, str]] = []       # (ts, level, f"[TAG] msg" или просто msg)
-        self._matches = []
-        self._match_idx = -1
-        
-        # виджеты фильтра подключим отдельно через set_filter_widgets(...)
-        self._line_edit = None
-        self._btn_prev = None
-        self._btn_next = None
-        self._counter = None
-        self._export_btn = None
-        
+        self.root_dir = root_dir
+
+        # фильтр уровней (оставляем как было)
+        self.log_filter: Set[str] = {"INFO", "WARN", "ERROR"}   # какие уровни выводим в виджет
+        self.log_buffer: List[Tuple[str, str, str]] = []        # (ts, level, f"[TAG] msg" или просто msg)
+
+        # поиск/навигация
+        self._matches: list[tuple[int, int]] = []
+        self._match_idx: int = -1
+
+        # виджеты поиска/навигации
+        self._line_edit: Optional[QLineEdit] = line_edit
+        self._cb_case: Optional[QCheckBox] = cb_case
+        self._cb_regex: Optional[QCheckBox] = cb_regex
+        self._cb_whole: Optional[QCheckBox] = cb_whole
+        self._counter: Optional[QLabel] = counter_label
+        self._export_btn: Optional[QPushButton] = export_btn
+
+        # хайлайтер
+        from ui.log_highlighter import LogHighlighter
+        self._highlighter = LogHighlighter(self.text_edit.document())
+
+        # сигналы поиска
+        if self._line_edit:
+            self._line_edit.textChanged.connect(self._on_filter_changed)
+        if self._cb_case:
+            self._cb_case.toggled.connect(self._on_flags_changed)
+        if self._cb_regex:
+            self._cb_regex.toggled.connect(self._on_flags_changed)
+        if self._cb_whole:
+            self._cb_whole.toggled.connect(self._on_flags_changed)
+
+        # кнопка экспорта (если пробрасываешь её сюда)
+        if self._export_btn:
+            self._export_btn.clicked.connect(lambda: self.export_matches(to_json=False))
+
         # хоткеи вешаем на text_edit
         QShortcut(QKeySequence("F3"),       self.text_edit, activated=self.navigate_next)
         QShortcut(QKeySequence("Shift+F3"), self.text_edit, activated=self.navigate_prev)
-        QShortcut(QKeySequence("Ctrl+E"),   self.text_edit, activated=self.export_matches if hasattr(self, "export_matches") else (lambda: None))
+        QShortcut(QKeySequence("Ctrl+E"),   self.text_edit, activated=getattr(self, "export_matches", lambda: None))
+
+        # первичная инициализация поиска (пустая строка)
+        try:
+            self._highlighter.set_search("", regex_mode=False, case_sensitive=False, whole_word=False)
+        except Exception:
+            pass
+        if self._counter:
+            self._counter.setText("0 / 0")
+
 
 
     # --- публичные удобные методы ----------------------------------------
 
     def clear(self) -> None:
+        # 1) очистка текста и буфера
         self.text_edit.clear()
+        self.text_edit.moveCursor(QTextCursor.Start)
         self.log_buffer.clear()
+
+        # 2) сброс виджетов поиска (без лишних сигналов)
+        if self._line_edit:
+            self._line_edit.blockSignals(True)
+            self._line_edit.clear()
+            self._line_edit.blockSignals(False)
+
+        if self._cb_case:
+            self._cb_case.blockSignals(True)
+            self._cb_case.setChecked(False)
+            self._cb_case.blockSignals(False)
+
+        if self._cb_regex:
+            self._cb_regex.blockSignals(True)
+            self._cb_regex.setChecked(False)
+            self._cb_regex.blockSignals(False)
+
+        if self._cb_whole:
+            self._cb_whole.blockSignals(True)
+            self._cb_whole.setChecked(False)
+            self._cb_whole.blockSignals(False)
+
+        # 3) сброс подсветки/совпадений
+        try:
+            # унифицированный сброс состояния поиска у хайлайтера
+            self._highlighter.set_search("", regex_mode=False, case_sensitive=False, whole_word=False)
+        except Exception:
+            pass
+
+        self._matches.clear()
+        self._match_idx = -1
+
+        # 4) счётчик
+        if self._counter:
+            self._counter.setText("0 / 0")
+
 
     def set_filter(self, levels: Iterable[str]) -> None:
         """Задать уровни, которые будут отображаться в виджете (буфер пишется всегда)."""
         self.log_filter = {str(l).upper() for l in levels}
+        
+    def _on_flags_changed(self, _checked: bool):
+        # читаем текущий текст из поля поиска, если оно подключено
+        text = self._line_edit.text().strip() if self._line_edit else ""
+        self._apply_search(text)
+
 
     # Доп. сахар: единый короткий вызов
     def append(self, level: str, text: str, tag: str | None = None) -> None:
@@ -96,36 +181,25 @@ class LogPanel:
             cursor.insertText(line + "\n")
             self.text_edit.setTextCursor(cursor)
             self.text_edit.ensureCursorVisible()
-            
-            
-    def set_filter_widgets(self, line_edit, btn_prev=None, btn_next=None, counter_label=None, export_button=None):
-        self._line_edit = line_edit
-        self._btn_prev = btn_prev
-        self._btn_next = btn_next
-        self._counter = counter_label
-        self._export_btn = export_button
-
-        # состояние поиска (fallback-навигатор)
-        self._matches = []
-        self._match_idx = -1
-
-        if self._line_edit:
-            self._line_edit.textChanged.connect(self._on_filter_changed)
-        if self._btn_prev:
-            self._btn_prev.clicked.connect(self.navigate_prev)
-        if self._btn_next:
-            self._btn_next.clicked.connect(self.navigate_next)
-        if self._export_btn and hasattr(self, "export_matches"):
-            self._export_btn.clicked.connect(self.export_matches)
 
     def _on_filter_changed(self, text: str):
         text = text or ""
 
-        # если твой LogHighlighter умеет set_search/text → делегируем
-        highlighter = getattr(self.text_edit.document(), "highlighter", None)
+        # флаги из чекбоксов
+        regex_mode = bool(self._cb_regex.isChecked()) if self._cb_regex else False
+        case_sensitive = bool(self._cb_case.isChecked()) if self._cb_case else False
+        whole_word = bool(self._cb_whole.isChecked()) if self._cb_whole else False
+
+        # 1) Пытаемся делегировать в хайлайтер (предпочтительно)
+        highlighter = getattr(self, "_highlighter", None) or getattr(self.text_edit.document(), "highlighter", None)
         if highlighter and hasattr(highlighter, "set_search"):
             try:
-                highlighter.set_search(text)
+                highlighter.set_search(
+                    text,
+                    regex_mode=regex_mode,
+                    case_sensitive=case_sensitive,
+                    whole_word=whole_word,
+                )
                 count = int(getattr(highlighter, "match_count", 0))
                 self._matches.clear()
                 self._match_idx = -1
@@ -133,48 +207,100 @@ class LogPanel:
                     self._counter.setText(f"0 / {count}" if count else "0 / 0")
                 return
             except Exception:
+                # если что-то пошло не так — тихо проваливаемся во фолбэк
                 pass
 
-        # fallback: ищем сами
+        # 2) Фолбэк: простой поиск по тексту/регэкспу вручную
         self._matches.clear()
         self._match_idx = -1
+
         if not text:
             if self._counter:
                 self._counter.setText("0 / 0")
             return
 
-        doc_text = self.text_edit.document().toPlainText()
-        rx = QRegularExpression(QRegularExpression.escape(text))
+        doc = self.text_edit.document()
+        doc_text = doc.toPlainText()
+
+        # собираем паттерн с учётом флагов
+        if regex_mode:
+            pattern = text
+            if whole_word:
+                pattern = r"\b(?:%s)\b" % pattern
+        else:
+            pattern = QRegularExpression.escape(text)
+            if whole_word:
+                pattern = r"\b%s\b" % pattern
+
+        rx = QRegularExpression(pattern)
+        rx.setPatternOptions(
+            QRegularExpression.NoPatternOption if case_sensitive
+            else QRegularExpression.CaseInsensitiveOption
+        )
+
         pos = 0
         while True:
             m = rx.match(doc_text, pos)
             if not m.hasMatch():
                 break
             start, end = m.capturedStart(), m.capturedEnd()
-            cur = QTextCursor(self.text_edit.document())
+            cur = QTextCursor(doc)
             cur.setPosition(start)
             cur.setPosition(end, QTextCursor.KeepAnchor)
             self._matches.append(cur)
-            pos = end
+            # защита от зацикливания при пустых матчах
+            pos = end if end > pos else pos + 1
 
+        # Обновляем счётчик и ставим курсор на первое совпадение (если есть)
+        total = len(self._matches)
         if self._counter:
-            self._counter.setText(f"0 / {len(self._matches)}" if self._matches else "0 / 0")
+            self._counter.setText(f"1 / {total}" if total else "0 / 0")
+        if total:
+            self._match_idx = 0
+            self.text_edit.setTextCursor(self._matches[0])
+            self.text_edit.ensureCursorVisible()
+
 
     def navigate_prev(self):
-        if self._try_delegate_navigation(-1):
-            return
+        # 1) Пытаемся делегировать в хайлайтер
+        highlighter = getattr(self, "_highlighter", None) or getattr(self.text_edit.document(), "highlighter", None)
+        if highlighter and hasattr(highlighter, "prev_match"):
+            try:
+                idx, total = highlighter.prev_match()
+                if total > 0 and idx >= 0:
+                    self._apply_range_idx(idx)
+                    if self._counter:
+                        self._counter.setText(f"{idx + 1} / {total}")
+                    return
+            except Exception:
+                pass
+
+        # 2) Фолбэк на локальные курсоры
         if not self._matches:
             return
         self._match_idx = (self._match_idx - 1) % len(self._matches)
         self._apply_current_match()
 
     def navigate_next(self):
-        if self._try_delegate_navigation(+1):
-            return
+        # 1) Пытаемся делегировать в хайлайтер
+        highlighter = getattr(self, "_highlighter", None) or getattr(self.text_edit.document(), "highlighter", None)
+        if highlighter and hasattr(highlighter, "next_match"):
+            try:
+                idx, total = highlighter.next_match()
+                if total > 0 and idx >= 0:
+                    self._apply_range_idx(idx)
+                    if self._counter:
+                        self._counter.setText(f"{idx + 1} / {total}")
+                    return
+            except Exception:
+                pass
+
+        # 2) Фолбэк на локальные курсоры
         if not self._matches:
             return
         self._match_idx = (self._match_idx + 1) % len(self._matches)
         self._apply_current_match()
+
 
     def _apply_current_match(self):
         cur = self._matches[self._match_idx]
@@ -199,6 +325,27 @@ class LogPanel:
             return True
         except Exception:
             return False
+        
+    def _current_search_flags(self):
+        return {
+            "regex_mode": bool(self._cb_regex.isChecked()) if self._cb_regex else False,
+            "case_sensitive": bool(self._cb_case.isChecked()) if self._cb_case else False,
+            "whole_word": bool(self._cb_whole.isChecked()) if self._cb_whole else False,
+        }
+        
+    def _apply_search(self, text: str):
+        flags = self._current_search_flags()
+        try:
+            self._highlighter.set_search(text, **flags)
+            total = getattr(self._highlighter, "match_count", 0)
+            if self.counter:
+                self.counter.setText(f"0 / {total}" if total else "0 / 0")
+            # сбрасываем локальный fallback (на всякий)
+            self._matches = []
+            self._match_idx = -1
+        except Exception:
+            # в крайнем случае можно оставить твой fallback, если он у тебя есть
+            pass
         
         
     def export_matches(self):
@@ -300,4 +447,48 @@ class LogPanel:
         # 6) Сообщение и открытие папки
         self.append("INFO", f"Exported {len(rows)} matches → {file_path}", "LOG")
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(file_path).parent)))
+        
+        
+    def _apply_range_idx(self, idx: int):
+        """Позиционирование курсора по диапазону из хайлайтера."""
+        try:
+            ranges = self._highlighter.get_match_ranges()
+            if not ranges:
+                return
+            start, end = ranges[idx]
+            cur = QTextCursor(self.text_edit.document())
+            cur.setPosition(int(start))
+            cur.setPosition(int(end), QTextCursor.KeepAnchor)
+            self.text_edit.setTextCursor(cur)
+            self.text_edit.ensureCursorVisible()
+        except Exception:
+            pass
+        
+    def _nav_step(self, step: int):
+        # step: +1 = F3, -1 = Shift+F3
+        try:
+            idx, total = (self._highlighter.next_match() if step > 0 else self._highlighter.prev_match())
+            if total > 0 and idx >= 0:
+                self._apply_range_idx(idx)
+                if self.counter:
+                    self.counter.setText(f"{idx + 1} / {total}")
+        except Exception:
+            pass
+
+
+    def _try_delegate_navigation(self, step: int) -> bool:
+        try:
+            if step > 0:
+                idx, total = self._highlighter.next_match()
+            else:
+                idx, total = self._highlighter.prev_match()
+            if total <= 0 or idx < 0:
+                return True  # делегировали, но совпадений нет
+            self._apply_range_idx(idx)
+            if self._counter:
+                self._counter.setText(f"{idx + 1} / {total}")
+            return True
+        except Exception:
+            return False
+
 
