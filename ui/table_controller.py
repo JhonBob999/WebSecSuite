@@ -249,36 +249,56 @@ class TaskTableController:
         payload: dict | None = None,       # вариант 1: даём полный payload
         summary: str | None = None,        # вариант 2: даём краткий текст
         payload_short: str | None = None,  # tooltip/короткая версия payload
-    ):
-        """
-        Умеет оба варианта:
-          • set_results_cell(row, payload=payload)
-          • set_results_cell(row, summary="200 · 12KB · 540 ms · r=1", payload_short="<pretty json>")
-
-        Если передан payload — сам соберёт summary и tooltip.
-        """
+    ) -> None:
+        
         item = self.ensure_item(row, Col.Results)
 
-        # Вариант 1: передали полноценный payload -> сделаем короткое резюме и tooltip
+        # Очистка по явному None / отсутствию данных
+        if payload is None and summary is None:
+            item.setText("")
+            item.setToolTip("")
+            item.setData(Qt.TextAlignmentRole, Qt.AlignLeft | Qt.AlignVCenter)
+            return
+
+        # Вариант 1: есть полный payload -> строим краткое резюме и prettified tooltip
         if payload is not None:
             code = payload.get("status_code")
             size = payload.get("content_len")
             tms  = (payload.get("timings") or {}).get("request_ms")
             red  = len(payload.get("redirect_chain") or [])
-            summary = f"{code} · {size} B · {tms} ms · r={red}"
+
+            # humanize helpers
+            def _human_bytes(n):
+                try:
+                    n = float(n)
+                except Exception:
+                    return str(n) if n is not None else "—"
+                units = ["B","KB","MB","GB","TB"]
+                i = 0
+                while n >= 1024 and i < len(units)-1:
+                    n /= 1024.0
+                    i += 1
+                return f"{n:.0f}{units[i]}" if i == 0 else f"{n:.1f}{units[i]}"
+
+            code_txt = str(code) if code is not None else "—"
+            size_txt = _human_bytes(size)
+            ms_txt   = f"{int(tms)} ms" if isinstance(tms, (int, float)) else "—"
+
+            summary = f"{code_txt} · {size_txt} · {ms_txt} · r={red}"
 
             try:
                 payload_short = json.dumps(payload, ensure_ascii=False, indent=2)
             except Exception:
                 payload_short = str(payload)
 
-        # Вариант 2: передали уже готовые summary/payload_short
+        # Вариант 2: нам уже дали готовые summary / payload_short
         text = summary or ""
         tip  = payload_short or ("No results yet" if not text else "")
 
         item.setText(text)
         item.setData(Qt.TextAlignmentRole, Qt.AlignLeft | Qt.AlignVCenter)
         item.setToolTip(tip)
+
 
 
     def set_cookies_cell(self, row: int, has: bool, tip: str = ""):

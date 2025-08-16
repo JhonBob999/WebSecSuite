@@ -14,6 +14,7 @@ from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
 from ui.table_controller import TaskTableController
 from ui import export_bridge as xb
+from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
@@ -78,26 +79,27 @@ class ScraperTabController(QWidget):
         # 1) Поднимаем UI
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
-        
+
         # Подключение настроек таблиц
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
-        
+
         # Хранилище результатов задач для предпросмотра
         self.task_results = {}  # ключ: row, значение: deepcopy(payload)
-        self.table = TaskTableController(self.ui.taskTable)
-        self.table.apply_common_view_settings()
-        self.table.setup_resize_policies()
-        self.table.restore_column_widths()
-        
-        # Хайлайтер подключение
+
+        # ---- ТАБЛИЦА: единое имя контроллера self.table_ctl ----
+        self.table_ctl = TaskTableController(self.ui.taskTable)  # <-- раньше было self.table
+        self.table_ctl.apply_common_view_settings()
+        self.table_ctl.setup_resize_policies()
+        self.table_ctl.restore_column_widths()
+
+        # Хайлайтер + поиск по логам
         self._log_hl = LogHighlighter(self.ui.logOutput.document())
-        # создаём хайлайтер и цепляем к документу логов
         self.ui.lineEditLogFilter.setClearButtonEnabled(True)
         self.ui.lineEditLogFilter.textChanged.connect(self._on_filter_text_changed)
-        
-        # двойной клик
+
+        # двойной клик по ячейке таблицы
         self.ui.taskTable.cellDoubleClicked.connect(self.on_task_cell_double_clicked)
-        
+
         # 2) Менеджер задач + индексы строк
         self.task_manager = TaskManager()
         self._row_by_task_id = {}
@@ -110,42 +112,31 @@ class ScraperTabController(QWidget):
         self.task_manager.task_error.connect(self.on_task_error)
         self.task_manager.task_reset.connect(self._on_task_reset)
         self.task_manager.task_restarted.connect(self._on_task_restarted)
-    
-        
+
         # --- FIND STATE (для логов) ---
         self._find_positions = []  # list[(start, length)]
-        self._find_current = -1    # индекс текущего совпадения
-        self._find_debounce = QTimer(self)  # чтобы не дёргать поиск на каждый символ
+        self._find_current = -1
+        self._find_debounce = QTimer(self)
         self._find_debounce.setSingleShot(True)
         self._find_debounce.setInterval(150)
-        
-        # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР (п.2 из next_step)
+
+        # ▼▼▼ ЛОГ-БУФЕР И ФИЛЬТР
         self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
         self.log_filter = {"INFO", "WARN", "ERROR"}
         self.MAX_LOG_LINES = 5000
-        
+
         self.log = LogPanel(
-        self.ui.logOutput,
-        line_edit=self.ui.lineEditLogFilter,
-        cb_case=self.ui.cbFindCase,
-        cb_regex=self.ui.cbFindRegex,
-        cb_whole=self.ui.cbFindWhole,
-        counter_label=self.ui.lblFindHits,        # используем lblFindHits, раз он у тебя главный
-        export_btn=self.ui.btnExportMatches,      # кнопка экспорта
-        root_dir="data/logs",
+            self.ui.logOutput,
+            line_edit=self.ui.lineEditLogFilter,
+            cb_case=self.ui.cbFindCase,
+            cb_regex=self.ui.cbFindRegex,
+            cb_whole=self.ui.cbFindWhole,
+            counter_label=self.ui.lblFindHits,
+            export_btn=self.ui.btnExportMatches,
+            root_dir="data/logs",
         )
         self.ui.btnFindPrev.clicked.connect(self.log.navigate_prev)
         self.ui.btnFindNext.clicked.connect(self.log.navigate_next)
-
-        # контекстное меню
-        self.ui.taskTable.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.ui.taskTable.customContextMenuRequested.connect(self.on_context_menu)
-
-
-        # 5) Демонстрационные задачи
-        self.add_task_row("https://delfi.lv")
-        self.add_task_row("https://cnn.com")
-        self.add_task_row("https://github.com")
 
         # 6) Кнопки — подключаем явно
         assert hasattr(self.ui, "btnStart"), "В .ui нет кнопки btnStart"
@@ -158,14 +149,47 @@ class ScraperTabController(QWidget):
         self.ui.btnStop.clicked.connect(self.on_stop_clicked)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.btnDelete.clicked.connect(self.on_delete_clicked)
-        self.ui.btnPause.clicked.connect(self.on_pause_clicked)    # ← добавлено
-        self.ui.btnResume.clicked.connect(self.on_resume_clicked)  # ← добавлено
-        # подключение кнопки (в __init__)
+        self.ui.btnPause.clicked.connect(self.on_pause_clicked)
+        self.ui.btnResume.clicked.connect(self.on_resume_clicked)
         self.ui.btnDataPreview.clicked.connect(self._open_data_preview_all)
 
+        # ---- ScraperActions: создаём до привязки контекстного меню ----
+        # ВАЖНО: table_ctl передаём именно self.table_ctl
+        self.actions = ScraperActions(
+            parent=self,
+            table_ctl=self.table_ctl,
+            task_manager=self.task_manager,
+            log_panel=self.log,
+            export_bridge=getattr(self, "export_bridge", None),
+        )
 
+        # ---- Контекстное меню таблицы (после создания self.actions) ----
+        table = self.ui.taskTable
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(self.actions.on_context_menu)
+
+
+        # 5) Демонстрационные задачи (можно оставить для проверки)
+        self.add_task_row("https://delfi.lv")
+        self.add_task_row("https://cnn.com")
+        self.add_task_row("https://github.com")
+
+        # Остальные внутренние подключения
         self._init_ui_connections()
-
+        
+        
+    def iter_all_task_ids(self):
+        """Итератор по всем task_id из таблицы (для Start All/Stop All)."""
+        table = self.ui.taskTable
+        for row in range(table.rowCount()):
+            tid = self.table_ctl.task_id_by_row(row)
+            if tid:
+                yield tid
+                
+    def add_task_row_from_task(self, task):
+        url = getattr(task, "url", "") or ""
+        params = dict(getattr(task, "params", {}) or {})
+        self.add_task_row(url, params=params, task_id=task.id)
 
     def _snapshot_records(self, only_selected: bool) -> list[dict]:
         from copy import deepcopy
@@ -337,10 +361,10 @@ class ScraperTabController(QWidget):
     
     # --- Table proxies (переходный этап к TaskTableController) ---
     def _task_id_by_row(self, row: int) -> str | None:
-        return self.table.task_id_by_row(row)
+        return self.table_ctl.task_id_by_row(row)
 
     def _find_row_by_task_id(self, task_id: str) -> int:
-        return self.table.row_by_task_id(task_id)
+        return self.table_ctl.row_by_task_id(task_id)
 
     def _selected_rows(self, *, require_task_id: bool = False, log: bool = True) -> list[int]:
         """
@@ -369,8 +393,8 @@ class ScraperTabController(QWidget):
             get_tid = None
             if hasattr(self, "_task_id_by_row"):
                 get_tid = self._task_id_by_row
-            elif hasattr(self, "table") and hasattr(self.table, "get_task_id"):
-                get_tid = self.table.get_task_id
+            elif hasattr(self, "table") and hasattr(self.table_ctl, "get_task_id"):
+                get_tid = self.table_ctl.get_task_id
 
             for r in rows:
                 tid = get_tid(r) if get_tid else None
@@ -388,29 +412,29 @@ class ScraperTabController(QWidget):
 
 
     def set_row_task_id(self, row: int, task_id: str):
-        self.table.set_row_task_id(row, task_id)
+        self.table_ctl.set_row_task_id(row, task_id)
 
     # --- Table proxies (единые сигнатуры!) ---
     def set_url_cell(self, row: int, url: str, title: str | None = None, task_id: str | None = None):
-        self.table.set_url_cell(row=row, url=url, title=title, task_id=task_id)
+        self.table_ctl.set_url_cell(row=row, url=url, title=title, task_id=task_id)
 
     def set_status_cell(self, row: int, status: str):
-        self.table.set_status_cell(row=row, status=status)
+        self.table_ctl.set_status_cell(row=row, status=status)
 
     def set_code_cell(self, row: int, code: int | None):
-        self.table.set_code_cell(row=row, code=code)
+        self.table_ctl.set_code_cell(row=row, code=code)
 
     def set_time_cell(self, row: int, ms: int | None):
-        self.table.set_time_cell(row=row, ms=ms)
+        self.table_ctl.set_time_cell(row=row, ms=ms)
 
     def set_results_cell(self, row: int, summary: str | None, tooltip: str | None = None):
-        self.table.set_results_cell(row=row, summary=summary or "", payload_short=tooltip)
+        self.table_ctl.set_results_cell(row=row, summary=summary or "", payload_short=tooltip)
 
     def set_cookies_cell(self, row: int, has: bool, tip: str = ""):
-        self.table.set_cookies_cell(row=row, has=has, tip=tip)
+        self.table_ctl.set_cookies_cell(row=row, has=has, tip=tip)
 
     def set_params_cell(self, row: int, text: str):
-        self.table.set_params_cell(row=row, text=text)
+        self.table_ctl.set_params_cell(row=row, text=text)
 
     # --- сохранение/восстановление ширин ---
     def _save_table_state(self):
@@ -547,9 +571,21 @@ class ScraperTabController(QWidget):
 
 
     # ---------- Таблица и строки ----------
-    def add_task_row(self, url: str, params: dict | None = None) -> None:
+    def add_task_row(self, url: str, params: dict | None = None, task_id: str | None = None) -> None:
         params = params or {}
-        task_id = self.task_manager.create_task(url, params)
+
+        # Если task_id не передан — создаём новую задачу (старое поведение)
+        if not task_id:
+            task_id = self.task_manager.create_task(url, params)
+        else:
+            # Уже существует задача (например, после Duplicate).
+            # При необходимости синхронизируем параметры:
+            if params:
+                try:
+                    self.task_manager.update_task_params(task_id, params)
+                except Exception:
+                    # тихо игнорируем, если нет такого метода — не критично
+                    pass
 
         row = self.ui.taskTable.rowCount()
         self.ui.taskTable.insertRow(row)
@@ -575,6 +611,7 @@ class ScraperTabController(QWidget):
 
         # Автоподгон
         self.ui.taskTable.resizeRowToContents(row)
+
 
         
     def set_result_cell(self, row, payload):
@@ -746,134 +783,7 @@ class ScraperTabController(QWidget):
     # --------------- Ячейки таблици -----------------
 
     # ---------- Контекстное меню ----------
-    def on_context_menu(self, pos: QPoint):
-        table = self.ui.taskTable
-        menu = QMenu(self)
-
-        # Разрешаем открывать меню и на пустом месте: будут доступны пункты для "all"
-        # (build_task_table_menu сам решит, что включить/выключить)
-        rows = sorted({idx.row() for idx in table.selectedIndexes()})
-        count = len(rows)
-
-        # ---- Сбор контекста по задачам (для build_task_table_menu) ----
-        has_running = False
-        has_stopped = False
-        all_done = True
-        has_params_cell = True
-        has_cookie_file = False
-        any_startable = False
-        any_stoppable = False
-
-        for r in rows:
-            task_id = self._task_id_by_row(r)
-            task = self.task_manager.get_task(task_id) if task_id else None
-            status = getattr(task, "status", "PENDING")
-            s = self._status_name(status)
-
-            has_running |= (s == "RUNNING")
-            has_stopped |= (s in {"PENDING", "STOPPED", "FAILED"})
-            all_done &= (s == "DONE")
-
-            # можно стартовать всё, что не RUNNING
-            any_startable |= (s in CAN_START)
-            # можно останавливать RUNNING/PENDING
-            any_stoppable |= (s in CAN_STOP)
-
-            # params
-            params = getattr(task, "params", {}) if task else {}
-            has_params_cell &= (params is not None)
-
-            # cookies
-            ck_file = params.get("cookie_file")
-            has_cookie_file |= bool(ck_file)
-
-        selection_info = {
-            "rows": rows,
-            "count": count,
-            "has_running": has_running,
-            "has_stopped": has_stopped,
-            "all_done": all_done,
-            "has_params_cell": has_params_cell,
-            "has_cookie_file": has_cookie_file,
-        }
-
-        # Сбор меню и набора действий
-        menu, acts = build_task_table_menu(self, selection_info)
-
-        # ---------- Подключение экшенов (без лишних лямбд) ----------
-        # Tasks: selection
-        acts["start_selected"].triggered.connect(self.on_start_clicked)
-        acts["stop_selected"].triggered.connect(partial(self._stop_selected, rows))
-        acts["restart_selected"].triggered.connect(partial(self._restart_selected, rows))
-
-        # Tasks: all
-        acts["start_all"].triggered.connect(self.start_all_tasks)
-        acts["stop_all"].triggered.connect(self.stop_all_tasks)
-        acts["restart_all"].triggered.connect(self.restart_all_tasks)
-
-        # CRUD / Params
-        if count == 1:
-            acts["edit_params"].triggered.connect(partial(self._ctx_edit_params_dialog, rows[0]))
-            acts["open_browser"].triggered.connect(partial(self._open_in_browser, rows[0]))
-            acts["copy_url"].triggered.connect(partial(self._copy_from_row, rows[0], "url"))
-            acts["copy_final_url"].triggered.connect(partial(self._copy_from_row, rows[0], "final_url"))
-            acts["copy_title"].triggered.connect(partial(self._copy_from_row, rows[0], "title"))
-            acts["copy_headers"].triggered.connect(partial(self._copy_headers, rows[0]))
-            acts["view_headers"].triggered.connect(partial(self._view_headers_dialog, rows[0]))
-            acts["view_redirect_chain"].triggered.connect(partial(self._view_redirect_chain_dialog, rows[0]))
-        acts["duplicate"].triggered.connect(partial(self._duplicate_tasks, rows))
-        acts["remove"].triggered.connect(partial(self._remove_tasks, rows))
-
-        # Export
-        acts["export_selected"].triggered.connect(partial(self._export_data, "Selected"))
-        acts["export_completed"].triggered.connect(partial(self._export_data, "Completed"))
-        acts["export_all"].triggered.connect(partial(self._export_data, "All"))
-
-        # Data ops
-        acts["clear_results"].triggered.connect(partial(self._clear_results, rows))
-
-        # Cookies
-        acts["view_cookies"].triggered.connect(partial(self._view_cookies, rows[0]) if count >= 1 else lambda: None)
-        acts["open_cookie_dir"].triggered.connect(self._open_cookie_dir)
-        acts["reload_cookies"].triggered.connect(partial(self._reload_cookies, rows))
-        acts["clear_cookies"].triggered.connect(partial(self._clear_cookies, rows))
-        
-        # --- Columns / Widths ---------------------------------------------------------
-        menu.addSeparator()
-
-        widths_menu = menu.addMenu("Columns")
-
-        act_reset_w = QAction("Reset column widths", self)
-        act_reset_w.setToolTip("Сбросить ширину колонок к значениям по умолчанию")
-        act_reset_w.triggered.connect(self.table.reset_column_widths)
-        widths_menu.addAction(act_reset_w)
-
-        act_autofit_all = QAction("Auto-fit all (once)", self)
-        act_autofit_all.setToolTip("Разово подогнать ширину всех колонок по содержимому")
-        act_autofit_all.triggered.connect(self.table._autofit_all_once)
-        widths_menu.addAction(act_autofit_all)
-        # ----------------------------------------------------------------------------- 
-        # --- Rows / Heights -----------------------------------------------------------
-        rows_menu = menu.addMenu("Rows")
-
-        act_row_small = QAction("Row height: 26 px", self)
-        act_row_small.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(22))
-        rows_menu.addAction(act_row_small)
-
-        act_row_medium = QAction("Row height: 42 px", self)
-        act_row_medium.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(26))
-        rows_menu.addAction(act_row_medium)
-
-        act_row_large = QAction("Row height: 62 px", self)
-        act_row_large.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(32))
-        rows_menu.addAction(act_row_large)
-        # ----------------------------------------------------------------------------- 
-
-
-        # Показ меню
-        menu.exec(table.viewport().mapToGlobal(pos))
-
-
+    
     # ==============================
     #  Служебные утилиты контекста
     # ==============================
@@ -1186,8 +1096,6 @@ class ScraperTabController(QWidget):
         """
         Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт через export_bridge.
         """
-        from ui import export_bridge as xb
-
         tasks = self._tasks_for_mode(mode)
         if not tasks:
             self.log.append("WARN", f"Export: no tasks for mode '{mode}'", tag="UI")
@@ -1539,6 +1447,78 @@ class ScraperTabController(QWidget):
         else:
             dlg.setText(f"{title}\n{head}\n\n{pretty}")
         dlg.exec()
+        
+    def _export_mode(self, mode: str):
+        """Тонкий адаптер для ScraperActions → зовём реальный экспортёр."""
+        # если у тебя основной метод называется _export_data(mode), просто делегируем:
+        return self._export_data(mode)
+    
+    # --- Диалог: показать headers для выбранных задач ---
+    def show_task_headers_dialog(self, task_ids: list[str]):
+        import json
+        from PySide6.QtWidgets import QMessageBox
+
+        for tid in task_ids:
+            task = self.task_manager.get_task(tid)
+            headers = None
+            # пробуем взять из сохранённого результата
+            if task and getattr(task, "result", None):
+                headers = (task.result or {}).get("headers")
+            # если пусто — вежливо пишем
+            if not headers:
+                self.log.append_log_line(f"[WARN] No headers for task {tid[:8]}")
+                continue
+
+            msg = QMessageBox(self)
+            msg.setWindowTitle(f"Headers — {tid[:8]}")
+            pretty = json.dumps(headers, ensure_ascii=False, indent=2)
+            msg.setText("Response headers (pretty-JSON):")
+            msg.setDetailedText(pretty)  # всё в detailedText, если длинно
+            msg.setIcon(QMessageBox.Information)
+            msg.exec()
+            
+    # --- Диалог: показать cookies для выбранных задач ---
+    def show_task_cookies_dialog(self, task_ids: list[str]):
+        import json, os
+        from urllib.parse import urlparse
+        from PySide6.QtWidgets import QMessageBox
+        # если у тебя модуль хранения cookies в другом месте — поправь импорт:
+        try:
+            from core.cookies.storage import load_cookiejar_as_json
+        except Exception:
+            load_cookiejar_as_json = None
+
+        for tid in task_ids:
+            task = self.task_manager.get_task(tid)
+            if not task:
+                continue
+
+            # путь к cookie-файлу: 1) из params.cookie_file 2) auto by domain
+            params = dict(getattr(task, "params", {}) or {})
+            cookie_path = params.get("cookie_file")
+            if not cookie_path:
+                url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
+                dom = urlparse(url).hostname or "unknown"
+                cookie_path = os.path.join("data", "cookies", f"cookies_{dom}.json")
+
+            data = None
+            if load_cookiejar_as_json and os.path.exists(cookie_path):
+                try:
+                    data = load_cookiejar_as_json(cookie_path)  # возвращает list[dict] или dict
+                except Exception as e:
+                    self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
+
+            msg = QMessageBox(self)
+            msg.setWindowTitle(f"Cookies — {tid[:8]}")
+            if data:
+                pretty = json.dumps(data, ensure_ascii=False, indent=2)
+                msg.setText(f"Cookies file: {cookie_path}")
+                msg.setDetailedText(pretty)
+                msg.setIcon(QMessageBox.Information)
+            else:
+                msg.setText(f"No cookies found\n{cookie_path}")
+                msg.setIcon(QMessageBox.Warning)
+            msg.exec()
 
 
         

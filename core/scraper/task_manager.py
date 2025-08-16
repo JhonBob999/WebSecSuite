@@ -78,10 +78,12 @@ class TaskManager(QObject):
         """
         Клонирует задачу:
         - deep copy
-        - новый id и имя "(copy)"
+        - новый id и имя/заголовок "(copy)"
         - сброс статусов/результатов/прогресса
+        - удаление ссылок на раннаблы/потоки
         - добавляет в self._tasks
         - эмитит task_added(new_task)
+        Возвращает сам новый объект задачи.
         """
         # источник
         src = self.get_task(task_or_id) if isinstance(task_or_id, str) else task_or_id
@@ -90,12 +92,16 @@ class TaskManager(QObject):
 
         new_task = copy.deepcopy(src)
 
-        # новый id/имя
+        # новый id
         new_task.id = uuid.uuid4().hex
+
+        # имя/заголовок "(copy)" — поддержим оба варианта
         if getattr(new_task, "name", None):
             new_task.name = f"{new_task.name} (copy)"
+        elif getattr(new_task, "title", None):
+            new_task.title = f"{new_task.title} (copy)"
 
-        # сброс состояния
+        # сброс состояния (только рантайм-поля, бизнес-поля не трогаем)
         if hasattr(new_task, "status"):
             new_task.status = TaskStatus.PENDING
         for attr, val in [
@@ -114,13 +120,14 @@ class TaskManager(QObject):
             if hasattr(new_task, attr):
                 setattr(new_task, attr, val)
 
-        # убрать возможные ссылки на раннаблы/потоки
+        # убрать возможные ссылки на раннаблы/потоки/фьючеры
         for attr in ("worker", "runnable", "_future", "_thread"):
             if hasattr(new_task, attr):
                 setattr(new_task, attr, None)
 
         # даты
         if hasattr(new_task, "created_at"):
+            # используем datetime.utcnow() из stdlib (Qt тут не нужен)
             new_task.created_at = datetime.utcnow()
 
         # клон params
@@ -140,6 +147,14 @@ class TaskManager(QObject):
             pass
 
         return new_task
+    
+    def duplicate_task(self, src_tid: str) -> str:
+        """
+        Алиас под контекст-меню: вернёт только ID новой задачи.
+        Совместим с вызовами в ScraperActions.
+        """
+        new_task = self.duplicate_tasks(src_tid)
+        return new_task.id
 
     # === SECTION === Start/Stop (single & bulk)
     def start_task(self, task_id: str) -> bool:
