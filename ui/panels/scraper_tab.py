@@ -234,22 +234,6 @@ class ScraperTabController(QWidget):
         except Exception:
             # на всякий случай, чтобы не уронить UI при опечатке
             return getattr(Col, name, 0)
-    
-    def _colmap(self) -> dict[str, int]:
-        return {
-            "URL":     self._col_index("URL"),
-            "Status":  self._col_index("Status"),
-            "Code":    self._col_index("Code"),
-            "Time":    self._col_index("Time"),
-            "Results": self._col_index("Results"),
-            "Cookies": self._col_index("Cookies"),
-            "Params":  self._col_index("Params"),
-        }
-
-    def _c(self, name: str) -> int:
-        """Безопасно получить индекс колонки по имени (fallback: 0)."""
-        return (self._colmap().get(name) or 0)
-
 
     # ---------- ИНИЦИАЛИЗАЦИЯ КНОПОК ФИЛЬТРОВ ----------
     def _init_ui_connections(self):
