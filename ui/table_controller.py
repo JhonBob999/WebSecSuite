@@ -2,10 +2,23 @@
 from __future__ import annotations
 from ui.constants import Col
 from typing import Optional, Iterable, Dict, List, Tuple
-from PySide6.QtCore import Qt, QSettings
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+from PySide6.QtCore import Qt, QSettings, QPoint
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu
+from PySide6.QtGui import QAction
 
-# Роль, в которой храним task_id внутри ячейки (URL-колонки достаточно)
+import json
+
+SETTINGS_KEY = "ui/taskTable/widths_v2"
+
+DEFAULT_WIDTHS = {
+    Col.URL:     260,
+    Col.Status:   90,
+    Col.Code:     70,
+    Col.Time:     90,
+    Col.Results: 520,
+    Col.Cookies:  80,
+    Col.Params:  120,
+}
 ROLE_TASK_ID = Qt.UserRole + 1
 
 class TaskTableController:
@@ -13,6 +26,30 @@ class TaskTableController:
         self.table = table
         self._col_index_cache: Dict[str, int] = {}
         self._setup_table_base()
+        hh = table.horizontalHeader()
+        
+         # 1) Ручная регулировка, НИКАКОГО ResizeToContents глобально
+        hh.setSectionResizeMode(QHeaderView.Interactive)
+        hh.setStretchLastSection(False)
+        hh.setHighlightSections(False)
+        hh.setSectionsMovable(False)   # если не нужно перетаскивание
+        hh.setCascadingSectionResizes(False)
+
+        # 2) Контекст-меню хедера: добавим Reset
+        hh.setContextMenuPolicy(Qt.CustomContextMenu)
+        hh.customContextMenuRequested.connect(self._on_header_menu)
+
+        # 3) Двойной клик по разделителю → авто-подогнать только одну колонку
+        hh.sectionHandleDoubleClicked.connect(self._on_handle_double_click)
+
+        # 4) Восстановить ширины (или выставить дефолты)
+        if not self.restore_column_widths():
+            self.apply_default_widths()
+
+        # 5) Сохранять при каждом изменении
+        hh.sectionResized.connect(lambda *_: self.save_column_widths())
+        
+        self._init_header_tooltips()
         
         
     def apply_common_view_settings(self):
@@ -25,49 +62,55 @@ class TaskTableController:
         
         # ---------- Политики размеров ----------
     def setup_resize_policies(self):
-        header = self.table.horizontalHeader()
-        vheader = self.table.verticalHeader()
-        if header:
-            header.setSectionResizeMode(Col.URL,     QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(Col.Status,  QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(Col.Code,    QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(Col.Time,    QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(Col.Results, QHeaderView.Stretch)
-            header.setSectionResizeMode(Col.Cookies, QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(Col.Params,  QHeaderView.ResizeToContents)
-            header.setStretchLastSection(True)
-        if vheader:
-            vheader.setSectionResizeMode(QHeaderView.ResizeToContents)
+        t = self.table
+        hh = t.horizontalHeader()
+        vh = t.verticalHeader()
 
-    # ---------- Сохранение/восстановление ширин ----------
-    def save_column_widths(self, settings: QSettings, group: str = "taskTable"):
-        header = self.table.horizontalHeader()
-        if not header:
-            return
-        cols = self.table.columnCount()
-        settings.beginGroup(group)
-        try:
-            for i in range(cols):
-                settings.setValue(f"w{i}", header.sectionSize(i))
-        finally:
-            settings.endGroup()
+        # ширина колонок — руками
+        hh.setSectionResizeMode(QHeaderView.Interactive)
+        hh.setStretchLastSection(False)
 
-    def restore_column_widths(self, settings: QSettings, group: str = "taskTable"):
-        header = self.table.horizontalHeader()
-        if not header:
-            return
-        cols = self.table.columnCount()
-        settings.beginGroup(group)
+        # ВАЖНО: высота строк — НЕ Auto, а руками
+        vh.setSectionResizeMode(QHeaderView.Interactive)   # можно тянуть мышью
+        vh.setDefaultSectionSize(26)                       # дефолтная высота (подбери 24–28)
+
+        # чтобы длинный текст не «принуждал» к росту строки из-за переноса
+        t.setWordWrap(False)
+
+
+
+    # ---------- Widths ----------
+
+    def apply_default_widths(self):
+        for col, w in DEFAULT_WIDTHS.items():
+            if 0 <= col < self.table.columnCount():
+                self.table.setColumnWidth(int(col), int(w))
+
+    def save_column_widths(self):
         try:
-            for i in range(cols):
-                val = settings.value(f"w{i}")
-                if val is not None:
-                    try:
-                        header.resizeSection(i, int(val))
-                    except Exception:
-                        pass
-        finally:
-            settings.endGroup()
+            widths = [self.table.columnWidth(i) for i in range(self.table.columnCount())]
+            QSettings().setValue(SETTINGS_KEY, widths)
+        except Exception:
+            # не логируем ошибку тут, чтобы не заспамить — «молчаливый» гвард
+            pass
+
+    def restore_column_widths(self) -> bool:
+        try:
+            v = QSettings().value(SETTINGS_KEY, None)
+            if not v:
+                return False
+            widths = list(map(int, v))
+            if len(widths) != self.table.columnCount():
+                return False
+            for i, w in enumerate(widths):
+                self.table.setColumnWidth(i, max(24, w))  # минимум чтобы не схлопывалось
+            return True
+        except Exception:
+            return False
+
+    def reset_column_widths(self):
+        self.apply_default_widths()
+        self.save_column_widths()
 
     def bind_header_resize_autosave(self, settings: QSettings, group: str = "taskTable"):
         header = self.table.horizontalHeader()
@@ -95,6 +138,37 @@ class TaskTableController:
             item = t.horizontalHeaderItem(i)
             name = (item.text().strip() if item else f"Col{i}")
             self._col_index_cache[name] = i
+            
+        # ---------- Header UX ----------
+
+    def _on_handle_double_click(self, logicalIndex: int):
+        """Дабл-клик по разделителю → resize только этой секции по содержимому."""
+        if 0 <= logicalIndex < self.table.columnCount():
+            self.table.resizeColumnToContents(logicalIndex)
+            # чуть расширим, чтобы текст не упирался в границу
+            self.table.setColumnWidth(logicalIndex, self.table.columnWidth(logicalIndex) + 12)
+            self.save_column_widths()
+
+    def _on_header_menu(self, pos: QPoint):
+        menu = QMenu(self.table)
+        act_reset = QAction("Reset column widths", menu)
+        act_reset.triggered.connect(self.reset_column_widths)
+
+        act_autofit_all = QAction("Auto-fit all (once)", menu)
+        act_autofit_all.triggered.connect(self._autofit_all_once)
+
+        menu.addAction(act_reset)
+        menu.addSeparator()
+        menu.addAction(act_autofit_all)
+        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+
+    def _autofit_all_once(self):
+        """Разовая операция авто-подгонки всех колонок (без фиксации режима)."""
+        # ВАЖНО: не включаем ResizeToContents постоянно, только вызов resizeColumnToContents
+        for i in range(self.table.columnCount()):
+            self.table.resizeColumnToContents(i)
+            self.table.setColumnWidth(i, self.table.columnWidth(i) + 12)
+        self.save_column_widths()
 
     # ---------- Колонки ----------
     def col(self, name: str) -> int:
@@ -169,10 +243,43 @@ class TaskTableController:
         it = self.ensure_item(row, Col.Time)
         it.setText("" if ms is None else f"{ms} ms")
 
-    def set_results_cell(self, row: int, summary: str, payload_short: Optional[str] = None):
-        it = self.ensure_item(row, Col.Results)
-        it.setText(summary or "")
-        if payload_short: it.setToolTip(payload_short)
+    def set_results_cell(
+        self,
+        row: int,
+        payload: dict | None = None,       # вариант 1: даём полный payload
+        summary: str | None = None,        # вариант 2: даём краткий текст
+        payload_short: str | None = None,  # tooltip/короткая версия payload
+    ):
+        """
+        Умеет оба варианта:
+          • set_results_cell(row, payload=payload)
+          • set_results_cell(row, summary="200 · 12KB · 540 ms · r=1", payload_short="<pretty json>")
+
+        Если передан payload — сам соберёт summary и tooltip.
+        """
+        item = self.ensure_item(row, Col.Results)
+
+        # Вариант 1: передали полноценный payload -> сделаем короткое резюме и tooltip
+        if payload is not None:
+            code = payload.get("status_code")
+            size = payload.get("content_len")
+            tms  = (payload.get("timings") or {}).get("request_ms")
+            red  = len(payload.get("redirect_chain") or [])
+            summary = f"{code} · {size} B · {tms} ms · r={red}"
+
+            try:
+                payload_short = json.dumps(payload, ensure_ascii=False, indent=2)
+            except Exception:
+                payload_short = str(payload)
+
+        # Вариант 2: передали уже готовые summary/payload_short
+        text = summary or ""
+        tip  = payload_short or ("No results yet" if not text else "")
+
+        item.setText(text)
+        item.setData(Qt.TextAlignmentRole, Qt.AlignLeft | Qt.AlignVCenter)
+        item.setToolTip(tip)
+
 
     def set_cookies_cell(self, row: int, has: bool, tip: str = ""):
         it = self.ensure_item(row, Col.Cookies)
@@ -187,3 +294,40 @@ class TaskTableController:
     # ---------- Разное ----------
     def ensure_row_visible(self, row: int):
         self.table.scrollToItem(self.ensure_item(row, 0))
+        
+        
+    def _init_header_tooltips(self):
+        """
+        Назначает tooltips для заголовков колонок.
+        Безопасно создаёт headerItem, если его ещё нет.
+        """
+        t = self.table
+
+        tips: dict[int, str] = {
+            Col.URL:     "Исходный адрес задачи (двойной клик — открыть в браузере)",
+            Col.Status:  "Текущий статус задачи (PENDING / RUNNING / DONE / FAILED / STOPPED)",
+            Col.Code:    "HTTP-код ответа сервера (последнего запроса)",
+            Col.Time:    "Время запроса, мс (timings.request_ms)",
+            Col.Results: "Краткое резюме результата; полный JSON — в tooltip ячейки",
+            Col.Cookies: "Куки-файл, используемый задачей (авто по домену или кастомный путь)",
+            Col.Params:  "Параметры запроса: метод, proxy, headers, user-agent и т.д.",
+        }
+
+        for col, tip in tips.items():
+            self._ensure_header_item(col)
+            item = t.horizontalHeaderItem(col)
+            if item:
+                item.setToolTip(tip)
+
+    def _ensure_header_item(self, col: int):
+        """
+        QTableWidget иногда не имеет headerItem по умолчанию, если заголовки заданы через setHorizontalHeaderLabels.
+        Создаём QTableWidgetItem при необходимости, не меняя существующий текст заголовка.
+        """
+        t = self.table
+        if 0 <= col < t.columnCount() and t.horizontalHeaderItem(col) is None:
+            # берём текущий текст заголовка, если он задан
+            header_text = t.model().headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            item = QTableWidgetItem(str(header_text) if header_text is not None else "")
+            t.setHorizontalHeaderItem(col, item)
+

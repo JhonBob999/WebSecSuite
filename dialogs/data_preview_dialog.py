@@ -1,19 +1,25 @@
 # dialogs/data_preview_dialog.py
 from __future__ import annotations
-import json
+import json, os
+from ui import export_bridge as xb
 from typing import Callable, Iterable
 from PySide6.QtWidgets import QDialog, QTableWidgetItem, QFileDialog, QMessageBox
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
 
+
 class DataPreviewDialog(QDialog):
+    export_done = Signal(str, int)
+    export_failed = Signal(str) 
     def __init__(self, parent=None,
                  fetch_all: Callable[[], list[dict]] | None = None,
-                 fetch_selected: Callable[[], list[dict]] | None = None):
+                 fetch_selected: Callable[[], list[dict]] | None = None ):
         super().__init__(parent)
         self.ui = Ui_DataPreviewDialog()
         self.ui.setupUi(self)
+        
+          
 
         self.fetch_all = fetch_all
         self.fetch_selected = fetch_selected
@@ -24,14 +30,20 @@ class DataPreviewDialog(QDialog):
         self.ui.btnLoadAll.clicked.connect(self.on_load_all)
         self.ui.btnLoadSelected.clicked.connect(self.on_load_selected)
         self.ui.btnRefresh.clicked.connect(self.on_refresh)
-        self.ui.btnExport.clicked.connect(self.on_export)
+        self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.lineSearch.textChanged.connect(self.on_filter_changed)
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
 
     # ---- публичный API ----
     def set_records(self, records: list[dict]):
-        self._records = records or []
-        self._rebuild_table()
+        self._snapshot = list(records or [])
+        try:
+            self._rebuild_table(self._snapshot)
+        except TypeError:
+            self._rebuild_table()
+
+
+
 
     # ---- внутренняя логика ----
     def _all_keys(self) -> list[str]:
@@ -42,28 +54,52 @@ class DataPreviewDialog(QDialog):
         rest = sorted(k for k in keys if k not in preferred)
         return [c for c in preferred if c in keys] + rest
 
-    def _rebuild_table(self):
-        self._columns = self._all_keys()
-        tbl = self.ui.tablePreview
-        tbl.clear()
-        tbl.setColumnCount(len(self._columns))
-        tbl.setHorizontalHeaderLabels(self._columns)
-        tbl.setRowCount(len(self._records))
+    def _rebuild_table(self, records: list[dict] | None = None):
+        """Перерисовать tablePreview по снапшоту/records."""
+        records = records or getattr(self, "_snapshot", []) or []
+        t = self.ui.tablePreview
 
-        for row, rec in enumerate(self._records):
-            for col, key in enumerate(self._columns):
-                val = rec.get(key, "")
-                text, tooltip = self._to_cell(val)
-                item = QTableWidgetItem(text)
-                if tooltip and tooltip != text:
-                    item.setToolTip(tooltip)
-                # числа вправо
-                if isinstance(val, (int, float)) or (isinstance(val, str) and val.isdigit()):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                tbl.setItem(row, col, item)
+        # чистим
+        t.setSortingEnabled(False)
+        t.clear()
+        t.setRowCount(0)
+        t.setColumnCount(0)
 
-        tbl.resizeColumnsToContents()
-        tbl.resizeRowsToContents()
+        if not records:
+            return
+
+        # объединяем ключи по всем записям (стабильный порядок)
+        keys_order = []
+        seen = set()
+        # сначала возьмём порядок по первой записи
+        for k in records[0].keys():
+            keys_order.append(k); seen.add(k)
+        # затем добавим недостающие из остальных
+        for rec in records[1:]:
+            for k in rec.keys():
+                if k not in seen:
+                    keys_order.append(k); seen.add(k)
+
+        t.setColumnCount(len(keys_order))
+        t.setHorizontalHeaderLabels(keys_order)
+
+        # заполняем
+        for r, rec in enumerate(records):
+            t.insertRow(r)
+            for c, k in enumerate(keys_order):
+                val = rec.get(k, "")
+                if isinstance(val, (dict, list, tuple)):
+                    val = str(val)
+                elif val is None:
+                    val = ""
+                item = QTableWidgetItem(str(val))
+                # удобные тултипы для длинных значений
+                if len(str(val)) > 80:
+                    item.setToolTip(str(val))
+                t.setItem(r, c, item)
+
+        t.resizeColumnsToContents()
+        t.setSortingEnabled(True)
 
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):
@@ -95,21 +131,81 @@ class DataPreviewDialog(QDialog):
             self.on_load_all()
 
     @Slot()
-    def on_export(self):
-        if not self._records:
-            QMessageBox.information(self, "Export", "Nothing to export.")
+    def on_export_clicked(self):
+        # 1) Берём текущий снимок (только то, что сейчас в предпросмотре)
+        records = getattr(self, "_snapshot", None) or []
+        if not records:
+            QMessageBox.information(self, "Export", "Nothing to export (snapshot is empty).")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Preview", "data/exports/preview_export",
-            "CSV (*.csv);;JSON (*.json);;Excel (*.xlsx)"
-        )
+
+        # 2) Диалог сохранения: CSV/JSON/XLSX
+        path, fmt = self._ask_export_path()
         if not path:
             return
+
+        # 3) Экспорт через единый мост
         try:
-            self._export_records(self._records, path)
-            QMessageBox.information(self, "Export", f"Saved → {path}")
+            xb.export(records, path, fmt=fmt)
         except Exception as e:
-            QMessageBox.critical(self, "Export error", str(e))
+            QMessageBox.critical(self, "Export failed", f"{e}")
+            # если хочешь прокинуть в логи вкладки:
+            if hasattr(self, "export_failed"):
+                try: self.export_failed.emit(str(e))
+                except Exception: pass
+            return
+
+        QMessageBox.information(self, "Export", f"Saved {len(records)} rows →\n{path}")
+        # опционально: открыть папку
+        try:
+            folder = os.path.dirname(os.path.abspath(path))
+            QFileDialog.getOpenFileName(self, "Open folder", folder)  # дешёвый трюк, можно убрать
+        except Exception:
+            pass
+
+        # если хочешь отдать в лог ScraperTab:
+        if hasattr(self, "export_done"):
+            try: self.export_done.emit(path, len(records))
+            except Exception: pass
+            
+    def _ask_export_path(self) -> tuple[str, str]:
+        """
+        Возвращает (path, fmt) где fmt in {'csv','json','xlsx'}.
+        """
+        # дефолтная папка
+        base_dir = os.path.join("data", "exports")
+        os.makedirs(base_dir, exist_ok=True)
+
+        ts = QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")
+        base_name = f"data_preview_{ts}"
+        filters = "CSV (*.csv);;JSON (*.json);;Excel (*.xlsx)"
+
+        path, selected = QFileDialog.getSaveFileName(
+            self,
+            "Export snapshot…",
+            os.path.join(base_dir, base_name + ".csv"),
+            filters
+        )
+        if not path:
+            return "", ""
+
+        # Определим fmt по выбранному фильтру/расширению
+        selected = (selected or "").lower()
+        if "json" in selected or path.lower().endswith(".json"):
+            fmt = "json"
+            if not path.lower().endswith(".json"):
+                path += ".json"
+        elif "xlsx" in selected or path.lower().endswith(".xlsx"):
+            fmt = "xlsx"
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+        else:
+            fmt = "csv"
+            if not path.lower().endswith(".csv"):
+                path += ".csv"
+
+        return path, fmt
+
+
 
     def _export_records(self, records: list[dict], path: str):
         import os, csv

@@ -7,12 +7,14 @@ from functools import partial
 from copy import deepcopy
 import os, json, httpx, subprocess, re
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
-from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QBrush
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QFileDialog, QInputDialog, QMessageBox, QTextEdit
-from ui.constants import Col, TaskStatus, status_text, status_brush, code_color, code_text
+from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QAction
+from PySide6.QtWidgets import QWidget, QTableWidgetItem, QDialog, QFileDialog, QInputDialog, QMessageBox, QTextEdit, QMenu
+from ui.constants import Col, TaskStatus
 from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
 from ui.table_controller import TaskTableController
+from ui import export_bridge as xb
+from dialogs.data_preview_dialog import DataPreviewDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
@@ -85,8 +87,7 @@ class ScraperTabController(QWidget):
         self.table = TaskTableController(self.ui.taskTable)
         self.table.apply_common_view_settings()
         self.table.setup_resize_policies()
-        self.table.restore_column_widths(self.settings, "taskTable")
-        self.table.bind_header_resize_autosave(self.settings, "taskTable")
+        self.table.restore_column_widths()
         
         # Хайлайтер подключение
         self._log_hl = LogHighlighter(self.ui.logOutput.document())
@@ -190,7 +191,6 @@ class ScraperTabController(QWidget):
         return records
 
     def _open_data_preview_all(self):
-        from dialogs.data_preview_dialog import DataPreviewDialog
         table = self.ui.taskTable
         rows_all = range(table.rowCount())
 
@@ -199,8 +199,20 @@ class ScraperTabController(QWidget):
             fetch_all=lambda: self._records_from_rows(range(self.ui.taskTable.rowCount())),
             fetch_selected=lambda: self._records_from_rows(self._selected_rows()),
         )
+        records = self._records_from_rows(rows_all)
+        self.log.append("DEBUG", f"Preview rows={len(records)}", tag="DPV")
         dlg.set_records(self._records_from_rows(rows_all))
+
+        # подписка на сигналы экспорта из DataPreview
+        dlg.export_done.connect(
+            lambda path, n: self.log.append("INFO", f"DataPreview: exported {n} rows → {path}", tag="EXPORT")
+        )
+        dlg.export_failed.connect(
+            lambda err: self.log.append("ERROR", f"DataPreview export failed: {err}", tag="EXPORT")
+        )
+
         dlg.show()
+
 
         
     def _col_index(self, name: str) -> int:
@@ -330,8 +342,50 @@ class ScraperTabController(QWidget):
     def _find_row_by_task_id(self, task_id: str) -> int:
         return self.table.row_by_task_id(task_id)
 
-    def _selected_rows(self) -> list[int]:
-        return self.table.selected_rows()
+    def _selected_rows(self, *, require_task_id: bool = False, log: bool = True) -> list[int]:
+        """
+        Возвращает уникальные выбранные строки таблицы (отсортированные).
+        require_task_id=True — отфильтровать строки без task_id.
+        log=False — не писать предупреждения.
+        """
+        def _log(msg: str):
+            if log and hasattr(self, "log") and hasattr(self.log, "append_log_line"):
+                self.log.append_log_line(msg)
+
+        table = self.ui.taskTable
+        sel = table.selectionModel()
+        if not sel or not sel.hasSelection():
+            _log("[WARN] No tasks selected")
+            return []
+
+        rows = sorted({idx.row() for idx in sel.selectedRows()})
+        if not rows:
+            _log("[WARN] No valid rows selected")
+            return []
+
+        if require_task_id:
+            good, skipped = [], 0
+            # поддержим оба варианта: _task_id_by_row и table.get_task_id(row)
+            get_tid = None
+            if hasattr(self, "_task_id_by_row"):
+                get_tid = self._task_id_by_row
+            elif hasattr(self, "table") and hasattr(self.table, "get_task_id"):
+                get_tid = self.table.get_task_id
+
+            for r in rows:
+                tid = get_tid(r) if get_tid else None
+                if tid:
+                    good.append(r)
+                else:
+                    skipped += 1
+
+            if skipped:
+                _log(f"[WARN] {skipped} row(s) without task_id skipped")
+            return good
+
+        return rows
+
+
 
     def set_row_task_id(self, row: int, task_id: str):
         self.table.set_row_task_id(row, task_id)
@@ -694,6 +748,7 @@ class ScraperTabController(QWidget):
     # ---------- Контекстное меню ----------
     def on_context_menu(self, pos: QPoint):
         table = self.ui.taskTable
+        menu = QMenu(self)
 
         # Разрешаем открывать меню и на пустом месте: будут доступны пункты для "all"
         # (build_task_table_menu сам решит, что включить/выключить)
@@ -782,6 +837,38 @@ class ScraperTabController(QWidget):
         acts["open_cookie_dir"].triggered.connect(self._open_cookie_dir)
         acts["reload_cookies"].triggered.connect(partial(self._reload_cookies, rows))
         acts["clear_cookies"].triggered.connect(partial(self._clear_cookies, rows))
+        
+        # --- Columns / Widths ---------------------------------------------------------
+        menu.addSeparator()
+
+        widths_menu = menu.addMenu("Columns")
+
+        act_reset_w = QAction("Reset column widths", self)
+        act_reset_w.setToolTip("Сбросить ширину колонок к значениям по умолчанию")
+        act_reset_w.triggered.connect(self.table.reset_column_widths)
+        widths_menu.addAction(act_reset_w)
+
+        act_autofit_all = QAction("Auto-fit all (once)", self)
+        act_autofit_all.setToolTip("Разово подогнать ширину всех колонок по содержимому")
+        act_autofit_all.triggered.connect(self.table._autofit_all_once)
+        widths_menu.addAction(act_autofit_all)
+        # ----------------------------------------------------------------------------- 
+        # --- Rows / Heights -----------------------------------------------------------
+        rows_menu = menu.addMenu("Rows")
+
+        act_row_small = QAction("Row height: 26 px", self)
+        act_row_small.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(22))
+        rows_menu.addAction(act_row_small)
+
+        act_row_medium = QAction("Row height: 42 px", self)
+        act_row_medium.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(26))
+        rows_menu.addAction(act_row_medium)
+
+        act_row_large = QAction("Row height: 62 px", self)
+        act_row_large.triggered.connect(lambda: self.ui.taskTable.verticalHeader().setDefaultSectionSize(32))
+        rows_menu.addAction(act_row_large)
+        # ----------------------------------------------------------------------------- 
+
 
         # Показ меню
         menu.exec(table.viewport().mapToGlobal(pos))
@@ -832,126 +919,189 @@ class ScraperTabController(QWidget):
     # ==============================
 
     def _rows_to_task_ids(self, rows: list[int]) -> list[tuple[int, str]]:
-        """Сопоставить строки с task_id, пропуская пустые и логируя проблемы."""
-        out = []
-        for r in rows:
-            tid = self._task_id_by_row(r)
-            if not tid:
-                self.log.append_log_line(f"[WARN] No task_id for row {r}")
+        """Преобразует список строк в пары (row, task_id), пропуская строки без task_id с WARN-логом."""
+        pairs: list[tuple[int, str]] = []
+        seen = set()
+        for r in sorted(rows):
+            if r in seen:
                 continue
-            out.append((r, tid))
-        return out
+            seen.add(r)
+
+            # поддержим оба варианта: приватный метод или метод контроллера таблицы
+            tid = None
+            if hasattr(self, "_task_id_by_row"):
+                tid = self._task_id_by_row(r)
+            elif hasattr(self, "table") and hasattr(self.table, "get_task_id"):
+                try:
+                    tid = self.table.get_task_id(r)
+                except Exception:
+                    tid = None
+
+            if tid:
+                pairs.append((r, tid))
+            else:
+                # +1 для человеко-индекса
+                if hasattr(self, "log") and hasattr(self.log, "append"):
+                    self.log.append("[WARN]", f"Row {r+1} has no task_id — skipped")
+
+        if not pairs and rows and hasattr(self, "log") and hasattr(self.log, "append"):
+            self.log.append("[WARN]", "Selection contains no valid tasks")
+
+        return pairs
+
 
     def _start_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
         started = skipped = errors = 0
+
         for _, tid in pairs:
             try:
                 self.task_manager.start_task(tid)
                 started += 1
             except Exception as e:
                 errors += 1
-                self.log.append_log_line(f"[ERROR] start_selected({tid[:8]}): {e}")
+                self.log.append("[ERROR]", f"start_selected({tid[:8]}): {e}")
+
         if skipped:
-            self.log.append_log_line(f"[WARN] Start selected: skipped {skipped} task(s)")
-        self.log.append_log_line(f"[INFO] Start selected: queued {started}, errors {errors}")
+            self.log.append("[WARN]", f"Start selected: skipped {skipped} task(s)")
+        self.log.append("[INFO]", f"Start selected: queued {started}, errors {errors}")
+
 
     def _stop_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
         stopped = skipped = errors = 0
+
         for _, tid in pairs:
             try:
                 task = self.task_manager.get_task(tid)
+                if not task:
+                    skipped += 1
+                    self.log.append("[WARN]", f"stop_selected({tid[:8]}): task not found")
+                    continue
+
                 status = getattr(task, "status", TaskStatus.PENDING)
                 s = self._status_name(status)
                 if s in CAN_STOP:
-                    self.task_manager.stop_task(tid)  # кооперативная остановка
+                    # кооперативная остановка
+                    self.task_manager.stop_task(tid)
                     stopped += 1
                 else:
-                    skipped += 1  # DONE/FAILED/STOPPED — останавливать нечего
+                    # DONE/FAILED/STOPPED — останавливать нечего
+                    skipped += 1
             except Exception as e:
                 errors += 1
-                self.log.append_log_line(f"[ERROR] stop_selected({tid[:8]}): {e}")
-        self.log.append_log_line(
-            f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}"
-        )
+                self.log.append("[ERROR]", f"stop_selected({tid[:8]}): {e}")
+
+        self.log.append("[INFO]", f"Stop selected: requested {stopped}, skipped {skipped}, errors {errors}")
+
 
 
     def _restart_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
         restarted = errors = 0
         has_restart = hasattr(self.task_manager, "restart_task")
+
         for _, tid in pairs:
             try:
+                task = self.task_manager.get_task(tid)
+                if not task:
+                    self.log.append("[WARN]", f"restart_selected({tid[:8]}): task not found")
+                    continue
+
                 if has_restart:
                     self.task_manager.restart_task(tid)
                 else:
-                    # Фолбэк: мягко остановить и снова запустить
+                    # Фолбэк: мягкая остановка + старт
                     try:
                         self.task_manager.stop_task(tid)
                     finally:
                         self.task_manager.start_task(tid)
+
                 restarted += 1
             except Exception as e:
                 errors += 1
-                self.log.append_log_line(f"[ERROR] restart_selected({tid[:8]}): {e}")
-        self.log.append_log_line(f"[INFO] Restart selected: {restarted} task(s), errors {errors}")
+                self.log.append("[ERROR]", f"restart_selected({tid[:8]}): {e}")
+
+        self.log.append("[INFO]", f"Restart selected: {restarted} task(s), errors {errors}")
+
 
     def _duplicate_tasks(self, rows: list[int]):
-        """Дублирование выделенных задач (название во мн. числе для читаемости)."""
+        """Дублирование выделенных задач (мн. число — читаемее)."""
         pairs = self._rows_to_task_ids(rows)
-        ok = errors = 0
+        ok = errors = skipped = 0
+
         # поддержим и duplicate_task(task), и duplicate_tasks(task)
         dup_one = getattr(self.task_manager, "duplicate_task", None)
         dup_many = getattr(self.task_manager, "duplicate_tasks", None)
 
         for _, tid in pairs:
-            task = self.task_manager.get_task(tid)
-            if not task:
-                continue
             try:
+                task = self.task_manager.get_task(tid)
+                if not task:
+                    skipped += 1
+                    self.log.append("[WARN]", f"duplicate({tid[:8]}): task not found")
+                    continue
+
                 if callable(dup_one):
                     dup_one(task)
                 elif callable(dup_many):
-                    dup_many(task)
+                    dup_many(task)   # если метод ожидает список — он сам должен обрабатывать
                 else:
                     raise RuntimeError("No duplicate_task(s) method in TaskManager")
+
                 ok += 1
             except Exception as e:
                 errors += 1
-                self.log.append_log_line(f"[ERROR] duplicate({tid[:8]}): {e}")
-        self.log.append_log_line(f"[INFO] Duplicated: {ok}, errors {errors}")
+                self.log.append("[ERROR]", f"duplicate({tid[:8]}): {e}")
+
+        if skipped:
+            self.log.append("[WARN]", f"Duplicated: skipped {skipped} task(s) (not found)")
+        self.log.append("[INFO]", f"Duplicated: {ok}, errors {errors}")
+
 
     def _remove_tasks(self, rows: list[int]):
-        """Удаление задач из менеджера и таблицы. Гарантированно в обратном порядке строк."""
+        """Удаление задач из менеджера и таблицы. Удаляем строки в обратном порядке."""
         pairs = self._rows_to_task_ids(rows)
         if not pairs:
             return
-        # Снимем перерисовку, удалим строки «пакетом»
+
         table = self.ui.taskTable
         table.setUpdatesEnabled(False)
-        removed = errors = 0
+
+        removed = errors = skipped = 0
         try:
-            # Сначала удалим из менеджера
+            # 1) Удаляем из менеджера
             for _, tid in pairs:
                 try:
+                    task = self.task_manager.get_task(tid)
+                    if not task:
+                        skipped += 1
+                        self.log.append("[WARN]", f"remove_task({tid[:8]}): task not found")
+                        continue
                     self.task_manager.remove_task(tid)
                     removed += 1
                 except Exception as e:
                     errors += 1
-                    self.log.append_log_line(f"[ERROR] remove_task({tid[:8]}): {e}")
+                    self.log.append("[ERROR]", f"remove_task({tid[:8]}): {e}")
 
-            # Затем удалим строки из таблицы (по убыванию индексов)
+            # 2) Удаляем строки из таблицы (по убыванию индексов)
             for r, _ in sorted(pairs, key=lambda x: x[0], reverse=True):
                 try:
                     table.removeRow(r)
+                    # подчистим локальный снапшот предпросмотра, если используешь
+                    if hasattr(self, "task_results") and isinstance(self.task_results, dict):
+                        self.task_results.pop(r, None)
                 except Exception as e:
                     errors += 1
-                    self.log.append_log_line(f"[ERROR] removeRow({r}): {e}")
+                    self.log.append("[ERROR]", f"removeRow({r}): {e}")
         finally:
             table.setUpdatesEnabled(True)
 
-        self.log.append_log_line(f"[INFO] Removed rows: {removed}, errors {errors}")
+        if skipped:
+            self.log.append("[WARN]", f"Remove: skipped {skipped} task(s) (not found)")
+        self.log.append("[INFO]", f"Removed rows: {removed}, errors {errors}")
+
+
 
 
     # ==============================
@@ -1034,87 +1184,33 @@ class ScraperTabController(QWidget):
 
     def _export_data(self, mode: str):
         """
-        Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт.
-        Сначала пробуем core.scraper.exporter, затем — встроенный фолбэк.
+        Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт через export_bridge.
         """
+        from ui import export_bridge as xb
+
         tasks = self._tasks_for_mode(mode)
         if not tasks:
-            self.log.append_log_line(f"[WARN] Export: no tasks for mode '{mode}'")
+            self.log.append("WARN", f"Export: no tasks for mode '{mode}'", tag="UI")
             return
 
         path, ext = self._ask_export_path(mode)
         if not path:
             return
 
-        # Попытка модульного экспортера
-        used_builtin = False
+        # Формируем записи
         try:
-            from core.scraper import exporter
-            if ext == ".csv" and hasattr(exporter, "export_csv"):
-                exporter.export_csv(tasks, path); used_builtin = True
-            elif ext == ".json" and hasattr(exporter, "export_json"):
-                exporter.export_json(tasks, path); used_builtin = True
-            elif ext == ".xlsx" and hasattr(exporter, "export_xlsx"):
-                exporter.export_xlsx(tasks, path); used_builtin = True
-            elif hasattr(exporter, "export_tasks"):
-                try:
-                    exporter.export_tasks(tasks, path=path, fmt=ext.lstrip("."))
-                    used_builtin = True
-                except TypeError:
-                    exporter.export_tasks(tasks, filename=path, format=ext.lstrip("."))
-                    used_builtin = True
+            records = [xb.task_to_record(t) for t in tasks]
         except Exception as e:
-            self.log.append_log_line(f"[WARN] Built‑in exporter error: {e}. Will fallback.")
-
-        if used_builtin:
-            self.log.append_log_line(f"[INFO] Exported ({mode}) → {path}")
+            self.log.append("ERROR", f"Failed to normalize tasks: {e}", tag="EXPORT")
             return
 
-        # ---- Фолбэк: сбор записей ----
-        records, keys = [], set()
-        for t in tasks:
-            rec = self._task_to_record(t)
-            keys.update(rec.keys())
-            records.append(rec)
+        fmt = ext.lstrip(".").lower()
+        try:
+            xb.export(records, path, fmt=fmt)
+            self.log.append("INFO", f"Exported ({mode}) {len(records)} rows → {path}", tag="EXPORT")
+        except Exception as e:
+            self.log.append("ERROR", f"Export failed ({mode}): {e}", tag="EXPORT")
 
-        # Запись JSON
-        if ext == ".json":
-            import json, tempfile, os
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)  # атомарная запись
-            self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
-            return
-
-        # Запись XLSX (если openpyxl доступен), иначе — в CSV
-        if ext == ".xlsx":
-            try:
-                from openpyxl import Workbook
-                wb = Workbook(); ws = wb.active
-                headers = sorted(keys); ws.append(headers)
-                for rec in records:
-                    ws.append([("" if rec.get(k) is None else str(rec.get(k))) for k in headers])
-                wb.save(path)
-                self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
-                return
-            except Exception as e:
-                self.log.append_log_line(f"[WARN] XLSX export failed ({e}). Saving as CSV instead.")
-                from pathlib import Path as _P
-                path = str(_P(path).with_suffix(".csv"))
-                ext = ".csv"
-
-        # Запись CSV
-        headers = sorted(keys)
-        import csv as _csv, tempfile, os
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8", newline="") as f:
-            w = _csv.DictWriter(f, fieldnames=headers)
-            w.writeheader()
-            for rec in records:
-                w.writerow({k: ("" if rec.get(k) is None else str(rec.get(k))) for k in headers})
-        os.replace(tmp, path)  # атомарная запись
-        self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
 
     # ==============================
     #  Данные / буфер обмена / диалоги
