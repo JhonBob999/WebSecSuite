@@ -11,7 +11,10 @@ import os, json, httpx, subprocess, re, io
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QShortcut, QKeySequence
 from PySide6.QtWidgets import QWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QDialog, QMenu, QFileDialog, QInputDialog, QWidgetAction, QMessageBox, QTextEdit
-
+from ui.constants import Col, TaskStatus, status_text, status_brush, code_color, code_text, build_col_index_from_headers
+from ui.constants import Col, build_col_index_from_headers
+from ui.log_highlighter import LogHighlighter
+from ui.log_panel import LogPanel
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
@@ -67,81 +70,6 @@ def code_text(http_code: int) -> str:
     return common.get(int(http_code), "")
 
 
-#Класс Хайлайтер
-class LogHighlighter(QSyntaxHighlighter):
-    def __init__(self, document):
-        super().__init__(document)
-        # Форматы
-        self.f_info = QTextCharFormat()
-        self.f_info.setForeground(QColor("#A0A0A0"))  # мягкий серый
-
-        self.f_warn = QTextCharFormat()
-        self.f_warn.setForeground(QColor("#C8A200"))  # жёлто-янтарный
-        self.f_warn.setFontWeight(QFont.Bold)
-
-        self.f_error = QTextCharFormat()
-        self.f_error.setForeground(QColor("#E05A5A"))  # красный
-        self.f_error.setFontWeight(QFont.Bold)
-
-        self.f_result = QTextCharFormat()
-        self.f_result.setForeground(QColor("#3CC3D3"))  # бирюзовый
-        self.f_result.setFontWeight(QFont.DemiBold)
-
-        self.f_taskid = QTextCharFormat()
-        self.f_taskid.setForeground(QColor("#808080"))  # серый для [abcd1234]
-        
-        self._search_regex = QRegularExpression()
-        self._search_fmt = QTextCharFormat()
-        self._search_fmt.setBackground(QColor(255, 255, 0, 100))
-
-    def highlightBlock(self, text: str):
-        # Уровни
-        if "] [ERROR]" in text:
-            self.setFormat(0, len(text), self.f_error)
-        elif "] [WARN]" in text:
-            self.setFormat(0, len(text), self.f_warn)
-        elif "] [RESULT]" in text:
-            self.setFormat(0, len(text), self.f_result)
-        elif "] [INFO]" in text:
-            self.setFormat(0, len(text), self.f_info)
-
-        # Подсветим короткий task_id вида [e0f1a2b3]
-        # (пробегаем и находим такие подпоследовательности)
-        start = 0
-        while True:
-            i = text.find("[", start)
-            if i < 0:
-                break
-            j = text.find("]", i + 1)
-            if j < 0:
-                break
-            token = text[i:j+1]
-            # [abcdef12] — восьмизначный hex?
-            if len(token) == 10 and all(c in "0123456789abcdef" for c in token[1:-1].lower()):
-                self.setFormat(i, j - i + 1, self.f_taskid)
-            start = j + 1
-            
-        # --- ДОПОЛНИТЕЛЬНАЯ ПОДСВЕТКА ПОИСКА ---
-        if hasattr(self, "_search_regex") and self._search_regex.isValid() and self._search_regex.pattern():
-            it = self._search_regex.globalMatch(text)
-            while it.hasNext():
-                m = it.next()
-                self.setFormat(m.capturedStart(), m.capturedLength(), self._search_fmt)
-            
-    def set_pattern(self, text: str, *, regex_mode=False, case_sensitive=False):
-        if not text:
-            self._search_regex = QRegularExpression()
-            self.rehighlight()
-            return
-        pattern = text if regex_mode else QRegularExpression.escape(text)
-        rx = QRegularExpression(pattern)
-        rx.setPatternOptions(
-            QRegularExpression.NoPatternOption if case_sensitive
-            else QRegularExpression.CaseInsensitiveOption
-        )
-        self._search_regex = rx
-        self.rehighlight()
-
 
 class ScraperTabController(QWidget):
     def __init__(self, parent=None):
@@ -193,6 +121,13 @@ class ScraperTabController(QWidget):
         self.ui.taskTable.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setAlternatingRowColors(True)
         
+        # в __init__ сразу после установки заголовков:
+        headers = [
+            self.ui.taskTable.horizontalHeaderItem(i).text()
+            for i in range(self.ui.taskTable.columnCount())
+        ]
+        self._col_map = build_col_index_from_headers(headers)
+        
         # --- FIND STATE (для логов) ---
         self._find_positions = []  # list[(start, length)]
         self._find_current = -1    # индекс текущего совпадения
@@ -204,19 +139,15 @@ class ScraperTabController(QWidget):
         self.log_buffer = []                  # list[tuple[str, str, str]]: (ts, level, text)
         self.log_filter = {"INFO", "WARN", "ERROR"}
         self.MAX_LOG_LINES = 5000
-        
-        self.ui.lineEditLogFilter.textChanged.connect(self._on_find_text_changed)
-        self._find_debounce.timeout.connect(self._rebuild_find_matches)
+        self.log = LogPanel(self.ui.logOutput)
+        self.log.set_filter_widgets(
+        line_edit=self.ui.lineEditLogFilter,
+        btn_prev=self.ui.btnFindPrev,
+        btn_next=self.ui.btnFindNext,
+        counter_label=self.ui.lblFindHits,     # <-- вот это главное
+        export_button=self.ui.btnExportMatches # <-- и это
+        )
 
-        self.ui.btnFindPrev.clicked.connect(lambda: self._goto_match(-1))
-        self.ui.btnFindNext.clicked.connect(lambda: self._goto_match(+1))
-        self.ui.btnExportMatches.clicked.connect(self._export_log_matches)
-
-        # Горячие клавиши: F3 — далее, Shift+F3 — назад
-        QShortcut(QKeySequence("F3"), self.ui.logOutput, activated=lambda: self._goto_match(+1))
-        QShortcut(QKeySequence("Shift+F3"), self.ui.logOutput, activated=lambda: self._goto_match(-1))
-        # хоткей: Ctrl+E
-        QShortcut(QKeySequence("Ctrl+E"), self.ui.logOutput, activated=self._export_log_matches)
         
         # в __init__ ScraperTabController (после создания _find_debounce)
         self.ui.cbFindCase.toggled.connect(lambda _: self._find_debounce.start())
@@ -298,14 +229,14 @@ class ScraperTabController(QWidget):
         dlg.show()
 
         
-    def _col_index(self, header_text: str) -> int:
-        hh = self.ui.taskTable.horizontalHeader()
-        cols = self.ui.taskTable.columnCount()
-        for i in range(cols):
-            it = self.ui.taskTable.horizontalHeaderItem(i)
-            if it and it.text().strip().lower() == header_text.strip().lower():
-                return i
-        return -1
+    def _col_index(self, name: str) -> int:
+        """Временный адаптер, чтобы старый код не падал, пока переписываем на Col.*"""
+        # если в карте нет — вернём значение из enum (по умолчанию)
+        try:
+            return self._col_map.get(name, getattr(Col, name))
+        except Exception:
+            # на всякий случай, чтобы не уронить UI при опечатке
+            return getattr(Col, name, 0)
     
     def _colmap(self) -> dict[str, int]:
         return {
@@ -329,10 +260,6 @@ class ScraperTabController(QWidget):
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
             
-    def _on_find_text_changed(self, _):
-        # живую подсветку ты уже делаешь — здесь дополняем навигацией
-        self._find_debounce.start()
-            
             
     def _on_filter_text_changed(self, text: str):
         # базовая версия: без regex и без учёта регистра
@@ -342,62 +269,6 @@ class ScraperTabController(QWidget):
             case_sensitive=False
         )
         
-    def _rebuild_find_matches(self):
-        text = self.ui.lineEditLogFilter.text()
-        doc = self.ui.logOutput.document()
-        plain = doc.toPlainText()
-
-        self._find_positions.clear()
-        self._find_current = -1
-        self._set_find_error(False)
-
-        # Пустой поиск — очистка
-        if not text:
-            self._apply_log_find_selections([])
-            self._update_find_label()
-            return
-
-        # Флаги из UI
-        use_regex = self.ui.cbFindRegex.isChecked()
-        case_sensitive = self.ui.cbFindCase.isChecked()
-        whole_word = self.ui.cbFindWhole.isChecked()
-
-        # Регистровые флаги
-        flags = 0 if case_sensitive else re.IGNORECASE
-
-        try:
-            if use_regex:
-                pattern = text
-                # Если просили "целое слово" — мягко добавим \b, если пользователь сам не поставил
-                if whole_word:
-                    if not pattern.startswith(r"\b"):
-                        pattern = r"\b" + pattern
-                    if not pattern.endswith(r"\b"):
-                        pattern = pattern + r"\b"
-                rx = re.compile(pattern, flags)
-            else:
-                # Без регулярок: экранируем и при whole word оборачиваем в \b … \b
-                pattern = re.escape(text)
-                if whole_word:
-                    pattern = rf"\b{pattern}\b"
-                rx = re.compile(pattern, flags)
-
-            matches = list(rx.finditer(plain))
-            self._find_positions = [(m.start(), m.end() - m.start()) for m in matches]
-
-        except re.error:
-            # Некорректный regex — подсветим ошибку
-            self._set_find_error(True)
-            self._apply_log_find_selections([])
-            return
-
-        # Текущее совпадение — первое, если есть
-        if self._find_positions:
-            self._find_current = 0
-
-        self._apply_log_find_selections(self._find_positions, self._find_current)
-        self._update_find_label()
-        self._ensure_current_visible()
         
     def _apply_log_find_selections(self, positions, current_index=-1):
         edit = self.ui.logOutput
@@ -426,15 +297,6 @@ class ScraperTabController(QWidget):
 
         # Сочетается с твоим syntax highlighter — ExtraSelections поверх
         edit.setExtraSelections(sels)
-        
-        
-    def _goto_match(self, step: int):
-        if not self._find_positions:
-            return
-        self._find_current = (self._find_current + step) % len(self._find_positions)
-        self._apply_log_find_selections(self._find_positions, self._find_current)
-        self._update_find_label()
-        self._ensure_current_visible()
         
     def _ensure_current_visible(self):
         if self._find_current < 0 or self._find_current >= len(self._find_positions):
@@ -496,10 +358,7 @@ class ScraperTabController(QWidget):
         except re.error:
             return None
         
-    def append_log(self, level: str, text: str):
-        ts = QDateTime.currentDateTime().toString("HH:mm:ss")
-        line = f"[{ts}] [{level}] {text}"
-        self.ui.logOutput.appendPlainText(line)
+    
         
     def _ask_export_path_log(self):
         ts = QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")
@@ -509,63 +368,7 @@ class ScraperTabController(QWidget):
             self.ui.taskTable, "Export matches", suggested, "Text (*.txt);;JSON (*.json)"
         )
         return path or ""
-
-    
-    def _export_log_matches(self):
-        rx = self._current_find_regex()
-        if rx is None:
-            QMessageBox.information(self.ui.taskTable, "Export", "Nothing to export: empty pattern or invalid regex.")
-            return
-
-        doc = self.ui.logOutput.document()
-        block = doc.begin()
-        results = []
-        ln = 1
-
-        # пробегаем блоки без создания гигантских списков
-        while block.isValid():
-            line = block.text()
-            if rx.search(line):
-                results.append((ln, line))
-            block = block.next()
-            ln += 1
-
-        if not results:
-            QMessageBox.information(self.ui.taskTable, "Export", "0 matches — nothing to export.")
-            return
-
-        path = self._ask_export_path_log()
-        if not path:
-            return
-
-        try:
-            # атомарная запись
-            tmp = path + ".tmp"
-            if path.lower().endswith(".json"):
-                payload = [{"line_no": n, "text": t} for (n, t) in results]
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-            else:
-                # UTF-8 with BOM чтобы Windows/Excel открывали без «кракозябр»
-                buf = io.open(tmp, "w", encoding="utf-8-sig", newline="\n")
-                with buf as f:
-                    for n, t in results:
-                        f.write(f"[{n}] {t}\n")
-
-            os.replace(tmp, path)
-            self.append_log_line(f"[INFO] Exported matches: {len(results)} → {path}")
-            # открыть папку с выделенным файлом
-            try:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
-            except Exception:
-                pass
-
-        except Exception as e:
-            QMessageBox.critical(self.ui.taskTable, "Export error", str(e))
-
-
-
-            
+          
      # --- настройка таблицы, один раз ---
     def _setup_task_table(self):
         t = self.ui.taskTable
@@ -691,7 +494,7 @@ class ScraperTabController(QWidget):
 
         except Exception as e:
             try:
-                self.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
+                self.log.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
             except Exception:
                 pass
 
@@ -759,48 +562,7 @@ class ScraperTabController(QWidget):
             self.ui.logOutput.setTextCursor(cursor)
             self.ui.logOutput.ensureCursorVisible()
 
-    # --- Unified logger API -------------------------------------------------
-    def _log(self, level: str, msg: str, tag: str = "") -> None:
-        """
-        Единый логгер: формат [HH:MM:SS] [LEVEL][TAG] message
-        level: INFO|WARN|ERROR
-        tag:   опционально, например 'UI' или 'RESULT'
-        """
-        level = (level or "INFO").upper()
-        if level not in {"INFO", "WARN", "ERROR"}:
-            level = "INFO"
-        ts = QDateTime.currentDateTime().toString("HH:mm:ss")
-        tag_part = f"[{tag}]" if tag else ""
-        line = f"[{ts}] [{level}]{tag_part} {msg}"
-        # заполняем буфер и инкрементально печатаем, как в твоём append_log()
-        self.log_buffer.append((ts, level, f"{tag_part} {msg}".strip()))
-        if len(self.log_buffer) > self.MAX_LOG_LINES:
-            del self.log_buffer[:1000]
-        if hasattr(self.ui, "logOutput") and level in self.log_filter:
-            cursor = self.ui.logOutput.textCursor()
-            cursor.movePosition(QTextCursor.End)
-            cursor.insertText(line + "\n")
-            self.ui.logOutput.setTextCursor(cursor)
-            self.ui.logOutput.ensureCursorVisible()
 
-    # Обновлённый шим совместимости
-    def append_log_line(self, text: str) -> None:
-        raw = str(text or "")
-        lvl = "INFO"
-        body = raw
-        if raw.startswith("[WARN]"):
-            lvl, body = "WARN", raw[6:].lstrip()
-        elif raw.startswith("[ERROR]"):
-            lvl, body = "ERROR", raw[7:].lstrip()
-        elif raw.startswith("[INFO]"):
-            lvl, body = "INFO", raw[6:].lstrip()
-        # поддержка кастомных тэгов вроде [UI], [RESULT]
-        tag = ""
-        if body.startswith("[") and "]" in body[:16]:
-            tag = body[1:body.index("]")]
-            body = body[len(tag) + 2:].lstrip()
-        self._log(lvl, body, tag)
-        
     # --- Clipboard utilities -------------------------------------------------
     def _copy_to_clipboard(self, text: str, label: str = "") -> None:
         """
@@ -808,9 +570,9 @@ class ScraperTabController(QWidget):
         """
         try:
             QGuiApplication.clipboard().setText(text or "")
-            self._log("INFO", f"Copied to clipboard {f'({label})' if label else ''}".strip(), "UI")
+            self.log._log("INFO", f"Copied to clipboard {f'({label})' if label else ''}".strip(), "UI")
         except Exception as e:
-            self._log("ERROR", f"Clipboard error: {e}", "UI")
+            self.log._log("ERROR", f"Clipboard error: {e}", "UI")
 
 
     # ---------- Таблица и строки ----------
@@ -851,7 +613,7 @@ class ScraperTabController(QWidget):
         """Совместимость со старым кодом — перенаправляем в set_results_cell."""
         self.set_results_cell(row, payload)
         it = self.ui.taskTable.item(row, self._c("Results"))
-        self.append_log_line(f"[DEBUG] Results set? {bool(it)} text={it.text() if it else None}")
+        self.log.append_log_line(f"[DEBUG] Results set? {bool(it)} text={it.text() if it else None}")
 
 
     # ---------- Хелперы для выделения/ID и батч-операций ----------
@@ -868,7 +630,7 @@ class ScraperTabController(QWidget):
     def start_selected_tasks(self):
         rows = self._selected_rows()
         if not rows:
-            self.append_log_line("[WARN] No tasks selected")
+            self.log.append_log_line("[WARN] No tasks selected")
             return
         for row in rows:
             task_id, _ = self._get_task(row)
@@ -876,20 +638,20 @@ class ScraperTabController(QWidget):
                 continue
             try:
                 self.task_manager.start_task(task_id)
-                self.append_log_line(f"[UI] Start task {task_id[:8]}")
+                self.log.append_log_line(f"[UI] Start task {task_id[:8]}")
             except Exception as e:
-                self.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
 
     def stop_selected_tasks(self):
         rows = self._selected_rows()
         if not rows:
-            self.append_log_line("[WARN] No tasks selected")
+            self.log.append_log_line("[WARN] No tasks selected")
             return
         for row in rows:
             task_id, _ = self._get_task(row)
             if task_id:
                 self.task_manager.stop_task(task_id)
-        self.append_log_line(f"[UI] Stopped {len(rows)} task(s)")
+        self.log.append_log_line(f"[UI] Stopped {len(rows)} task(s)")
 
     def delete_selected_tasks(self):
         self.on_delete_clicked()
@@ -971,27 +733,27 @@ class ScraperTabController(QWidget):
     def reset_selected_tasks(self):
         ids = self._selected_task_ids()
         if not ids:
-            self.append_log_line("[WARN] No rows selected for reset.")
+            self.log.append_log_line("[WARN] No rows selected for reset.")
             return
         ok = 0
         for tid in ids:
             if self.task_manager.reset_task(tid):
                 ok += 1
                 self._refresh_row_by_task_id(tid)
-                self.append_log_line(f"[INFO] Task {tid} reset")
-        self.append_log_line(f"[INFO] Reset done: {ok}/{len(ids)}")
+                self.log.append_log_line(f"[INFO] Task {tid} reset")
+        self.log.append_log_line(f"[INFO] Reset done: {ok}/{len(ids)}")
 
     def restart_selected_tasks(self):
         ids = self._selected_task_ids()
         if not ids:
-            self.append_log_line("[WARN] No rows selected for restart.")
+            self.log.append_log_line("[WARN] No rows selected for restart.")
             return
         ok = 0
         for tid in ids:
             if self.task_manager.restart_task(tid):
                 ok += 1
-                self.append_log_line(f"[INFO] Task {tid} restarted")
-        self.append_log_line(f"[INFO] Restart done: {ok}/{len(ids)}")
+                self.log.append_log_line(f"[INFO] Task {tid} restarted")
+        self.log.append_log_line(f"[INFO] Restart done: {ok}/{len(ids)}")
         
     def _on_task_reset(self, task_id):
         self._refresh_row_by_task_id(task_id)
@@ -1141,7 +903,7 @@ class ScraperTabController(QWidget):
         for r in rows:
             tid = self._task_id_by_row(r)
             if not tid:
-                self.append_log_line(f"[WARN] No task_id for row {r}")
+                self.log.append_log_line(f"[WARN] No task_id for row {r}")
                 continue
             out.append((r, tid))
         return out
@@ -1155,10 +917,10 @@ class ScraperTabController(QWidget):
                 started += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] start_selected({tid[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] start_selected({tid[:8]}): {e}")
         if skipped:
-            self.append_log_line(f"[WARN] Start selected: skipped {skipped} task(s)")
-        self.append_log_line(f"[INFO] Start selected: queued {started}, errors {errors}")
+            self.log.append_log_line(f"[WARN] Start selected: skipped {skipped} task(s)")
+        self.log.append_log_line(f"[INFO] Start selected: queued {started}, errors {errors}")
 
     def _stop_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
@@ -1174,8 +936,8 @@ class ScraperTabController(QWidget):
                     skipped += 1  # DONE/FAILED/STOPPED — останавливать нечего
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] stop_selected({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}")
+                self.log.append_log_line(f"[ERROR] stop_selected({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Stop selected: requested {stopped}, skipped {skipped}, errors {errors}")
 
     def _restart_selected(self, rows: list[int]):
         pairs = self._rows_to_task_ids(rows)
@@ -1194,8 +956,8 @@ class ScraperTabController(QWidget):
                 restarted += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] restart_selected({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Restart selected: {restarted} task(s), errors {errors}")
+                self.log.append_log_line(f"[ERROR] restart_selected({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Restart selected: {restarted} task(s), errors {errors}")
 
     def _duplicate_tasks(self, rows: list[int]):
         """Дублирование выделенных задач (название во мн. числе для читаемости)."""
@@ -1219,8 +981,8 @@ class ScraperTabController(QWidget):
                 ok += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] duplicate({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Duplicated: {ok}, errors {errors}")
+                self.log.append_log_line(f"[ERROR] duplicate({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Duplicated: {ok}, errors {errors}")
 
     def _remove_tasks(self, rows: list[int]):
         """Удаление задач из менеджера и таблицы. Гарантированно в обратном порядке строк."""
@@ -1239,7 +1001,7 @@ class ScraperTabController(QWidget):
                     removed += 1
                 except Exception as e:
                     errors += 1
-                    self.append_log_line(f"[ERROR] remove_task({tid[:8]}): {e}")
+                    self.log.append_log_line(f"[ERROR] remove_task({tid[:8]}): {e}")
 
             # Затем удалим строки из таблицы (по убыванию индексов)
             for r, _ in sorted(pairs, key=lambda x: x[0], reverse=True):
@@ -1247,11 +1009,11 @@ class ScraperTabController(QWidget):
                     table.removeRow(r)
                 except Exception as e:
                     errors += 1
-                    self.append_log_line(f"[ERROR] removeRow({r}): {e}")
+                    self.log.append_log_line(f"[ERROR] removeRow({r}): {e}")
         finally:
             table.setUpdatesEnabled(True)
 
-        self.append_log_line(f"[INFO] Removed rows: {removed}, errors {errors}")
+        self.log.append_log_line(f"[INFO] Removed rows: {removed}, errors {errors}")
 
 
     # ==============================
@@ -1339,7 +1101,7 @@ class ScraperTabController(QWidget):
         """
         tasks = self._tasks_for_mode(mode)
         if not tasks:
-            self.append_log_line(f"[WARN] Export: no tasks for mode '{mode}'")
+            self.log.append_log_line(f"[WARN] Export: no tasks for mode '{mode}'")
             return
 
         path, ext = self._ask_export_path(mode)
@@ -1364,10 +1126,10 @@ class ScraperTabController(QWidget):
                     exporter.export_tasks(tasks, filename=path, format=ext.lstrip("."))
                     used_builtin = True
         except Exception as e:
-            self.append_log_line(f"[WARN] Built‑in exporter error: {e}. Will fallback.")
+            self.log.append_log_line(f"[WARN] Built‑in exporter error: {e}. Will fallback.")
 
         if used_builtin:
-            self.append_log_line(f"[INFO] Exported ({mode}) → {path}")
+            self.log.append_log_line(f"[INFO] Exported ({mode}) → {path}")
             return
 
         # ---- Фолбэк: сбор записей ----
@@ -1384,7 +1146,7 @@ class ScraperTabController(QWidget):
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(records, f, ensure_ascii=False, indent=2)
             os.replace(tmp, path)  # атомарная запись
-            self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+            self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
             return
 
         # Запись XLSX (если openpyxl доступен), иначе — в CSV
@@ -1396,10 +1158,10 @@ class ScraperTabController(QWidget):
                 for rec in records:
                     ws.append([("" if rec.get(k) is None else str(rec.get(k))) for k in headers])
                 wb.save(path)
-                self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+                self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
                 return
             except Exception as e:
-                self.append_log_line(f"[WARN] XLSX export failed ({e}). Saving as CSV instead.")
+                self.log.append_log_line(f"[WARN] XLSX export failed ({e}). Saving as CSV instead.")
                 from pathlib import Path as _P
                 path = str(_P(path).with_suffix(".csv"))
                 ext = ".csv"
@@ -1414,7 +1176,7 @@ class ScraperTabController(QWidget):
             for rec in records:
                 w.writerow({k: ("" if rec.get(k) is None else str(rec.get(k))) for k in headers})
         os.replace(tmp, path)  # атомарная запись
-        self.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
+        self.log.append_log_line(f"[INFO] Exported ({mode}) {len(records)} rows → {path}")
 
     # ==============================
     #  Данные / буфер обмена / диалоги
@@ -1472,12 +1234,12 @@ class ScraperTabController(QWidget):
                 # self.set_status_cell(r, "PENDING")
         finally:
             table.setUpdatesEnabled(True)
-        self.append_log_line(f"[INFO] Cleared results for {cleared} task(s)")
+        self.log.append_log_line(f"[INFO] Cleared results for {cleared} task(s)")
 
     def _open_in_browser(self, row: int):
         url = self.get_url_from_row(row)
         if not url:
-            self.append_log_line("[WARN] Open in browser: empty URL")
+            self.log.append_log_line("[WARN] Open in browser: empty URL")
             return
         ok = QDesktopServices.openUrl(QUrl(url))
         if not ok:
@@ -1499,7 +1261,7 @@ class ScraperTabController(QWidget):
         """
         val = self._get_field_from_row(row, field)
         if not val:
-            self._log("WARN", f"Copy {field}: empty", "UI")
+            self.log._log("WARN", f"Copy {field}: empty", "UI")
             return
 
         text = str(val)
@@ -1512,7 +1274,7 @@ class ScraperTabController(QWidget):
         payload = self._get_result_payload(row)
         headers = (payload or {}).get("headers") or {}
         if not headers:
-            self._log("WARN", "No headers to copy", "UI")
+            self.log._log("WARN", "No headers to copy", "UI")
             return
 
         pretty_headers = self._pretty_json(headers)
@@ -1599,7 +1361,7 @@ class ScraperTabController(QWidget):
                     return data  # уже не JSON или не парсится — отдаём как есть
             return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False)
         except Exception as e:
-            self._log("WARN", f"pretty_json failed: {e}")
+            self.log._log("WARN", f"pretty_json failed: {e}")
             return str(data)
 
 
@@ -1656,7 +1418,7 @@ class ScraperTabController(QWidget):
             try:
                 jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
             except Exception as e:
-                self.append_log_line(f"[ERROR] Cookies reload({tid[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] Cookies reload({tid[:8]}): {e}")
                 continue
 
             # 2) положим в задачу (унифицированно используем httpx.Cookies)
@@ -1672,11 +1434,11 @@ class ScraperTabController(QWidget):
                     params["cookie_file"] = str(path)
                     setattr(task, "params", params)
 
-                self.append_log_line(f"[INFO] Cookies reloaded({tid[:8]}): {loaded} from {path}")
+                self.log.append_log_line(f"[INFO] Cookies reloaded({tid[:8]}): {loaded} from {path}")
             except Exception as e:
-                self.append_log_line(f"[ERROR] Cookies attach({tid[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] Cookies attach({tid[:8]}): {e}")
 
-        self.append_log_line(f"[INFO] Cookies reloaded for {reloaded} task(s), skipped {skipped}")
+        self.log.append_log_line(f"[INFO] Cookies reloaded for {reloaded} task(s), skipped {skipped}")
 
 
     def _clear_cookies(self, rows: list[int]):
@@ -1695,8 +1457,8 @@ class ScraperTabController(QWidget):
                 setattr(task, "cookies", httpx.Cookies())  # чистая банка
                 cleared += 1
             except Exception as e:
-                self.append_log_line(f"[ERROR] Cookies clear({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Cookies cleared for {cleared} task(s), skipped {skipped}")
+                self.log.append_log_line(f"[ERROR] Cookies clear({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Cookies cleared for {cleared} task(s), skipped {skipped}")
 
 
     def _view_cookies(self, row: int):
@@ -1713,7 +1475,7 @@ class ScraperTabController(QWidget):
         try:
             jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
         except Exception as e:
-            self._log("ERROR", f"Cookies view({(task_id or '')[:8]}): {e}", "UI")
+            self.log._log("ERROR", f"Cookies view({(task_id or '')[:8]}): {e}", "UI")
             QMessageBox.warning(self, "Cookies", f"Failed to load cookies:\n{e}")
             return
 
@@ -1726,7 +1488,7 @@ class ScraperTabController(QWidget):
             data = storage.jar_to_json(jar)
             pretty = self._pretty_json(data)
         except Exception as e:
-            self._log("WARN", f"jar_to_json failed: {e}", "UI")
+            self.log._log("WARN", f"jar_to_json failed: {e}", "UI")
             pretty = "Could not serialize cookies."
 
         title = f"Cookies — {loaded} item(s)"
@@ -1771,8 +1533,8 @@ class ScraperTabController(QWidget):
                     started += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] start_all({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Start all: queued {started} task(s), errors {errors}")
+                self.log.append_log_line(f"[ERROR] start_all({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Start all: queued {started} task(s), errors {errors}")
 
     def stop_all_tasks(self):
         """Кооперативно останавливает все RUNNING/PENDING задачи."""
@@ -1786,8 +1548,8 @@ class ScraperTabController(QWidget):
                     stopped += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] stop_all({tid[:8]}): {e}")
-        self.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s), errors {errors}")
+                self.log.append_log_line(f"[ERROR] stop_all({tid[:8]}): {e}")
+        self.log.append_log_line(f"[INFO] Stop all: requested stop for {stopped} task(s), errors {errors}")
 
     def restart_all_tasks(self):
         """
@@ -1811,9 +1573,9 @@ class ScraperTabController(QWidget):
                 restarted += 1
             except Exception as e:
                 errors += 1
-                self.append_log_line(f"[ERROR] restart_all({tid[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] restart_all({tid[:8]}): {e}")
 
-        self.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s), errors {errors}")
+        self.log.append_log_line(f"[INFO] Restart all: requested restart for {restarted} task(s), errors {errors}")
                     
     @Slot()
     def on_start_clicked(self):
@@ -1821,12 +1583,12 @@ class ScraperTabController(QWidget):
         sel = table.selectionModel()
 
         if not sel or not sel.hasSelection():
-            self.append_log_line("[WARN] No tasks selected")
+            self.log.append_log_line("[WARN] No tasks selected")
             return
 
         rows = sorted({idx.row() for idx in sel.selectedRows()})
         if not rows:
-            self.append_log_line("[WARN] No valid rows selected")
+            self.log.append_log_line("[WARN] No valid rows selected")
             return
 
         for row in rows:
@@ -1837,34 +1599,34 @@ class ScraperTabController(QWidget):
             if task_id:
                 try:
                     self.task_manager.start_task(task_id)
-                    self.append_log_line(f"[UI] Start task {task_id[:8]}")
+                    self.log.append_log_line(f"[UI] Start task {task_id[:8]}")
                 except Exception as e:
-                    self.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
+                    self.log.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
 
     @Slot()
     def on_stop_clicked(self):
-        self.append_log_line("[UI] Stop clicked")
+        self.log.append_log_line("[UI] Stop clicked")
         self.task_manager.stop_all()
         
     @Slot()
     def on_pause_clicked(self):  # ← добавлено
         ids = self._selected_task_ids()
         if not ids:
-            self.append_log_line("[WARN] No tasks selected")
+            self.log.append_log_line("[WARN] No tasks selected")
             return
         for tid in ids:
             self.task_manager.pause_task(tid)
-        self.append_log_line(f"[UI] Pause clicked → {len(ids)} task(s)")
+        self.log.append_log_line(f"[UI] Pause clicked → {len(ids)} task(s)")
 
     @Slot()
     def on_resume_clicked(self):  # ← добавлено
         ids = self._selected_task_ids()
         if not ids:
-            self.append_log_line("[WARN] No tasks selected")
+            self.log.append_log_line("[WARN] No tasks selected")
             return
         for tid in ids:
             self.task_manager.resume_task(tid)
-        self.append_log_line(f"[UI] Resume clicked → {len(ids)} task(s)")
+        self.log.append_log_line(f"[UI] Resume clicked → {len(ids)} task(s)")
 
     @Slot()
     def on_export_clicked(self):
@@ -1882,14 +1644,14 @@ class ScraperTabController(QWidget):
         if dlg.exec() == QDialog.Accepted and dlg.data:
             data = dlg.data
             self.add_task_row(data["url"], params=data)
-            self.append_log_line(f"[INFO] Added task → {data['url']}")
+            self.log.append_log_line(f"[INFO] Added task → {data['url']}")
 
     @Slot()
     def on_delete_clicked(self):
         table = self.ui.taskTable
         sel = table.selectionModel()
         if not sel or not sel.hasSelection():
-            self.append_log_line("[WARN] Select a row to delete")
+            self.log.append_log_line("[WARN] Select a row to delete")
             return
 
         rows = sorted({idx.row() for idx in sel.selectedRows()}, reverse=True)
@@ -1903,11 +1665,11 @@ class ScraperTabController(QWidget):
                 try:
                     self.task_manager.remove_task(task_id)
                 except Exception as e:
-                    self.append_log_line(f"[ERROR] remove_task({task_id[:8]}): {e}")
+                    self.log.append_log_line(f"[ERROR] remove_task({task_id[:8]}): {e}")
             table.removeRow(row)
 
         self._rebuild_row_index_map()
-        self.append_log_line(f"[INFO] Deleted {len(rows)} task(s)")
+        self.log.append_log_line(f"[INFO] Deleted {len(rows)} task(s)")
 
     # ---------- Пересборка индексов ----------
     def _rebuild_row_index_map(self):
@@ -1925,7 +1687,7 @@ class ScraperTabController(QWidget):
     @Slot(str, str, str)
     def on_task_log(self, task_id: str, level: str, text: str):
         # уровень идёт отдельным аргументом → используем его как фильтр
-        self.append_log(level, f"[{task_id[:8]}] {text}")
+        self.log.append_log(level, f"[{task_id[:8]}] {text}")
 
     @Slot(str, str)
     def on_task_status(self, task_id, status):
@@ -1950,7 +1712,7 @@ class ScraperTabController(QWidget):
 
         # Логи — короткий блок
         pretty = self._format_result_short(payload)
-        self.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
+        self.log.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
 
         row = self._find_row_by_task_id(task_id)
         if row < 0:
@@ -2042,13 +1804,13 @@ class ScraperTabController(QWidget):
             rec.setdefault("content_len", payload.get("content_len"))
             records.append(rec)
         # Диагностика в логи — увидишь сколько записей собрали
-        self.append_log_line(f"[DEBUG] DataPreview: collected {len(records)} record(s) from {len(list(rows)) if not isinstance(rows, range) else self.ui.taskTable.rowCount()} rows")
+        self.log.append_log_line(f"[DEBUG] DataPreview: collected {len(records)} record(s) from {len(list(rows)) if not isinstance(rows, range) else self.ui.taskTable.rowCount()} rows")
         return records
 
 
     @Slot(str, str)
     def on_task_error(self, task_id: str, error_str: str):
-        self.append_log_line(f"[ERROR][{task_id[:8]}] {error_str}")
+        self.log.append_log_line(f"[ERROR][{task_id[:8]}] {error_str}")
         
         
     #--------------- CTX ОБРАБОТЧИКИ -------------------#
@@ -2070,7 +1832,7 @@ class ScraperTabController(QWidget):
         full_url = tip.split("\n", 1)[0].strip()
         if full_url:
             QGuiApplication.clipboard().setText(full_url)
-            self.append_log_line("[INFO] URL copied to clipboard")
+            self.log.append_log_line("[INFO] URL copied to clipboard")
 
     def _ctx_open_result_folder(self, row: int):
         it = self.ui.taskTable.item(row, self._c("Results"))
@@ -2089,7 +1851,7 @@ class ScraperTabController(QWidget):
         if task and getattr(task, "result", None):
             headers = (task.result or {}).get("headers", {}) or {}
         if not headers:
-            self._log("WARN", "No headers available", "UI")
+            self.log._log("WARN", "No headers available", "UI")
             return
         text = "\n".join(f"{k}: {v}" for k, v in headers.items())
         self._copy_to_clipboard(text, "Headers")
@@ -2149,7 +1911,7 @@ class ScraperTabController(QWidget):
         # 🔁 Единая выборка задачи по строке (без приватных полей/магических индексов)
         task_id, task = self._get_task(row)
         if not task_id or not task:
-            self._log("WARN", f"No task found for row {row}", "UI")
+            self.log._log("WARN", f"No task found for row {row}", "UI")
             return
 
         current = dict(getattr(task, "params", {}) or {})
@@ -2188,7 +1950,7 @@ class ScraperTabController(QWidget):
                 if task is not None:
                     setattr(task, "params", params)
         except Exception as e:
-            self.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
+            self.log.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
             return
 
         # обновить ячейку Params (иконка ⚙ + tooltip)
@@ -2198,7 +1960,7 @@ class ScraperTabController(QWidget):
         except Exception:
             pass
 
-        self.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
+        self.log.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
 
         # Apply & Run → безопасный перезапуск
         if run:
@@ -2206,10 +1968,10 @@ class ScraperTabController(QWidget):
             if getattr(self.task_manager, "restart_task", None):
                 try:
                     self.task_manager.restart_task(task_id)
-                    self.append_log_line(f"[INFO] Task restarted with new params ({task_id[:8]})")
+                    self.log.append_log_line(f"[INFO] Task restarted with new params ({task_id[:8]})")
                     return
                 except Exception as e:
-                    self.append_log_line(f"[WARN] restart_task failed: {e}")
+                    self.log.append_log_line(f"[WARN] restart_task failed: {e}")
             # fallback: стоп (если бежит) → старт
             try:
                 self.task_manager.stop_task(task_id)
@@ -2217,6 +1979,6 @@ class ScraperTabController(QWidget):
                 pass
             try:
                 self.task_manager.start_task(task_id)
-                self.append_log_line(f"[INFO] Task started with new params ({task_id[:8]})")
+                self.log.append_log_line(f"[INFO] Task started with new params ({task_id[:8]})")
             except Exception as e:
-                self.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
+                self.log.append_log_line(f"[ERROR] start_task({task_id[:8]}): {e}")
