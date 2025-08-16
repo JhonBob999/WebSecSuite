@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
 from functools import partial
+from contextlib import contextmanager
 from copy import deepcopy
 import os, json, httpx, subprocess, re, io
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QRegularExpression, QPoint, QTimer, QDateTime
@@ -758,25 +759,59 @@ class ScraperTabController(QWidget):
             self.ui.logOutput.setTextCursor(cursor)
             self.ui.logOutput.ensureCursorVisible()
 
-    # Обратная совместимость: старые вызовы self.append_log_line("...") с префиксами
+    # --- Unified logger API -------------------------------------------------
+    def _log(self, level: str, msg: str, tag: str = "") -> None:
+        """
+        Единый логгер: формат [HH:MM:SS] [LEVEL][TAG] message
+        level: INFO|WARN|ERROR
+        tag:   опционально, например 'UI' или 'RESULT'
+        """
+        level = (level or "INFO").upper()
+        if level not in {"INFO", "WARN", "ERROR"}:
+            level = "INFO"
+        ts = QDateTime.currentDateTime().toString("HH:mm:ss")
+        tag_part = f"[{tag}]" if tag else ""
+        line = f"[{ts}] [{level}]{tag_part} {msg}"
+        # заполняем буфер и инкрементально печатаем, как в твоём append_log()
+        self.log_buffer.append((ts, level, f"{tag_part} {msg}".strip()))
+        if len(self.log_buffer) > self.MAX_LOG_LINES:
+            del self.log_buffer[:1000]
+        if hasattr(self.ui, "logOutput") and level in self.log_filter:
+            cursor = self.ui.logOutput.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertText(line + "\n")
+            self.ui.logOutput.setTextCursor(cursor)
+            self.ui.logOutput.ensureCursorVisible()
+
+    # Обновлённый шим совместимости
     def append_log_line(self, text: str) -> None:
-        """
-        Поддерживает текущие вызовы вида:
-          "[WARN] ..." / "[ERROR] ..." / "[INFO] ..." / "[UI] ..."
-        Извлекает уровень, остальное — как текст.
-        """
         raw = str(text or "")
         lvl = "INFO"
+        body = raw
         if raw.startswith("[WARN]"):
-            lvl, raw = "WARN", raw[6:].lstrip()
+            lvl, body = "WARN", raw[6:].lstrip()
         elif raw.startswith("[ERROR]"):
-            lvl, raw = "ERROR", raw[7:].lstrip()
+            lvl, body = "ERROR", raw[7:].lstrip()
         elif raw.startswith("[INFO]"):
-            lvl, raw = "INFO", raw[6:].lstrip()
-        else:
-            # special tags типа [UI], [RESULT] — оставим как INFO
-            pass
-        self.append_log(lvl, raw)
+            lvl, body = "INFO", raw[6:].lstrip()
+        # поддержка кастомных тэгов вроде [UI], [RESULT]
+        tag = ""
+        if body.startswith("[") and "]" in body[:16]:
+            tag = body[1:body.index("]")]
+            body = body[len(tag) + 2:].lstrip()
+        self._log(lvl, body, tag)
+        
+    # --- Clipboard utilities -------------------------------------------------
+    def _copy_to_clipboard(self, text: str, label: str = "") -> None:
+        """
+        Копирует text в буфер обмена и пишет единый лог.
+        """
+        try:
+            QGuiApplication.clipboard().setText(text or "")
+            self._log("INFO", f"Copied to clipboard {f'({label})' if label else ''}".strip(), "UI")
+        except Exception as e:
+            self._log("ERROR", f"Clipboard error: {e}", "UI")
+
 
     # ---------- Таблица и строки ----------
     def add_task_row(self, url: str, params: dict | None = None) -> None:
@@ -836,7 +871,7 @@ class ScraperTabController(QWidget):
             self.append_log_line("[WARN] No tasks selected")
             return
         for row in rows:
-            task_id = self._task_id_by_row(row)
+            task_id, _ = self._get_task(row)
             if not task_id:
                 continue
             try:
@@ -851,7 +886,7 @@ class ScraperTabController(QWidget):
             self.append_log_line("[WARN] No tasks selected")
             return
         for row in rows:
-            task_id = self._task_id_by_row(row)
+            task_id, _ = self._get_task(row)
             if task_id:
                 self.task_manager.stop_task(task_id)
         self.append_log_line(f"[UI] Stopped {len(rows)} task(s)")
@@ -1394,6 +1429,21 @@ class ScraperTabController(QWidget):
         if not task:
             return None, None
         return tid, task
+    
+    # --- Task lookup ---------------------------------------------------------
+    def _get_task(self, row: int):
+        """
+        Возвращает (task_id, task) для строки row.
+        Читает task_id из UserRole URL-ячейки. Task — через публичный API TaskManager.
+        """
+        it = self.ui.taskTable.item(row, self._c("URL"))
+        if not it:
+            return None, None
+        task_id = it.data(Qt.UserRole)
+        if not task_id:
+            return None, None
+        task = self.task_manager.get_task(task_id)
+        return task_id, task
 
     def _get_result_payload(self, row: int) -> dict:
         _, task = self._row_to_task(row)
@@ -1443,25 +1493,38 @@ class ScraperTabController(QWidget):
         return payload.get(field) or ""
 
     def _copy_from_row(self, row: int, field: str):
+        """
+        Копирует значение из строки таблицы по имени поля в буфер обмена.
+        Логирует результат с обрезкой длинного текста.
+        """
         val = self._get_field_from_row(row, field)
         if not val:
-            self.append_log_line(f"[WARN] Copy {field}: empty")
+            self._log("WARN", f"Copy {field}: empty", "UI")
             return
-        QGuiApplication.clipboard().setText(str(val))
+
+        text = str(val)
         # лог не раздуваем: показываем обрезку до 120 символов
-        shown = str(val)
-        if len(shown) > 120:
-            shown = shown[:117] + "..."
-        self.append_log_line(f"[INFO] Copied {field}: {shown}")
+        shown = text if len(text) <= 120 else text[:117] + "..."
+        self._copy_to_clipboard(text, f"{field}: {shown}")
+
 
     def _copy_headers(self, row: int):
         payload = self._get_result_payload(row)
-        hdrs = (payload or {}).get("headers") or {}
-        self._copy_text_block(hdrs)
+        headers = (payload or {}).get("headers") or {}
+        if not headers:
+            self._log("WARN", "No headers to copy", "UI")
+            return
+
+        pretty_headers = self._pretty_json(headers)
+        self._copy_to_clipboard(pretty_headers, "Headers")
 
     def _copy_text_block(self, data):
-        QGuiApplication.clipboard().setText(self._json_pretty(data))
-        # без избыточных логов — это вспомогательный метод
+        """
+        Копирует JSON-сериализованный блок в буфер обмена.
+        """
+        pretty = self._pretty_json(data)
+        self._copy_to_clipboard(pretty, "JSON block")
+
 
     def _view_headers_dialog(self, row: int):
         payload = self._get_result_payload(row)
@@ -1521,6 +1584,24 @@ class ScraperTabController(QWidget):
         )
 
         dlg.exec()
+        
+    # --- JSON pretty-print ---------------------------------------------------
+    def _pretty_json(self, data) -> str:
+        """
+        Преобразует dict/list/str в аккуратный JSON с utf-8.
+        Если data — строка, пытается распарсить; при ошибке возвращает исходную.
+        """
+        try:
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    return data  # уже не JSON или не парсится — отдаём как есть
+            return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=False)
+        except Exception as e:
+            self._log("WARN", f"pretty_json failed: {e}")
+            return str(data)
+
 
 
     # ==============================
@@ -1620,10 +1701,8 @@ class ScraperTabController(QWidget):
 
     def _view_cookies(self, row: int):
         """Показать cookies задачи (из файла, не из памяти) в удобном JSON."""
-        task_id = self._task_id_by_row(row)
-        if not task_id:
-            return
-        task = self.task_manager.get_task(task_id)
+        # ЕДИНЫЙ ДОСТУП К ЗАДАЧЕ
+        task_id, task = self._get_task(row)
         if not task:
             return
 
@@ -1634,7 +1713,7 @@ class ScraperTabController(QWidget):
         try:
             jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
         except Exception as e:
-            self.append_log_line(f"[ERROR] Cookies view({task_id[:8]}): {e}")
+            self._log("ERROR", f"Cookies view({(task_id or '')[:8]}): {e}", "UI")
             QMessageBox.warning(self, "Cookies", f"Failed to load cookies:\n{e}")
             return
 
@@ -1642,26 +1721,29 @@ class ScraperTabController(QWidget):
             QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path}")
             return
 
+        # ЕДИНЫЙ PRETTY-PRINT
         try:
             data = storage.jar_to_json(jar)
-            pretty = json.dumps(data, indent=4, ensure_ascii=False)
-        except Exception:
+            pretty = self._pretty_json(data)
+        except Exception as e:
+            self._log("WARN", f"jar_to_json failed: {e}", "UI")
             pretty = "Could not serialize cookies."
 
         title = f"Cookies — {loaded} item(s)"
-        text = f"Path: {path}\nLoaded: {loaded}\n\n{pretty}"
+        head = f"Path: {path}\nLoaded: {loaded}"
 
-        # Для больших наборов отдаём в detailedText, чтобы не подвешивать QMessageBox
+        # Для больших наборов — в detailedText, чтобы не подвесить QMessageBox
         dlg = QMessageBox(self)
         dlg.setWindowTitle(title)
         dlg.setIcon(QMessageBox.Information)
         dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        if len(text) > 4000:
-            dlg.setText(f"{title}\nPath: {path}\nLoaded: {loaded}\n\n(See details)")
+        if len(pretty) > 4000:
+            dlg.setText(f"{title}\n{head}\n\n(See details)")
             dlg.setDetailedText(pretty)
         else:
-            dlg.setText(text)
+            dlg.setText(f"{title}\n{head}\n\n{pretty}")
         dlg.exec()
+
 
         
     # --- ALL TASKS ACTIONS ---
@@ -2002,45 +2084,55 @@ class ScraperTabController(QWidget):
 
     def _ctx_copy_response_headers(self, row: int):
         # вытащим task_id → task → headers из последнего payload
-        task_id = self._task_id_by_row(row)
-        task = self.task_manager.get_task(task_id) if task_id else None
+        task_id, task = self._get_task(row)
         headers = {}
         if task and getattr(task, "result", None):
             headers = (task.result or {}).get("headers", {}) or {}
         if not headers:
-            self.append_log_line("[WARN] No headers available")
+            self._log("WARN", "No headers available", "UI")
             return
         text = "\n".join(f"{k}: {v}" for k, v in headers.items())
-        QGuiApplication.clipboard().setText(text)
-        self.append_log_line("[INFO] Headers copied to clipboard")
+        self._copy_to_clipboard(text, "Headers")
+
 
     def _ctx_view_headers_dialog(self, row: int):
-        task_id = self._task_id_by_row(row)
-        task = self.task_manager.get_task(task_id) if task_id else None
+        task_id, task = self._get_task(row)
         headers = {}
         if task and getattr(task, "result", None):
             headers = (task.result or {}).get("headers", {}) or {}
         if not headers:
             QMessageBox.information(self, "Headers", "No headers available")
             return
-        text = "\n".join(f"{k}: {v}" for k, v in headers.items())
-        QMessageBox.information(self, "Response Headers", text[:6000])  # простая заглушка
+
+        pretty = self._pretty_json(headers)
+        QMessageBox.information(self, "Response Headers", pretty[:6000])
+
 
     def _ctx_view_redirects_dialog(self, row: int):
-        task_id = self._task_id_by_row(row)
-        task = self.task_manager.get_task(task_id) if task_id else None
+        # унифицированный доступ к задаче
+        task_id, task = self._get_task(row)
+
         redirs = []
         if task and getattr(task, "result", None):
-            redirs = (task.result or {}).get("redirect_chain", []) or []
+            redirs = (task.result or {}).get("redirect_chain") or []
+
         if not redirs:
             QMessageBox.information(self, "Redirects", "No redirects")
             return
-        text = "\n".join(f"{h.get('status_code')} → {h.get('url')}" for h in redirs)
+
+        # аккуратно пронумеруем хопы
+        lines = []
+        for i, hop in enumerate(redirs, 1):
+            code = hop.get("status_code", "")
+            url = hop.get("url") or hop.get("location") or ""
+            lines.append(f"{i}. {code} → {url}")
+
+        text = "\n".join(lines)
         QMessageBox.information(self, "Redirect history", text[:6000])
 
+
     def _ctx_view_cookies_dialog(self, row: int):
-        task_id = self._task_id_by_row(row)
-        task = self.task_manager.get_task(task_id) if task_id else None
+        task_id, task = self._get_task(row)
         headers = {}
         if task and getattr(task, "result", None):
             headers = (task.result or {}).get("headers", {}) or {}
@@ -2052,9 +2144,14 @@ class ScraperTabController(QWidget):
         text = sc if isinstance(sc, str) else str(sc)
         QMessageBox.information(self, "Cookies", text[:6000])
 
+
     def _ctx_edit_params_dialog(self, row: int):
-        task_id = self._task_id_by_row(row)
-        task = self.task_manager.get_task(task_id) if task_id else None
+        # 🔁 Единая выборка задачи по строке (без приватных полей/магических индексов)
+        task_id, task = self._get_task(row)
+        if not task_id or not task:
+            self._log("WARN", f"No task found for row {row}", "UI")
+            return
+
         current = dict(getattr(task, "params", {}) or {})
         url = getattr(task, "url", "")
 
@@ -2062,13 +2159,16 @@ class ScraperTabController(QWidget):
 
         # Новый путь: если у диалога есть сигналы — пользуемся ими
         if hasattr(dlg, "applied"):
-            dlg.applied.connect(lambda params, r=row, tid=task_id: 
-                                self._on_params_applied_ctx(r, tid, params, run=False))
+            dlg.applied.connect(
+                lambda params, r=row, tid=task_id: self._on_params_applied_ctx(r, tid, params, run=False)
+            )
         if hasattr(dlg, "applied_and_run"):
-            dlg.applied_and_run.connect(lambda params, r=row, tid=task_id: 
-                                        self._on_params_applied_ctx(r, tid, params, run=True))
+            dlg.applied_and_run.connect(
+                lambda params, r=row, tid=task_id: self._on_params_applied_ctx(r, tid, params, run=True)
+            )
 
         result = dlg.exec()
+
 
         # Fallback-режим: если сигналов нет (или не сработали), но диалог закрыт по OK — читаем data
         if result == QDialog.Accepted:
