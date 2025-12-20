@@ -10,7 +10,7 @@ import time
 from http.cookiejar import Cookie, CookieJar
 
 from core.cookies.storage import (
-    load_cookiejar, save_cookiejar, derive_domain_from_url, file_for_domain
+    load_cookiejar, save_cookiejar, resolve_cookie_path
 )
 
 class CookieEditDialog(QDialog):
@@ -175,7 +175,7 @@ class CookiesTab(QWidget):
     def _mode_changed(self):
         if self.rb_auto.isChecked():
             self.cookie_path_edit.setReadOnly(True)
-            auto_path = str(file_for_domain(derive_domain_from_url(self.task_url)))
+            auto_path = str(resolve_cookie_path(self.task_url))
             self.cookie_path_edit.setText(auto_path)
         elif self.rb_custom.isChecked():
             self.cookie_path_edit.setReadOnly(False)
@@ -198,7 +198,7 @@ class CookiesTab(QWidget):
         if self.rb_none.isChecked():
             self._current_path = None
         elif cookie_file:
-            self._current_path = Path(cookie_file)
+            self._current_path = Path(cookie_file).expanduser().resolve()
         else:
             self._current_path = None
 
@@ -207,7 +207,7 @@ class CookiesTab(QWidget):
             return
         cookie_file = self.cookie_path_edit.text().strip()
         if not cookie_file and self.rb_auto.isChecked():
-            cookie_file = str(file_for_domain(derive_domain_from_url(self.task_url)))
+            cookie_file = str(resolve_cookie_path(self.task_url))
             self.cookie_path_edit.setText(cookie_file)
 
         jar, path, loaded = load_cookiejar(url=self.task_url, cookie_file=cookie_file)

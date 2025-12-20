@@ -456,6 +456,11 @@ class ScraperTabController(QWidget):
     def on_task_cell_double_clicked(self, row: int, col: int):
         table = self.ui.taskTable
         try:
+            header_item = table.horizontalHeaderItem(col)
+            col_name = header_item.text().strip() if header_item else ""
+            col_name_lower = col_name.lower()
+            self.log.append_log_line(f"[UI][DBLCLICK] row={row} col={col} header='{col_name}'")
+
             if col == Col.URL:
                 url_item = table.item(row, Col.URL)
                 if not url_item:
@@ -483,8 +488,18 @@ class ScraperTabController(QWidget):
                         QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
                 return
 
-            if col == Col.Params:
-                self._ctx_edit_params_dialog(row)
+            if "params" in col_name_lower:
+                task_id, _ = self._get_task(row)
+                if task_id:
+                    initial_tab = "Basic"
+                    self.open_params_dialog(task_id, initial_tab)
+                return
+            
+            if "cookies" in col_name_lower:
+                task_id, _ = self._get_task(row)
+                if task_id:
+                    initial_tab = "Cookies"
+                    self.open_params_dialog(task_id, initial_tab)
                 return
 
         except Exception as e:
@@ -661,6 +676,18 @@ class ScraperTabController(QWidget):
     def delete_selected_tasks(self):
         self.on_delete_clicked()
         
+    def _redirect_count_from_payload(self, payload: dict) -> int:
+        redirects = payload.get("redirects")
+        if isinstance(redirects, int):
+            return redirects
+        raw_chain = (payload.get("_raw_result") or {}).get("redirect_chain")
+        if isinstance(raw_chain, (list, tuple)):
+            return len(raw_chain)
+        chain = payload.get("redirect_chain")
+        if isinstance(chain, (list, tuple)):
+            return len(chain)
+        return 0
+
     def _format_result_short(self, payload: dict) -> str:
         # URL, код, заголовок
         url = payload.get("final_url") or payload.get("url", "") or ""
@@ -683,8 +710,7 @@ class ScraperTabController(QWidget):
             t_req = None
 
         # редиректы
-        redirects = payload.get("redirect_chain", []) or []
-        redirect_count = len(redirects)
+        redirect_count = self._redirect_count_from_payload(payload)
 
         # заголовки
         headers = payload.get("headers", {}) or {}
@@ -697,11 +723,11 @@ class ScraperTabController(QWidget):
 
         size_line = f"{size_bytes} bytes" if size_bytes is not None else "(unknown)"
         time_line = f"{t_req} ms" if t_req is not None else "(unknown)"
-        redirect_line = f"{redirect_count} redirect(s)" if redirect_count else "No redirects"
+        redirect_line = f"r={redirect_count}"
 
         lines = [
             f"  URL: {url}",
-            f"  Status: {code}",
+            f"  Status: {code} ({redirect_line})",
             f"  Title: {title}" if title else "  Title: (none)",
             f"  Size: {size_line}",
             f"  Time: request {time_line}",
@@ -1242,6 +1268,11 @@ class ScraperTabController(QWidget):
         self._show_json_dialog(title, chain)
 
     def _show_json_dialog(self, title: str, data):
+        title_text = str(title) if title is not None else "Details"
+        if data is None or data == "" or data == {} or data == []:
+            QMessageBox.information(self, title_text, "No data")
+            return
+
         # 1) Нормализация -> pretty string
         pretty = ""
         try:
@@ -1267,7 +1298,7 @@ class ScraperTabController(QWidget):
 
         # 2) Диалог
         dlg = QMessageBox(self)
-        dlg.setWindowTitle(title)
+        dlg.setWindowTitle(title_text)
         dlg.setIcon(QMessageBox.Information)
 
         # Моноширинный шрифт
@@ -1277,7 +1308,7 @@ class ScraperTabController(QWidget):
 
         # 3) Если текст очень длинный — уводим в Details (скролл)
         if len(pretty) > 4000:
-            dlg.setText(f"{title}: content is large — see details below.")
+            dlg.setText(f"{title_text}: content is large — see details below.")
             dlg.setDetailedText(pretty)
         else:
             dlg.setText(pretty)
@@ -1415,14 +1446,16 @@ class ScraperTabController(QWidget):
         cookie_file = params.get("cookie_file")
 
         try:
+            if not cookie_file:
+                cookie_file = str(storage.resolve_cookie_path(url))
             jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
         except Exception as e:
             self.log._log("ERROR", f"Cookies view({(task_id or '')[:8]}): {e}", "UI")
             QMessageBox.warning(self, "Cookies", f"Failed to load cookies:\n{e}")
             return
 
-        if loaded == 0:
-            QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path}")
+        if not path.exists() or loaded == 0:
+            QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path.resolve()}")
             return
 
         # ЕДИНЫЙ PRETTY-PRINT
@@ -1434,7 +1467,7 @@ class ScraperTabController(QWidget):
             pretty = "Could not serialize cookies."
 
         title = f"Cookies — {loaded} item(s)"
-        head = f"Path: {path}\nLoaded: {loaded}"
+        head = f"Path: {path.resolve()}\nLoaded: {loaded}"
 
         # Для больших наборов — в detailedText, чтобы не подвесить QMessageBox
         dlg = QMessageBox(self)
@@ -1479,45 +1512,37 @@ class ScraperTabController(QWidget):
             
     # --- Диалог: показать cookies для выбранных задач ---
     def show_task_cookies_dialog(self, task_ids: list[str]):
-        import json, os
-        from urllib.parse import urlparse
+        import json
         from PySide6.QtWidgets import QMessageBox
-        # если у тебя модуль хранения cookies в другом месте — поправь импорт:
-        try:
-            from core.cookies.storage import load_cookiejar_as_json
-        except Exception:
-            load_cookiejar_as_json = None
 
         for tid in task_ids:
             task = self.task_manager.get_task(tid)
             if not task:
                 continue
 
-            # путь к cookie-файлу: 1) из params.cookie_file 2) auto by domain
             params = dict(getattr(task, "params", {}) or {})
-            cookie_path = params.get("cookie_file")
-            if not cookie_path:
-                url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
-                dom = urlparse(url).hostname or "unknown"
-                cookie_path = os.path.join("data", "cookies", f"cookies_{dom}.json")
+            url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
+            cookie_path = params.get("cookie_file") or str(storage.resolve_cookie_path(url))
 
-            data = None
-            if load_cookiejar_as_json and os.path.exists(cookie_path):
-                try:
-                    data = load_cookiejar_as_json(cookie_path)  # возвращает list[dict] или dict
-                except Exception as e:
-                    self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
+            try:
+                jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_path)
+                data = storage.jar_to_json(jar)
+            except Exception as e:
+                self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
+                data = None
+                path = storage.resolve_cookie_path(url)
+                loaded = 0
 
             msg = QMessageBox(self)
             msg.setWindowTitle(f"Cookies — {tid[:8]}")
-            if data:
+            if not path.exists() or loaded == 0 or not data:
+                msg.setText(f"No cookies found\n{path.resolve()}")
+                msg.setIcon(QMessageBox.Warning)
+            else:
                 pretty = json.dumps(data, ensure_ascii=False, indent=2)
-                msg.setText(f"Cookies file: {cookie_path}")
+                msg.setText(f"Cookies file: {path.resolve()}")
                 msg.setDetailedText(pretty)
                 msg.setIcon(QMessageBox.Information)
-            else:
-                msg.setText(f"No cookies found\n{cookie_path}")
-                msg.setIcon(QMessageBox.Warning)
             msg.exec()
 
 
@@ -1760,10 +1785,11 @@ class ScraperTabController(QWidget):
         self.set_time_cell(row, timings.get("request_ms"))
 
         # Подсказка по редиректам в статусе
-        redirects = payload.get("redirect_chain", []) or []
+        redirect_count = self._redirect_count_from_payload(payload)
+        self.log.append_log_line(f"[DEBUG] redirects={redirect_count} task_id={task_id}")
         st_item = self.ui.taskTable.item(row, Col.Status)
         if st_item:
-            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
+            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {redirect_count}")
 
         # 3) Cookies по заголовку Set-Cookie
         headers = payload.get("headers", {}) or {}
@@ -1777,11 +1803,14 @@ class ScraperTabController(QWidget):
         # краткое резюме в ячейку
         summary = self._format_result_short(payload)   # уже есть у тебя
         # красивый JSON в tooltip (если нет хелпера, можно через json.dumps)
+        tooltip_payload = dict(payload)
+        if "redirects" not in tooltip_payload:
+            tooltip_payload["redirects"] = redirect_count
         try:
             import json
-            tooltip = json.dumps(payload, ensure_ascii=False, indent=2)
+            tooltip = json.dumps(tooltip_payload, ensure_ascii=False, indent=2)
         except Exception:
-            tooltip = str(payload)
+            tooltip = str(tooltip_payload)
 
         self.set_results_cell(row, summary, tooltip)
 
@@ -1802,10 +1831,9 @@ class ScraperTabController(QWidget):
 
             rec = deepcopy(payload)
             t = (payload.get("timings") or {})
-            rc = payload.get("redirect_chain") or []
             rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
             rec["request_ms"] = t.get("request_ms")
-            rec["redirects"] = len(rc)
+            rec["redirects"] = rec.get("redirects", self._redirect_count_from_payload(payload))
             rec.setdefault("status_code", payload.get("status_code"))
             rec.setdefault("title", payload.get("title"))
             rec.setdefault("content_len", payload.get("content_len"))
@@ -1921,11 +1949,23 @@ class ScraperTabController(QWidget):
         if not task_id or not task:
             self.log._log("WARN", f"No task found for row {row}", "UI")
             return
+        self.open_params_dialog(task_id, "Basic")
+
+    def open_params_dialog(self, task_id: str, initial_tab: str) -> None:
+        row = self._find_row_by_task_id(task_id)
+        if row < 0:
+            self.log._log("WARN", f"No row found for task {task_id}", "UI")
+            return
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            self.log._log("WARN", f"No task found for id {task_id}", "UI")
+            return
 
         current = dict(getattr(task, "params", {}) or {})
         url = getattr(task, "url", "")
 
         dlg = ParamsDialog(self, initial=current, task_url=url)
+        self._select_params_dialog_tab(dlg, initial_tab)
 
         # Новый путь: если у диалога есть сигналы — пользуемся ими
         if hasattr(dlg, "applied"):
@@ -1948,6 +1988,18 @@ class ScraperTabController(QWidget):
             if new_params:
                 self._on_params_applied_ctx(row, task_id, new_params, run=False)
 
+    def _select_params_dialog_tab(self, dlg: ParamsDialog, initial_tab: str) -> None:
+        name = (initial_tab or "").strip().lower()
+        if not name:
+            return
+        try:
+            for i in range(dlg.tabs.count()):
+                if dlg.tabs.tabText(i).strip().lower() == name:
+                    dlg.tabs.setCurrentIndex(i)
+                    return
+        except Exception:
+            return
+
     def _on_params_applied_ctx(self, row: int, task_id: str, params: dict, run: bool):
         # сохранить параметры в задачу
         try:
@@ -1964,7 +2016,7 @@ class ScraperTabController(QWidget):
         # обновить ячейку Params (иконка ⚙ + tooltip)
         light = {k: params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if params.get(k)}
         try:
-            self.set_params_cell(row, bool(light), str(light) if light else "")
+            self.set_params_cell(row, str(light) if light else "")
         except Exception:
             pass
 

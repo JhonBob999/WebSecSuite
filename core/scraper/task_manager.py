@@ -10,6 +10,7 @@ import uuid
 from PySide6.QtCore import QObject, Signal, QThreadPool
 
 from .task_types import ScrapeTask, TaskStatus
+from .request_params import normalize_params
 from .runnables import WorkerSignals, ScraperRunnable
 
 
@@ -45,7 +46,7 @@ class TaskManager(QObject):
 
     # === SECTION === CRUD
     def create_task(self, url: str, params: Optional[dict] = None) -> str:
-        task = ScrapeTask.new(url, params)
+        task = ScrapeTask.new(url, normalize_params(params))
         self._tasks[task.id] = task
         return task.id
 
@@ -59,7 +60,12 @@ class TaskManager(QObject):
         task = self._tasks.get(task_id)
         if not task:
             return False
-        task.params = dict(params or {})
+        normalized = normalize_params(params)
+        task.params = normalized
+        try:
+            task.apply_params(normalized)
+        except Exception:
+            pass
         return True
 
     def remove_task(self, task_id: str) -> bool:

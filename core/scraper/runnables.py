@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar
+from core.scraper.request_params import normalize_params
 
 
 # === SECTION === Signals
@@ -106,6 +107,13 @@ class ScraperRunnable(QRunnable):
     def run(self) -> None:
         tid = getattr(self.task, "id", "")
         url = getattr(self.task, "url", "")
+        normalized_params = normalize_params(getattr(self.task, "params", None))
+        try:
+            self.task.params = normalized_params
+            if hasattr(self.task, "apply_params"):
+                self.task.apply_params(normalized_params)
+        except Exception:
+            pass
         method = (getattr(self.task, "method", None) or "GET").upper()
         headers = getattr(self.task, "headers", None) or {}
         proxy = getattr(self.task, "proxy", None) or None

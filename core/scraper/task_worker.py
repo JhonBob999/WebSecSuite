@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal, QThreadPool
 
 from .task_types import ScrapeTask, TaskStatus
 from .runnables import ScraperRunnable, WorkerSignals
+from .request_params import normalize_params
 
 
 # === SECTION === Adapter: TaskWorker → ScraperRunnable
@@ -47,6 +48,13 @@ class TaskWorker(QObject):
         if self._runnable is not None:
             # Уже запущен — игнорируем повторный старт
             return
+        try:
+            normalized = normalize_params(getattr(self.task, "params", None))
+            self.task.params = normalized
+            if hasattr(self.task, "apply_params"):
+                self.task.apply_params(normalized)
+        except Exception:
+            pass
 
         # Готовим сигналы и раннабл (в точности как в TaskManager)
         signals = WorkerSignals()
