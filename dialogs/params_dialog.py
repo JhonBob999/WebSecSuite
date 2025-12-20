@@ -182,10 +182,12 @@ class ParamsDialog(QDialog):
 
     def _on_ua_preset_changed(self, name: str) -> None:
         if name == "Custom":
+            self.user_agent.setReadOnly(False)
+            self.user_agent.setCursorPosition(len(self.user_agent.text()))
             return
         ua = self.ua_map.get(name, "")
         self.user_agent.setText(ua or DEFAULT_UA)
-        self.user_agent.setCursorPosition(len(self.user_agent.text()))
+        self.user_agent.setReadOnly(True)
 
     def _select_preset_for_initial(self, current_ua: str) -> None:
         """
@@ -197,8 +199,10 @@ class ParamsDialog(QDialog):
             name = self.ua_preset.itemText(i)
             if self.ua_map.get(name, "").strip() == current:
                 self.ua_preset.setCurrentIndex(i)
+                self.user_agent.setReadOnly(True)
                 return
         self.ua_preset.setCurrentIndex(0)  # Custom
+        self.user_agent.setReadOnly(False)
 
     # ---------- ВАЛИДАЦИЯ И СБОР ДАННЫХ ----------
     def _parse_headers(self, text: str) -> Dict[str, str]:
