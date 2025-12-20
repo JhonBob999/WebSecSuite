@@ -1446,14 +1446,16 @@ class ScraperTabController(QWidget):
         cookie_file = params.get("cookie_file")
 
         try:
+            if not cookie_file:
+                cookie_file = str(storage.resolve_cookie_path(url))
             jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
         except Exception as e:
             self.log._log("ERROR", f"Cookies view({(task_id or '')[:8]}): {e}", "UI")
             QMessageBox.warning(self, "Cookies", f"Failed to load cookies:\n{e}")
             return
 
-        if loaded == 0:
-            QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path}")
+        if not path.exists() or loaded == 0:
+            QMessageBox.information(self, "Cookies", f"No cookies found.\nPath: {path.resolve()}")
             return
 
         # ЕДИНЫЙ PRETTY-PRINT
@@ -1465,7 +1467,7 @@ class ScraperTabController(QWidget):
             pretty = "Could not serialize cookies."
 
         title = f"Cookies — {loaded} item(s)"
-        head = f"Path: {path}\nLoaded: {loaded}"
+        head = f"Path: {path.resolve()}\nLoaded: {loaded}"
 
         # Для больших наборов — в detailedText, чтобы не подвесить QMessageBox
         dlg = QMessageBox(self)
@@ -1510,45 +1512,37 @@ class ScraperTabController(QWidget):
             
     # --- Диалог: показать cookies для выбранных задач ---
     def show_task_cookies_dialog(self, task_ids: list[str]):
-        import json, os
-        from urllib.parse import urlparse
+        import json
         from PySide6.QtWidgets import QMessageBox
-        # если у тебя модуль хранения cookies в другом месте — поправь импорт:
-        try:
-            from core.cookies.storage import load_cookiejar_as_json
-        except Exception:
-            load_cookiejar_as_json = None
 
         for tid in task_ids:
             task = self.task_manager.get_task(tid)
             if not task:
                 continue
 
-            # путь к cookie-файлу: 1) из params.cookie_file 2) auto by domain
             params = dict(getattr(task, "params", {}) or {})
-            cookie_path = params.get("cookie_file")
-            if not cookie_path:
-                url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
-                dom = urlparse(url).hostname or "unknown"
-                cookie_path = os.path.join("data", "cookies", f"cookies_{dom}.json")
+            url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
+            cookie_path = params.get("cookie_file") or str(storage.resolve_cookie_path(url))
 
-            data = None
-            if load_cookiejar_as_json and os.path.exists(cookie_path):
-                try:
-                    data = load_cookiejar_as_json(cookie_path)  # возвращает list[dict] или dict
-                except Exception as e:
-                    self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
+            try:
+                jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_path)
+                data = storage.jar_to_json(jar)
+            except Exception as e:
+                self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
+                data = None
+                path = storage.resolve_cookie_path(url)
+                loaded = 0
 
             msg = QMessageBox(self)
             msg.setWindowTitle(f"Cookies — {tid[:8]}")
-            if data:
+            if not path.exists() or loaded == 0 or not data:
+                msg.setText(f"No cookies found\n{path.resolve()}")
+                msg.setIcon(QMessageBox.Warning)
+            else:
                 pretty = json.dumps(data, ensure_ascii=False, indent=2)
-                msg.setText(f"Cookies file: {cookie_path}")
+                msg.setText(f"Cookies file: {path.resolve()}")
                 msg.setDetailedText(pretty)
                 msg.setIcon(QMessageBox.Information)
-            else:
-                msg.setText(f"No cookies found\n{cookie_path}")
-                msg.setIcon(QMessageBox.Warning)
             msg.exec()
 
 
