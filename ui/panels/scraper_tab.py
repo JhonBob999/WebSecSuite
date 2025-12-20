@@ -23,6 +23,7 @@ from core.cookies import storage
 from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
+from core.ops import discover_urls_op
 
 # --- палитра ---
 CLR_STATUS = {
@@ -84,7 +85,7 @@ class ScraperTabController(QWidget):
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
 
         # Хранилище результатов задач для предпросмотра
-        self.task_results: dict[int, dict] = {}
+        self.task_results: dict[str, dict] = {}
 
 
         # ---- ТАБЛИЦА: единое имя контроллера self.table_ctl ----
@@ -244,6 +245,87 @@ class ScraperTabController(QWidget):
 
 
         
+    def discover_urls_for_selected(self):
+        rows = self._selected_rows()
+        if not rows:
+            self.log.append_log_line("[WARN] No tasks selected")
+            return
+
+        for row in rows:
+            tid = self._task_id_by_row(row)
+            if not tid:
+                continue
+            self._discover_urls_for_task(tid)
+
+    def _discover_urls_for_task(self, task_id: str):
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            self.log.append_log_line(f"[WARN] Discover URLs: task not found ({task_id[:8]})")
+            return
+
+        ctx = self._build_discovery_ctx(task)
+
+        try:
+            result = discover_urls_op.run(ctx)
+        except Exception as e:
+            self.log.append_log_line(f"[ERROR] Discover URLs failed ({task_id[:8]}): {e}")
+            return
+
+        if not isinstance(result, dict):
+            self.log.append_log_line(f"[ERROR] Discover URLs returned unexpected result for {task_id[:8]}")
+            return
+
+        if result.get("error"):
+            self.log.append_log_line(f"[ERROR] Discover URLs ({task_id[:8]}): {result.get('error')}")
+            return
+
+        merged = deepcopy(self.task_results.get(task_id) or {})
+        merged["discovery"] = result
+        self.task_results[task_id] = merged
+
+        if hasattr(task, "result"):
+            try:
+                payload = dict(getattr(task, "result") or {})
+                payload["discovery"] = result
+                task.result = payload
+            except Exception:
+                pass
+
+        urls_section = result.get("urls") if isinstance(result.get("urls"), dict) else {}
+        stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+        internal = stats.get("internal", len(urls_section.get("internal", []) if isinstance(urls_section, dict) else []))
+        external = stats.get("external", len(urls_section.get("external", []) if isinstance(urls_section, dict) else []))
+        params_cnt = stats.get(
+            "with_params",
+            len(result.get("query_params", {}) if isinstance(result.get("query_params"), dict) else {}),
+        )
+
+        self.log.append_log_line(
+            f"[INFO] Discover URLs ({task_id[:8]}): internal={internal}, external={external}, params={params_cnt}"
+        )
+
+    def _build_discovery_ctx(self, task) -> dict:
+        ctx: dict[str, object] = {}
+        url_val = getattr(task, "url", "") or ""
+        final_url = getattr(task, "final_url", "") or ""
+        params = dict(getattr(task, "params", {}) or {})
+        result = getattr(task, "result", None)
+
+        if url_val:
+            ctx["url"] = url_val
+        if final_url:
+            ctx["final_url"] = final_url
+        if params:
+            ctx["params"] = params
+        if isinstance(result, dict):
+            ctx["result"] = result
+            html = result.get("html") or result.get("body")
+            if html:
+                ctx["html"] = html
+            if not ctx.get("final_url"):
+                ctx["final_url"] = result.get("final_url") or result.get("url") or ""
+        return ctx
+
     def _col_index(self, name: str) -> int:
         """Временный адаптер, чтобы старый код не падал, пока переписываем на Col.*"""
         # если в карте нет — вернём значение из enum (по умолчанию)
@@ -371,7 +453,7 @@ class ScraperTabController(QWidget):
     def _find_row_by_task_id(self, task_id: str) -> int:
         return self.table_ctl.row_by_task_id(task_id)
 
-    def _selected_rows(self, *, require_task_id: bool = False, log: bool = True) -> list[int]:
+    def _selected_rows(self, require_task_id: bool = False, log: bool = True):
         """
         Возвращает уникальные выбранные строки таблицы (отсортированные).
         require_task_id=True — отфильтровать строки без task_id.
@@ -1005,12 +1087,13 @@ class ScraperTabController(QWidget):
                     self.log.append("[ERROR]", f"remove_task({tid[:8]}): {e}")
 
             # 2) Удаляем строки из таблицы (по убыванию индексов)
-            for r, _ in sorted(pairs, key=lambda x: x[0], reverse=True):
+            for r, tid in sorted(pairs, key=lambda x: x[0], reverse=True):
                 try:
                     table.removeRow(r)
                     # подчистим локальный снапшот предпросмотра, если используешь
                     if hasattr(self, "task_results") and isinstance(self.task_results, dict):
-                        self.task_results.pop(r, None)
+                        key = tid if tid else r
+                        self.task_results.pop(key, None)
                 except Exception as e:
                     errors += 1
                     self.log.append("[ERROR]", f"removeRow({r}): {e}")
@@ -1748,11 +1831,17 @@ class ScraperTabController(QWidget):
         pretty = self._format_result_short(payload)
         self.log.append_log_line(f"[RESULT][{task_id[:8]}]\n{pretty}")
 
+        merged_payload = deepcopy(payload)
+        if task_id in self.task_results:
+            prev = deepcopy(self.task_results.get(task_id) or {})
+            prev.update(merged_payload)
+            merged_payload = prev
+        self.task_results[task_id] = merged_payload
+
         row = self._find_row_by_task_id(task_id)
         if row < 0:
             return
-        self.task_results[row] = deepcopy(payload)
-        
+
         task = self.task_manager.get_task(task_id)
 
         url_val = payload.get("final_url") or payload.get("url") or ""
@@ -1795,12 +1884,16 @@ class ScraperTabController(QWidget):
         records: list[dict] = []
         for row in rows:
             # 1) payload из on_task_result (то, что мы сохраняем для Preview)
-            payload = (self.task_results.get(row) if hasattr(self, "task_results") else None)
+            tid = self._task_id_by_row(row) if hasattr(self, "_task_id_by_row") else None
+            payload = (self.task_results.get(tid) if tid and hasattr(self, "task_results") else None)
 
             # 2) фолбэк — из объекта задачи (если воркер писал self.task.result)
             if not payload:
                 task = self._row_to_task(row) if hasattr(self, "_row_to_task") else None
                 payload = getattr(task, "result", None) if task else None
+
+            if payload and tid and hasattr(self, "task_results"):
+                self.task_results.setdefault(tid, deepcopy(payload))
 
             if not payload:
                 continue

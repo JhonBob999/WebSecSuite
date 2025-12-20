@@ -1,6 +1,7 @@
 # dialogs/data_preview_dialog.py
 from __future__ import annotations
 import json, os
+from copy import deepcopy
 from ui import export_bridge as xb
 from typing import Callable, Iterable
 from PySide6.QtWidgets import QDialog, QTableWidgetItem, QFileDialog, QMessageBox
@@ -36,14 +37,9 @@ class DataPreviewDialog(QDialog):
 
     # ---- публичный API ----
     def set_records(self, records: list[dict]):
-        self._snapshot = list(records or [])
-        try:
-            self._rebuild_table(self._snapshot)
-        except TypeError:
-            self._rebuild_table()
-
-
-
+        self._records = deepcopy(records or [])
+        self._snapshot = deepcopy(self._records)
+        self._rebuild_table(self._snapshot)
 
     # ---- внутренняя логика ----
     def _all_keys(self) -> list[str]:
@@ -55,51 +51,82 @@ class DataPreviewDialog(QDialog):
         return [c for c in preferred if c in keys] + rest
 
     def _rebuild_table(self, records: list[dict] | None = None):
-        """Перерисовать tablePreview по снапшоту/records."""
+        """Перерисовать tablePreview по снапшоту/records (стабильно, без "плывущих" колонок)."""
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
 
-        # чистим
+        def _norm_key(k) -> str:
+            if k is None:
+                return "__none__"
+            s = str(k).replace("\ufeff", "").strip()  # убираем BOM/пробелы
+            return s if s else "__empty__"
+
+        # 1) Нормализуем записи: ключи -> нормальные строки, убираем пустые/кривые
+        norm_records: list[dict] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                rec = {"value": rec}
+            nr = {}
+            for k, v in rec.items():
+                nk = _norm_key(k)
+                if nk in nr:
+                    i = 2
+                    while f"{nk}#{i}" in nr:
+                        i += 1
+                    nk = f"{nk}#{i}"
+                nr[nk] = v
+            norm_records.append(nr)
+
+        records = norm_records
+
+        # 2) Reset таблицы (жёстко)
         t.setSortingEnabled(False)
+        t.setUpdatesEnabled(False)
         t.clear()
         t.setRowCount(0)
         t.setColumnCount(0)
 
         if not records:
+            t.setUpdatesEnabled(True)
+            t.setSortingEnabled(True)
             return
 
-        # объединяем ключи по всем записям (стабильный порядок)
-        keys_order = []
-        seen = set()
-        # сначала возьмём порядок по первой записи
-        for k in records[0].keys():
-            keys_order.append(k); seen.add(k)
-        # затем добавим недостающие из остальных
-        for rec in records[1:]:
-            for k in rec.keys():
-                if k not in seen:
-                    keys_order.append(k); seen.add(k)
+        # 3) Стабильный порядок колонок: preferred -> остальные
+        keys = set()
+        for r in records:
+            keys.update(r.keys())
+
+        preferred = ["final_url", "status_code", "title", "content_len", "request_ms", "redirects"]
+        rest = sorted(k for k in keys if k not in preferred)
+        keys_order = [k for k in preferred if k in keys] + rest
 
         t.setColumnCount(len(keys_order))
         t.setHorizontalHeaderLabels(keys_order)
 
-        # заполняем
-        for r, rec in enumerate(records):
-            t.insertRow(r)
-            for c, k in enumerate(keys_order):
-                val = rec.get(k, "")
-                if isinstance(val, (dict, list, tuple)):
-                    val = str(val)
-                elif val is None:
-                    val = ""
-                item = QTableWidgetItem(str(val))
-                # удобные тултипы для длинных значений
-                if len(str(val)) > 80:
-                    item.setToolTip(str(val))
-                t.setItem(r, c, item)
+        # 4) Заполнение
+        t.setRowCount(len(records))
+        for row, rec in enumerate(records):
+            for col, key in enumerate(keys_order):
+                val = rec.get(key, "")
+
+                # вложенные структуры -> компактный текст + красивый tooltip
+                text, pretty = self._to_cell(val)
+                item = QTableWidgetItem(text)
+                if pretty:
+                    item.setToolTip(pretty)
+                elif len(text) > 80:
+                    item.setToolTip(text)
+
+                if isinstance(val, (int, float)):
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+                t.setItem(row, col, item)
 
         t.resizeColumnsToContents()
+        t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
+
+
 
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):

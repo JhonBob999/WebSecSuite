@@ -68,6 +68,7 @@ class ScraperActions:
         # --- View / Open / Copy ---
         menu.addAction(A["open_in_browser"])
         menu.addAction(A["copy_url"])
+        menu.addAction(A["discover_urls"])
         menu.addAction(A["view_headers"])
         menu.addAction(A["view_cookies"])
         menu.addSeparator()
@@ -106,6 +107,7 @@ class ScraperActions:
 
             "open_in_browser":  act("Open in Browser",   self.open_in_browser),
             "copy_url":         act("Copy URL",          self.copy_url),
+            "discover_urls":    act("Discover URLs",     self.discover_urls),
             "view_headers":     act("View Headers…",     self.view_headers),
             "view_cookies":     act("View Cookies…",     self.view_cookies),
 
@@ -325,6 +327,11 @@ class ScraperActions:
             QApplication.clipboard().setText("\n".join(urls))
             self._append_log(f"[INFO] Copied URL(s): {len(urls)}")
 
+    def discover_urls(self):
+        if hasattr(self.parent, "discover_urls_for_selected"):
+            return self.parent.discover_urls_for_selected()
+        self._append_log("[WARN] Discover URLs action is unavailable")
+
     def view_headers(self):
         tids = self._rows_to_task_ids()
         if hasattr(self.parent, "show_task_headers_dialog"):
@@ -396,7 +403,7 @@ class ScraperActions:
 
                 # 2) Чистим снапшот предпросмотра, если он у тебя хранится по row
                 if hasattr(self.parent, "task_results") and isinstance(self.parent.task_results, dict):
-                    self.parent.task_results.pop(r, None)
+                    self.parent.task_results.pop(self.table_ctl.task_id_by_row(r) or r, None)
 
                 # 3) (опционально) чистим task.result, чтобы точно не путаться
                 tid = self.table_ctl.task_id_by_row(r)
