@@ -1268,6 +1268,11 @@ class ScraperTabController(QWidget):
         self._show_json_dialog(title, chain)
 
     def _show_json_dialog(self, title: str, data):
+        title_text = str(title) if title is not None else "Details"
+        if data is None or data == "" or data == {} or data == []:
+            QMessageBox.information(self, title_text, "No data")
+            return
+
         # 1) Нормализация -> pretty string
         pretty = ""
         try:
@@ -1293,7 +1298,7 @@ class ScraperTabController(QWidget):
 
         # 2) Диалог
         dlg = QMessageBox(self)
-        dlg.setWindowTitle(title)
+        dlg.setWindowTitle(title_text)
         dlg.setIcon(QMessageBox.Information)
 
         # Моноширинный шрифт
@@ -1303,7 +1308,7 @@ class ScraperTabController(QWidget):
 
         # 3) Если текст очень длинный — уводим в Details (скролл)
         if len(pretty) > 4000:
-            dlg.setText(f"{title}: content is large — see details below.")
+            dlg.setText(f"{title_text}: content is large — see details below.")
             dlg.setDetailedText(pretty)
         else:
             dlg.setText(pretty)
