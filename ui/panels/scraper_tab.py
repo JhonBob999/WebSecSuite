@@ -456,6 +456,11 @@ class ScraperTabController(QWidget):
     def on_task_cell_double_clicked(self, row: int, col: int):
         table = self.ui.taskTable
         try:
+            header_item = table.horizontalHeaderItem(col)
+            col_name = header_item.text().strip() if header_item else ""
+            col_name_lower = col_name.lower()
+            self.log.append_log_line(f"[UI][DBLCLICK] row={row} col={col} header='{col_name}'")
+
             if col == Col.URL:
                 url_item = table.item(row, Col.URL)
                 if not url_item:
@@ -483,8 +488,18 @@ class ScraperTabController(QWidget):
                         QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
                 return
 
-            if col == Col.Params:
-                self._ctx_edit_params_dialog(row)
+            if "params" in col_name_lower:
+                task_id, _ = self._get_task(row)
+                if task_id:
+                    initial_tab = "Basic"
+                    self.open_params_dialog(task_id, initial_tab)
+                return
+            
+            if "cookies" in col_name_lower:
+                task_id, _ = self._get_task(row)
+                if task_id:
+                    initial_tab = "Cookies"
+                    self.open_params_dialog(task_id, initial_tab)
                 return
 
         except Exception as e:
@@ -1935,11 +1950,23 @@ class ScraperTabController(QWidget):
         if not task_id or not task:
             self.log._log("WARN", f"No task found for row {row}", "UI")
             return
+        self.open_params_dialog(task_id, "Basic")
+
+    def open_params_dialog(self, task_id: str, initial_tab: str) -> None:
+        row = self._find_row_by_task_id(task_id)
+        if row < 0:
+            self.log._log("WARN", f"No row found for task {task_id}", "UI")
+            return
+        task = self.task_manager.get_task(task_id)
+        if not task:
+            self.log._log("WARN", f"No task found for id {task_id}", "UI")
+            return
 
         current = dict(getattr(task, "params", {}) or {})
         url = getattr(task, "url", "")
 
         dlg = ParamsDialog(self, initial=current, task_url=url)
+        self._select_params_dialog_tab(dlg, initial_tab)
 
         # Новый путь: если у диалога есть сигналы — пользуемся ими
         if hasattr(dlg, "applied"):
@@ -1962,6 +1989,18 @@ class ScraperTabController(QWidget):
             if new_params:
                 self._on_params_applied_ctx(row, task_id, new_params, run=False)
 
+    def _select_params_dialog_tab(self, dlg: ParamsDialog, initial_tab: str) -> None:
+        name = (initial_tab or "").strip().lower()
+        if not name:
+            return
+        try:
+            for i in range(dlg.tabs.count()):
+                if dlg.tabs.tabText(i).strip().lower() == name:
+                    dlg.tabs.setCurrentIndex(i)
+                    return
+        except Exception:
+            return
+
     def _on_params_applied_ctx(self, row: int, task_id: str, params: dict, run: bool):
         # сохранить параметры в задачу
         try:
@@ -1978,7 +2017,7 @@ class ScraperTabController(QWidget):
         # обновить ячейку Params (иконка ⚙ + tooltip)
         light = {k: params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if params.get(k)}
         try:
-            self.set_params_cell(row, bool(light), str(light) if light else "")
+            self.set_params_cell(row, str(light) if light else "")
         except Exception:
             pass
 
