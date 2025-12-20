@@ -4,6 +4,8 @@ from typing import List, Optional
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QMenu, QApplication
+from PySide6.QtWidgets import QMessageBox
+from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 
 # Предполагаем, что у тебя есть:
 # - TaskTableController со словами: selected_rows(), set_*_cell(), ...
@@ -69,6 +71,7 @@ class ScraperActions:
         menu.addAction(A["open_in_browser"])
         menu.addAction(A["copy_url"])
         menu.addAction(A["discover_urls"])
+        menu.addAction(A["view_discovery"]) 
         menu.addAction(A["view_headers"])
         menu.addAction(A["view_cookies"])
         menu.addSeparator()
@@ -108,6 +111,7 @@ class ScraperActions:
             "open_in_browser":  act("Open in Browser",   self.open_in_browser),
             "copy_url":         act("Copy URL",          self.copy_url),
             "discover_urls":    act("Discover URLs",     self.discover_urls),
+            "view_discovery":  act("View Discovery…",    self.view_discovery),
             "view_headers":     act("View Headers…",     self.view_headers),
             "view_cookies":     act("View Cookies…",     self.view_cookies),
 
@@ -331,6 +335,141 @@ class ScraperActions:
         if hasattr(self.parent, "discover_urls_for_selected"):
             return self.parent.discover_urls_for_selected()
         self._append_log("[WARN] Discover URLs action is unavailable")
+        
+    def view_discovery(self):
+        # 1) сначала пытаемся получить UUID из UserRole
+        task_ids = self._get_selected_task_ids_from_table()
+
+        # 2) если не нашли UUID — берём URL из текущей строки и резолвим task_id по task_results
+        if not task_ids:
+            raw_ids = self._get_selected_task_ids_from_table()  # может вернуть пусто, ок
+            # возьмем URL из выделенной строки (обычно колонка с http)
+            table = getattr(getattr(self.parent, "table_ctl", None), "table", None)
+            if table is None:
+                return
+            sm = table.selectionModel()
+            if sm is None or not sm.selectedRows():
+                return
+            r = sm.selectedRows()[0].row()
+
+            selected_url = None
+            for c in range(table.columnCount()):
+                it = table.item(r, c)
+                if not it:
+                    continue
+                t = (it.text() or "").strip()
+                if t.startswith("http://") or t.startswith("https://"):
+                    selected_url = t
+                    break
+
+            if not selected_url:
+                QMessageBox.information(self.parent, "No discovery", "Select a task row first.")
+                return
+
+            task_results = getattr(self.parent, "task_results", None)
+            if not isinstance(task_results, dict):
+                task_results = getattr(getattr(self.parent, "parent", None), "task_results", None)
+
+            if not isinstance(task_results, dict):
+                QMessageBox.warning(self.parent, "Error", "task_results not found.")
+                return
+
+            # ищем task_id по совпадению url/base_url внутри payload
+            resolved = None
+            for tid, payload in task_results.items():
+                if not isinstance(payload, dict):
+                    continue
+                disc = payload.get("discovery")
+                if isinstance(disc, dict):
+                    base = disc.get("base_url")
+                    if isinstance(base, str) and base.strip().rstrip("/") == selected_url.rstrip("/"):
+                        resolved = tid
+                        break
+                u = payload.get("url")
+                if isinstance(u, str) and u.strip().rstrip("/") == selected_url.rstrip("/"):
+                    resolved = tid
+                    break
+
+            if resolved is None:
+                QMessageBox.information(self.parent, "No discovery", "Run Discover URLs first.")
+                return
+
+            task_ids = [resolved]
+
+        # --- обычный путь ---
+        task_id = task_ids[0]
+
+        task_results = getattr(self.parent, "task_results", None)
+        if task_results is None:
+            task_results = getattr(getattr(self.parent, "parent", None), "task_results", None)
+
+        payload = task_results.get(task_id, {}) if isinstance(task_results, dict) else {}
+        discovery = payload.get("discovery") if isinstance(payload, dict) else None
+
+        if not isinstance(discovery, dict) or not discovery:
+            QMessageBox.information(self.parent, "No discovery", "Run Discover URLs first.")
+            return
+
+        DiscoveryViewerDialog(discovery, parent=self.parent).exec()
+
+
+
+        
+    def _get_selected_task_ids_from_table(self) -> list[str]:
+        import re
+        from PySide6.QtCore import Qt
+
+        table = getattr(getattr(self.parent, "table_ctl", None), "table", None)
+        if table is None:
+            return []
+
+        sm = table.selectionModel()
+        if sm is None:
+            return []
+
+        rows = sorted({idx.row() for idx in sm.selectedRows()})
+        if not rows:
+            return []
+
+        uuid_re = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+        out: list[str] = []
+        for r in rows:
+            found = None
+
+            # 1) Сначала пробуем найти task_id в data(UserRole) у любой ячейки строки
+            for c in range(table.columnCount()):
+                it = table.item(r, c)
+                if not it:
+                    continue
+
+                for role in (Qt.UserRole, Qt.UserRole + 1, Qt.UserRole + 2):
+                    v = it.data(role)
+                    if isinstance(v, str) and uuid_re.match(v.strip()):
+                        found = v.strip()
+                        break
+                if found:
+                    break
+
+            # 2) Fallback: попробуем найти UUID прямо в тексте (если вдруг он видим)
+            if found is None:
+                for c in range(table.columnCount()):
+                    it = table.item(r, c)
+                    if not it:
+                        continue
+                    txt = (it.text() or "").strip().strip("{}")
+                    if uuid_re.match(txt):
+                        found = txt
+                        break
+
+            if found:
+                out.append(found)
+
+        return out
+
+
+
+
 
     def view_headers(self):
         tids = self._rows_to_task_ids()
