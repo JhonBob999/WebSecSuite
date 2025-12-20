@@ -430,8 +430,8 @@ class ScraperTabController(QWidget):
     def set_results_cell(self, row: int, summary: str | None, tooltip: str | None = None):
         self.table_ctl.set_results_cell(row=row, summary=summary or "", payload_short=tooltip)
 
-    def set_cookies_cell(self, row: int, has: bool, tip: str = ""):
-        self.table_ctl.set_cookies_cell(row=row, has=has, tip=tip)
+    def set_cookies_cell(self, row: int, params: dict, url: str = ""):
+        self.table_ctl.set_cookies_cell(row=row, params=params, url=url)
 
     def set_params_cell(self, row: int, text: str):
         self.table_ctl.set_params_cell(row=row, text=text)
@@ -604,7 +604,7 @@ class ScraperTabController(QWidget):
         self.set_params_cell(row, str(params_light) if params_light else "")
 
         # Индикатор COOKIES
-        self.set_cookies_cell(row, "")
+        self.set_cookies_cell(row, params, url)
 
         # Индексы строк
         self._row_by_task_id[task_id] = row
@@ -1765,13 +1765,10 @@ class ScraperTabController(QWidget):
         if st_item:
             st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
 
-        # 3) Cookies по заголовку Set-Cookie
-        headers = payload.get("headers", {}) or {}
-        low_headers = {k.lower(): v for k, v in headers.items()}
-        set_cookie_val = low_headers.get("set-cookie")
-        has_cookies = bool(set_cookie_val)
-        tip = f"Set-Cookie: {set_cookie_val}" if isinstance(set_cookie_val, str) else ""
-        self.set_cookies_cell(row, has_cookies, tip)
+
+        params = dict(getattr(task, "params", {}) or {}) if task else {}
+        self.set_cookies_cell(row, params, url_val)
+
 
         # 4) >>> ЗАПОЛНЯЕМ КОЛОНКУ Results <<<
         # краткое резюме в ячейку

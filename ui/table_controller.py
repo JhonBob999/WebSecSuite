@@ -301,11 +301,33 @@ class TaskTableController:
 
 
 
-    def set_cookies_cell(self, row: int, has: bool, tip: str = ""):
+    def set_cookies_cell(self, row: int, params: dict, url: str = ""):
         it = self.ensure_item(row, Col.Cookies)
-        it.setText("Yes" if has else "No")
-        if tip:
-            it.setToolTip(tip)
+
+        p = params or {}
+        cookies_source = p.get("cookies_source")  # "auto" | "manual"
+        cookies_count = int(p.get("cookies_count") or 0)
+        cookie_file = p.get("cookie_file") or ""
+
+        if cookies_count > 0:
+            if cookies_source == "manual":
+                it.setText("⚙")
+            else:
+                # auto or fallback
+                it.setText("✅")
+        else:
+            it.setText("")
+
+        tip_lines = []
+        if cookie_file:
+            tip_lines.append(f"Path: {cookie_file}")
+        tip_lines.append(f"Loaded: {cookies_count}")
+        if cookies_source:
+            tip_lines.append(f"Source: {cookies_source}")
+        it.setToolTip("\n".join(tip_lines))
+
+        it.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
+
 
     def set_params_cell(self, row: int, text: str):
         it = self.ensure_item(row, Col.Params)

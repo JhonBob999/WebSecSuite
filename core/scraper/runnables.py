@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
-from core.scraper.request_params import normalize_params
+
 
 
 # === SECTION === Signals
@@ -150,6 +150,7 @@ class ScraperRunnable(QRunnable):
 
                 # --- автосохранение cookies (пока клиент ещё открыт)
                 if auto_save_cookies:
+
                     # ВАЖНО: сохраняем в тот же absolute path, который потом показываем в UI
                     resolved_path = resolve_cookie_path(str(resp.url) if resp else url)
 
@@ -176,6 +177,10 @@ class ScraperRunnable(QRunnable):
 
                     self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {resolved_path}")
 
+
+                    saved = save_cookiejar(cookie_path, client.cookies)
+                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {cookie_path}")
+                    
             req_ms = int((time.perf_counter() - t0_req) * 1000)
 
             # Кооперативные пауза/стоп после запроса

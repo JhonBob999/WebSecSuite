@@ -10,8 +10,9 @@ import time
 from http.cookiejar import Cookie, CookieJar
 
 from core.cookies.storage import (
-    load_cookiejar, save_cookiejar, resolve_cookie_path, derive_domain_from_url
+    load_cookiejar, save_cookiejar, derive_domain_from_url, resolve_cookie_path
 )
+
 
 
 class CookieEditDialog(QDialog):
@@ -21,6 +22,10 @@ class CookieEditDialog(QDialog):
         self.setWindowTitle("Edit Cookie")
         self.setModal(True)
         self.setMinimumWidth(480)
+        self._cookies_count = 0
+        self._cookies_source = ""
+        self._cookie_file_abs = ""
+
 
         self.name_edit = QLineEdit(name)
         self.value_edit = QLineEdit(value)
@@ -176,7 +181,7 @@ class CookiesTab(QWidget):
     def _mode_changed(self):
         if self.rb_auto.isChecked():
             self.cookie_path_edit.setReadOnly(True)
-            auto_path = str(resolve_cookie_path(self.task_url))
+            auto_path = str(file_for_domain(derive_domain_from_url(self.task_url)))
             self.cookie_path_edit.setText(auto_path)
         elif self.rb_custom.isChecked():
             self.cookie_path_edit.setReadOnly(False)
@@ -208,10 +213,15 @@ class CookiesTab(QWidget):
             return
         cookie_file = self.cookie_path_edit.text().strip()
         if not cookie_file and self.rb_auto.isChecked():
-            auto_path = str(resolve_cookie_path(self.task_url))
+            cookie_file = str(resolve_cookie_path(self.task_url))
+            self.cookie_path_edit.setText(cookie_file)
+
             self.cookie_path_edit.setText(cookie_file)
 
         jar, path, loaded = load_cookiejar(url=self.task_url, cookie_file=cookie_file)
+        self._cookies_count = int(loaded or 0)
+        self._cookie_file_abs = str(Path(path).expanduser().resolve())
+        # source тут не меняем (reload не означает manual)
         self._populate_from_jar(jar)
         self.lbl_status.setText(f"Loaded: {loaded} from {path}")
         self._current_path = path
@@ -299,22 +309,47 @@ class CookiesTab(QWidget):
         if self.rb_none.isChecked():
             QMessageBox.information(self, "Cookies", "Cookie mode is 'None'. Nothing to save.")
             return
-        # путь
+
         self._update_current_path()
         if not self._current_path:
             QMessageBox.warning(self, "Cookies", "No cookie file path.")
             return
+
+        # absolute path
+        self._current_path = Path(self._current_path).expanduser().resolve()
+        self.cookie_path_edit.setText(str(self._current_path))
+
         jar = self._table_to_jar()
+        try:
+            jar_count = len(list(jar))
+        except Exception:
+            jar_count = 0
+
         saved = save_cookiejar(self._current_path, jar)
+
+        # set metadata ONLY if jar_count > 0
+        self._cookies_count = int(jar_count)
+        self._cookie_file_abs = str(self._current_path)
+        if jar_count > 0:
+            self._cookies_source = "manual"
+        else:
+            self._cookies_source = ""
+
+        # reload UI table + update Loaded label consistently
+        self._reload_cookies()
+
         self.lbl_status.setText(f"Saved: {saved} → {self._current_path}")
         QMessageBox.information(self, "Cookies", f"Saved {saved} cookies to:\n{self._current_path}")
+
 
     # ---------- export to params ----------
     def collect_params(self):
         mode = "auto" if self.rb_auto.isChecked() else "custom" if self.rb_custom.isChecked() else "none"
         return {
             "cookie_mode": mode,
-            "cookie_file": self.cookie_path_edit.text().strip() if mode == "custom" else "",
+            "cookies_count": int(getattr(self, "_cookies_count", 0) or 0),
+            "cookies_source": getattr(self, "_cookies_source", "") or "",
+            "cookie_file": getattr(self, "_cookie_file_abs", "") or (self.cookie_path_edit.text().strip() if mode == "custom" else ""),
             "auto_save_cookies": self.cb_auto_save.isChecked(),
             "clear_cookies_before_run": self.cb_clear_before.isChecked()
         }

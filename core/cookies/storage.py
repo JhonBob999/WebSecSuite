@@ -10,17 +10,21 @@ from http.cookiejar import CookieJar, Cookie
 from urllib.parse import urlparse
 
 # ========== FS utils ==========
+# ========== FS utils ==========
 def cookies_dir() -> Path:
     d = Path("data") / "cookies"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+
 def _sanitize_domain(domain: str) -> str:
     # простая нормализация; при желании можно добавить punycode/PSL
     return (domain or "unknown").strip().lower().replace(":", "_")
 
+
 def file_for_domain(domain: str) -> Path:
     return cookies_dir() / f"cookies_{_sanitize_domain(domain)}.json"
+
 
 def resolve_cookie_path(url: str) -> Path:
     domain = derive_domain_from_url(url or "")
