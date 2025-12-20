@@ -4,6 +4,7 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 import time
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -149,37 +150,46 @@ class ScraperRunnable(QRunnable):
                 resp = client.request(method, url)
 
                 # --- автосохранение cookies (пока клиент ещё открыт)
-                if auto_save_cookies:
+            if auto_save_cookies:
+                # 1) Выбираем целевой путь:
+                #    - если пользователь выбрал Custom File -> сохраняем туда
+                #    - иначе -> доменный файл по URL
+                if cookie_file:
+                    target_path = Path(cookie_file).expanduser()
+                    if not target_path.is_absolute():
+                        # поддержка относительных путей (если вдруг в UI дадим относительный)
+                        target_path = (Path.cwd() / target_path).resolve()
+                else:
+                    target_path = resolve_cookie_path(str(resp.url) if resp else url)
 
-                    # ВАЖНО: сохраняем в тот же absolute path, который потом показываем в UI
-                    resolved_path = resolve_cookie_path(str(resp.url) if resp else url)
+                saved = save_cookiejar(target_path, client.cookies)
 
-                    saved = save_cookiejar(resolved_path, client.cookies)
+                # сколько cookies реально есть
+                try:
+                    jar_count = len(list(client.cookies.jar))
+                except Exception:
+                    jar_count = len(list(client.cookies))
 
-                    # сколько cookies реально есть
-                    try:
-                        jar_count = len(list(client.cookies.jar))
-                    except Exception:
-                        jar_count = len(list(client.cookies))
+                # обновляем metadata в params (ВАЖНО: не затираем cookie_file доменным, если был custom)
+                params = getattr(self.task, "params", {}) or {}
+                params["cookie_file"] = str(target_path)
+                params["cookies_count"] = int(jar_count)
 
-                    # обновляем metadata в params
-                    params = getattr(self.task, "params", {}) or {}
-                    params["cookie_file"] = str(resolved_path)
-                    params["cookies_count"] = int(jar_count)
-                    if jar_count > 0:
+                # источник:
+                # - manual оставляем, если пользователь руками выставил custom (не перетираем)
+                # - иначе auto
+                if jar_count > 0:
+                    if not params.get("cookies_source"):
                         params["cookies_source"] = "auto"
-                    else:
-                        params.pop("cookies_source", None)
+                else:
+                    params.pop("cookies_source", None)
 
-                    setattr(self.task, "params", params)
-                    if hasattr(self.task, "cookies_path"):
-                        setattr(self.task, "cookies_path", str(resolved_path))
+                setattr(self.task, "params", params)
+                if hasattr(self.task, "cookies_path"):
+                    setattr(self.task, "cookies_path", str(target_path))
 
-                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {resolved_path}")
+                self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {target_path}")
 
-
-                    saved = save_cookiejar(cookie_path, client.cookies)
-                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {cookie_path}")
                     
             req_ms = int((time.perf_counter() - t0_req) * 1000)
 

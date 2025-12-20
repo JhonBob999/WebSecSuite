@@ -305,28 +305,40 @@ class TaskTableController:
         it = self.ensure_item(row, Col.Cookies)
 
         p = params or {}
-        cookies_source = p.get("cookies_source")  # "auto" | "manual"
+
+        cookie_mode = (p.get("cookie_mode") or "").strip().lower()  # "auto" | "custom" | "none"
+        cookies_source = (p.get("cookies_source") or "").strip().lower()  # "auto" | "manual" | ""
         cookies_count = int(p.get("cookies_count") or 0)
-        cookie_file = p.get("cookie_file") or ""
+        cookie_file = (p.get("cookie_file") or "").strip()
 
-        if cookies_count > 0:
-            if cookies_source == "manual":
-                it.setText("⚙")
-            else:
-                # auto or fallback
-                it.setText("✅")
+        # --- Иконка ---
+        # Правило:
+        # - если выбран Custom mode -> показываем ⚙ (даже если cookies_count == 0), т.к. это "кастомный файл"
+        # - иначе (auto) -> ✅ только когда cookies реально есть
+        # - иначе пусто
+        icon = ""
+        if cookie_mode == "custom":
+            icon = "⚙"
+        elif cookies_count > 0:
+            icon = "✅"
         else:
-            it.setText("")
+            icon = ""
 
+        it.setText(icon)
+
+        # --- Tooltip ---
         tip_lines = []
         if cookie_file:
             tip_lines.append(f"Path: {cookie_file}")
         tip_lines.append(f"Loaded: {cookies_count}")
+        if cookie_mode:
+            tip_lines.append(f"Mode: {cookie_mode}")
         if cookies_source:
             tip_lines.append(f"Source: {cookies_source}")
-        it.setToolTip("\n".join(tip_lines))
 
+        it.setToolTip("\n".join(tip_lines))
         it.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
+
 
 
     def set_params_cell(self, row: int, text: str):

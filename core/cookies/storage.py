@@ -159,6 +159,17 @@ def load_cookiejar(url: Optional[str] = None, cookie_file: Optional[str] = None)
 
     return jar, path, loaded
 
+def load_cookiejar_as_json(cookie_file: str):
+    """
+    Для UI-диалогов: вернуть cookies в JSON-виде из конкретного файла.
+    Возвращает dict (как jar_to_json), либо {} если файл не найден/пустой/битый.
+    """
+    jar, path, loaded = load_cookiejar(cookie_file=cookie_file)
+    if loaded == 0:
+        return {}
+    return jar_to_json(jar)
+
+
 def save_cookiejar(path: Path, jar_like) -> int:
     jar = _as_cookiejar(jar_like)
     data = jar_to_json(jar)

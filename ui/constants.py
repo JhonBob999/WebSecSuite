@@ -11,8 +11,8 @@ class Col(IntEnum):
     Code    = 2
     Time    = 3
     Results = 4
-    Params  = 5
-    Cookies = 6
+    Cookies = 5
+    Params  = 6
 
 # Если где-то меняются заголовки/порядок – используем это для авто-карты.
 HEADER_TO_COLNAME = {

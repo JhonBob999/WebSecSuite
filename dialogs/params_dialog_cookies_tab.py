@@ -10,7 +10,7 @@ import time
 from http.cookiejar import Cookie, CookieJar
 
 from core.cookies.storage import (
-    load_cookiejar, save_cookiejar, derive_domain_from_url, resolve_cookie_path
+    load_cookiejar, save_cookiejar, derive_domain_from_url, resolve_cookie_path, file_for_domain
 )
 
 
@@ -181,7 +181,7 @@ class CookiesTab(QWidget):
     def _mode_changed(self):
         if self.rb_auto.isChecked():
             self.cookie_path_edit.setReadOnly(True)
-            auto_path = str(file_for_domain(derive_domain_from_url(self.task_url)))
+            auto_path = str(resolve_cookie_path(self.task_url))
             self.cookie_path_edit.setText(auto_path)
         elif self.rb_custom.isChecked():
             self.cookie_path_edit.setReadOnly(False)
@@ -216,7 +216,6 @@ class CookiesTab(QWidget):
             cookie_file = str(resolve_cookie_path(self.task_url))
             self.cookie_path_edit.setText(cookie_file)
 
-            self.cookie_path_edit.setText(cookie_file)
 
         jar, path, loaded = load_cookiejar(url=self.task_url, cookie_file=cookie_file)
         self._cookies_count = int(loaded or 0)
@@ -345,11 +344,21 @@ class CookiesTab(QWidget):
     # ---------- export to params ----------
     def collect_params(self):
         mode = "auto" if self.rb_auto.isChecked() else "custom" if self.rb_custom.isChecked() else "none"
+
+        cookie_file = ""
+        if mode == "custom":
+            cookie_file = self.cookie_path_edit.text().strip()
+        elif mode == "auto":
+            cookie_file = ""  # в auto не фиксируем кастомный путь
+        else:
+            cookie_file = ""
+
         return {
             "cookie_mode": mode,
             "cookies_count": int(getattr(self, "_cookies_count", 0) or 0),
             "cookies_source": getattr(self, "_cookies_source", "") or "",
-            "cookie_file": getattr(self, "_cookie_file_abs", "") or (self.cookie_path_edit.text().strip() if mode == "custom" else ""),
+            "cookie_file": cookie_file,
             "auto_save_cookies": self.cb_auto_save.isChecked(),
             "clear_cookies_before_run": self.cb_clear_before.isChecked()
         }
+

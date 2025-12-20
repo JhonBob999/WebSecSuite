@@ -135,7 +135,7 @@ class Ui_scraper_panel(object):
 
         self.retranslateUi(scraper_panel)
 
-        QMetaObject.connectSlotsByName(scraper_panel)
+        # QMetaObject.connectSlotsByName(scraper_panel)
     # setupUi
 
     def retranslateUi(self, scraper_panel):

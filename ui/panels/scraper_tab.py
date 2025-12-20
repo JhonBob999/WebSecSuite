@@ -84,13 +84,18 @@ class ScraperTabController(QWidget):
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
 
         # Хранилище результатов задач для предпросмотра
-        self.task_results = {}  # ключ: row, значение: deepcopy(payload)
+        self.task_results: dict[int, dict] = {}
+
 
         # ---- ТАБЛИЦА: единое имя контроллера self.table_ctl ----
         self.table_ctl = TaskTableController(self.ui.taskTable)  # <-- раньше было self.table
         self.table_ctl.apply_common_view_settings()
         self.table_ctl.setup_resize_policies()
         self.table_ctl.restore_column_widths()
+        
+        
+
+
 
         # Хайлайтер + поиск по логам
         self._log_hl = LogHighlighter(self.ui.logOutput.document())
@@ -472,7 +477,7 @@ class ScraperTabController(QWidget):
                 if res_item and (res_item.text() or res_item.toolTip()):
                     tip = (res_item.toolTip() or "").strip()
                     if tip:
-                        self._show_json_dialog(Col.Results, tip)
+                        self._show_json_dialog("Results", tip)
                     return
                 # Иначе (пусто) — фолбэк: открыть URL
                 url_item = table.item(row, Col.URL)
@@ -485,6 +490,11 @@ class ScraperTabController(QWidget):
 
             if col == Col.Params:
                 self._ctx_edit_params_dialog(row)
+                return
+            
+            if col == Col.Cookies:
+                # пока просто откроем диалог (переключение вкладки сделаем следующим шагом)
+                self._ctx_edit_params_dialog(row, open_tab="Cookies")
                 return
 
         except Exception as e:
@@ -1413,6 +1423,7 @@ class ScraperTabController(QWidget):
         params = getattr(task, "params", {}) or {}
         url = getattr(task, "url", "") or ""
         cookie_file = params.get("cookie_file")
+        self.log.append_log_line(f"[INFO] ViewCookies row={row} url={url!r} cookie_file={cookie_file!r}")
 
         try:
             jar, path, loaded = storage.load_cookiejar(url=url, cookie_file=cookie_file)
@@ -1740,12 +1751,9 @@ class ScraperTabController(QWidget):
         row = self._find_row_by_task_id(task_id)
         if row < 0:
             return
-
-        # 1) Сохраняем результат для Data Preview
         self.task_results[row] = deepcopy(payload)
-
-        # 2) Базовые ячейки
-        self.set_status_cell(row, TaskStatus.DONE)
+        
+        task = self.task_manager.get_task(task_id)
 
         url_val = payload.get("final_url") or payload.get("url") or ""
         if not url_val:
@@ -1912,7 +1920,7 @@ class ScraperTabController(QWidget):
         QMessageBox.information(self, "Cookies", text[:6000])
 
 
-    def _ctx_edit_params_dialog(self, row: int):
+    def _ctx_edit_params_dialog(self, row: int, open_tab: str = "Basic"):
         # 🔁 Единая выборка задачи по строке (без приватных полей/магических индексов)
         task_id, task = self._get_task(row)
         if not task_id or not task:
@@ -1923,22 +1931,37 @@ class ScraperTabController(QWidget):
         url = getattr(task, "url", "")
 
         dlg = ParamsDialog(self, initial=current, task_url=url)
-
-        # Новый путь: если у диалога есть сигналы — пользуемся ими
+        
+        try:
+            # переключаем вкладку по имени
+            for i in range(dlg.tabs.count()):
+                if dlg.tabs.tabText(i) == open_tab:
+                    dlg.tabs.setCurrentIndex(i)
+                    break
+        except Exception:
+            pass
+        
+        applied_via_signal = {"hit": False}
+            
         if hasattr(dlg, "applied"):
             dlg.applied.connect(
-                lambda params, r=row, tid=task_id: self._on_params_applied_ctx(r, tid, params, run=False)
+                lambda params, r=row, tid=task_id: (
+                    applied_via_signal.__setitem__("hit", True),
+                    self._on_params_applied_ctx(r, tid, params, run=False)
+                )
             )
         if hasattr(dlg, "applied_and_run"):
             dlg.applied_and_run.connect(
-                lambda params, r=row, tid=task_id: self._on_params_applied_ctx(r, tid, params, run=True)
+                lambda params, r=row, tid=task_id: (
+                    applied_via_signal.__setitem__("hit", True),
+                    self._on_params_applied_ctx(r, tid, params, run=True)
+                )
             )
 
         result = dlg.exec()
 
-
         # Fallback-режим: если сигналов нет (или не сработали), но диалог закрыт по OK — читаем data
-        if result == QDialog.Accepted:
+        if result == QDialog.Accepted and not applied_via_signal["hit"]:
             new_params = getattr(dlg, "data", None)
             if new_params is None and hasattr(dlg, "get_data"):
                 new_params = dlg.get_data()
@@ -1946,7 +1969,9 @@ class ScraperTabController(QWidget):
                 self._on_params_applied_ctx(row, task_id, new_params, run=False)
 
     def _on_params_applied_ctx(self, row: int, task_id: str, params: dict, run: bool):
-        # сохранить параметры в задачу
+        """Применяет параметры из ParamsDialog к задаче + обновляет ячейки Params/Cookies + (опционально) перезапускает задачу."""
+
+        # 1) Сохранить параметры в задачу
         try:
             if hasattr(self.task_manager, "update_task_params"):
                 self.task_manager.update_task_params(task_id, params)
@@ -1958,16 +1983,26 @@ class ScraperTabController(QWidget):
             self.log.append_log_line(f"[ERROR] update_task_params({task_id[:8]}): {e}")
             return
 
-        # обновить ячейку Params (иконка ⚙ + tooltip)
-        light = {k: params.get(k) for k in ("method","proxy","user_agent","timeout","retries") if params.get(k)}
+        # 2) Обновить ячейку Params (лёгкий summary)
         try:
+            light = {k: params.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if params.get(k)}
             self.set_params_cell(row, str(light) if light else "")
+        except Exception:
+            pass
+
+        # 3) Обновить ячейку Cookies (индикатор ✅/⚙ и tooltip) — независимо от Params
+        try:
+            url = ""
+            t = self.task_manager.get_task(task_id)
+            if t:
+                url = getattr(t, "url", "") or ""
+            self.set_cookies_cell(row, params, url)
         except Exception:
             pass
 
         self.log.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
 
-        # Apply & Run → безопасный перезапуск
+        # 4) Apply & Run → безопасный перезапуск
         if run:
             # если есть нативный метод — используем его
             if getattr(self.task_manager, "restart_task", None):
@@ -1977,11 +2012,13 @@ class ScraperTabController(QWidget):
                     return
                 except Exception as e:
                     self.log.append_log_line(f"[WARN] restart_task failed: {e}")
+
             # fallback: стоп (если бежит) → старт
             try:
                 self.task_manager.stop_task(task_id)
             except Exception:
                 pass
+
             try:
                 self.task_manager.start_task(task_id)
                 self.log.append_log_line(f"[INFO] Task started with new params ({task_id[:8]})")
