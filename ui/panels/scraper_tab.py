@@ -661,6 +661,18 @@ class ScraperTabController(QWidget):
     def delete_selected_tasks(self):
         self.on_delete_clicked()
         
+    def _redirect_count_from_payload(self, payload: dict) -> int:
+        redirects = payload.get("redirects")
+        if isinstance(redirects, int):
+            return redirects
+        raw_chain = (payload.get("_raw_result") or {}).get("redirect_chain")
+        if isinstance(raw_chain, (list, tuple)):
+            return len(raw_chain)
+        chain = payload.get("redirect_chain")
+        if isinstance(chain, (list, tuple)):
+            return len(chain)
+        return 0
+
     def _format_result_short(self, payload: dict) -> str:
         # URL, код, заголовок
         url = payload.get("final_url") or payload.get("url", "") or ""
@@ -683,8 +695,7 @@ class ScraperTabController(QWidget):
             t_req = None
 
         # редиректы
-        redirects = payload.get("redirect_chain", []) or []
-        redirect_count = len(redirects)
+        redirect_count = self._redirect_count_from_payload(payload)
 
         # заголовки
         headers = payload.get("headers", {}) or {}
@@ -697,11 +708,11 @@ class ScraperTabController(QWidget):
 
         size_line = f"{size_bytes} bytes" if size_bytes is not None else "(unknown)"
         time_line = f"{t_req} ms" if t_req is not None else "(unknown)"
-        redirect_line = f"{redirect_count} redirect(s)" if redirect_count else "No redirects"
+        redirect_line = f"r={redirect_count}"
 
         lines = [
             f"  URL: {url}",
-            f"  Status: {code}",
+            f"  Status: {code} ({redirect_line})",
             f"  Title: {title}" if title else "  Title: (none)",
             f"  Size: {size_line}",
             f"  Time: request {time_line}",
@@ -1760,10 +1771,11 @@ class ScraperTabController(QWidget):
         self.set_time_cell(row, timings.get("request_ms"))
 
         # Подсказка по редиректам в статусе
-        redirects = payload.get("redirect_chain", []) or []
+        redirect_count = self._redirect_count_from_payload(payload)
+        self.log.append_log_line(f"[DEBUG] redirects={redirect_count} task_id={task_id}")
         st_item = self.ui.taskTable.item(row, Col.Status)
         if st_item:
-            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
+            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {redirect_count}")
 
         # 3) Cookies по заголовку Set-Cookie
         headers = payload.get("headers", {}) or {}
@@ -1777,11 +1789,14 @@ class ScraperTabController(QWidget):
         # краткое резюме в ячейку
         summary = self._format_result_short(payload)   # уже есть у тебя
         # красивый JSON в tooltip (если нет хелпера, можно через json.dumps)
+        tooltip_payload = dict(payload)
+        if "redirects" not in tooltip_payload:
+            tooltip_payload["redirects"] = redirect_count
         try:
             import json
-            tooltip = json.dumps(payload, ensure_ascii=False, indent=2)
+            tooltip = json.dumps(tooltip_payload, ensure_ascii=False, indent=2)
         except Exception:
-            tooltip = str(payload)
+            tooltip = str(tooltip_payload)
 
         self.set_results_cell(row, summary, tooltip)
 
@@ -1802,10 +1817,9 @@ class ScraperTabController(QWidget):
 
             rec = deepcopy(payload)
             t = (payload.get("timings") or {})
-            rc = payload.get("redirect_chain") or []
             rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
             rec["request_ms"] = t.get("request_ms")
-            rec["redirects"] = len(rc)
+            rec["redirects"] = rec.get("redirects", self._redirect_count_from_payload(payload))
             rec.setdefault("status_code", payload.get("status_code"))
             rec.setdefault("title", payload.get("title"))
             rec.setdefault("content_len", payload.get("content_len"))

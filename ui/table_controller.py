@@ -265,7 +265,13 @@ class TaskTableController:
             code = payload.get("status_code")
             size = payload.get("content_len")
             tms  = (payload.get("timings") or {}).get("request_ms")
-            red  = len(payload.get("redirect_chain") or [])
+            red = payload.get("redirects")
+            if not isinstance(red, int):
+                raw_chain = (payload.get("_raw_result") or {}).get("redirect_chain")
+                if isinstance(raw_chain, (list, tuple)):
+                    red = len(raw_chain)
+                else:
+                    red = len(payload.get("redirect_chain") or [])
 
             # humanize helpers
             def _human_bytes(n):
@@ -350,4 +356,3 @@ class TaskTableController:
             header_text = t.model().headerData(col, Qt.Horizontal, Qt.DisplayRole)
             item = QTableWidgetItem(str(header_text) if header_text is not None else "")
             t.setHorizontalHeaderItem(col, item)
-
