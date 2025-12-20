@@ -10,7 +10,7 @@ import httpx
 from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
-from core.cookies.storage import load_cookiejar, save_cookiejar
+from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
 from core.scraper.request_params import normalize_params
 
 
@@ -107,19 +107,12 @@ class ScraperRunnable(QRunnable):
     def run(self) -> None:
         tid = getattr(self.task, "id", "")
         url = getattr(self.task, "url", "")
-        normalized_params = normalize_params(getattr(self.task, "params", None))
-        try:
-            self.task.params = normalized_params
-            if hasattr(self.task, "apply_params"):
-                self.task.apply_params(normalized_params)
-        except Exception:
-            pass
         method = (getattr(self.task, "method", None) or "GET").upper()
         headers = getattr(self.task, "headers", None) or {}
         proxy = getattr(self.task, "proxy", None) or None
         timeout = getattr(self.task, "timeout", None)
 
-        # --- NEW: читаем параметры для cookies из task.params (если есть)
+        # --- читаем параметры для cookies из task.params (если есть)
         params = getattr(self.task, "params", {}) or {}
         cookie_file = params.get("cookie_file") or getattr(self.task, "cookie_file", None)
         auto_save_cookies = params.get("auto_save_cookies", True)
@@ -131,11 +124,13 @@ class ScraperRunnable(QRunnable):
         try:
             # стоп/пауза до старта запроса
             if self._check_stop(tid):
-                self.signals.task_finished.emit(tid); return
+                self.signals.task_finished.emit(tid)
+                return
             if not self._pause_gate(tid):
-                self.signals.task_finished.emit(tid); return
+                self.signals.task_finished.emit(tid)
+                return
 
-            # --- NEW: автозагрузка cookies по cookie_file или домену из URL
+            # --- автозагрузка cookies по cookie_file или домену из URL
             jar, cookie_path, loaded = load_cookiejar(url=url, cookie_file=cookie_file)
             self.signals.task_log.emit(tid, "INFO", f"Cookies loaded: {loaded} from {cookie_path}")
 
@@ -143,16 +138,44 @@ class ScraperRunnable(QRunnable):
             self.signals.task_log.emit(tid, "INFO", f"Request {method} {url}")
 
             # === HTTP request ===
-            # httpx >= 0.28: proxy=, follow_redirects=True
             t0_req = time.perf_counter()
-            with httpx.Client(timeout=timeout, headers=headers, proxy=proxy,
-                          follow_redirects=True, cookies=jar) as client:
+            with httpx.Client(
+                timeout=timeout,
+                headers=headers,
+                proxy=proxy,
+                follow_redirects=True,
+                cookies=jar
+            ) as client:
                 resp = client.request(method, url)
-                # --- NEW: автосохранение cookies (пока клиент ещё открыт)
+
+                # --- автосохранение cookies (пока клиент ещё открыт)
                 if auto_save_cookies:
-                    saved = save_cookiejar(cookie_path, client.cookies)
-                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {cookie_path}")
-                    
+                    # ВАЖНО: сохраняем в тот же absolute path, который потом показываем в UI
+                    resolved_path = resolve_cookie_path(str(resp.url) if resp else url)
+
+                    saved = save_cookiejar(resolved_path, client.cookies)
+
+                    # сколько cookies реально есть
+                    try:
+                        jar_count = len(list(client.cookies.jar))
+                    except Exception:
+                        jar_count = len(list(client.cookies))
+
+                    # обновляем metadata в params
+                    params = getattr(self.task, "params", {}) or {}
+                    params["cookie_file"] = str(resolved_path)
+                    params["cookies_count"] = int(jar_count)
+                    if jar_count > 0:
+                        params["cookies_source"] = "auto"
+                    else:
+                        params.pop("cookies_source", None)
+
+                    setattr(self.task, "params", params)
+                    if hasattr(self.task, "cookies_path"):
+                        setattr(self.task, "cookies_path", str(resolved_path))
+
+                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {resolved_path}")
+
             req_ms = int((time.perf_counter() - t0_req) * 1000)
 
             # Кооперативные пауза/стоп после запроса
@@ -178,10 +201,8 @@ class ScraperRunnable(QRunnable):
             # === Response analysis ===
             html_title = ""
             try:
-                # Если ответ текстовый — извлекаем title
                 html_title = extract_title(resp.text)
             except Exception:
-                # В бинарных ответах .text может кинуть ошибки — тихо игнорим
                 html_title = ""
 
             total_ms = int((time.perf_counter() - t0_total) * 1000)
@@ -198,7 +219,7 @@ class ScraperRunnable(QRunnable):
                     "total_ms": total_ms,
                 },
             }
-            
+
             self.task.result = result
 
             # Последняя проверка остановки перед эмитом
@@ -235,3 +256,4 @@ class ScraperRunnable(QRunnable):
             self.signals.task_status.emit(tid, "Failed")
         finally:
             self.signals.task_finished.emit(tid)
+

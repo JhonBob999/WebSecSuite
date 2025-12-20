@@ -9,7 +9,6 @@ from typing import Iterable, Any, Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
 
-from .request_params import normalize_params
 # === SECTION === Constants
 _HEADERS_OF_INTEREST = (
     "server",
@@ -129,23 +128,16 @@ def _task_to_row(task: Any) -> Dict[str, Any]:
     Expected task attributes: id, url, method, status, progress, retries, timeout, user_agent, proxy, result.
     """
     # base fields
-    if isinstance(task, dict):
-        raw_params = task.get("params")
-    else:
-        raw_params = getattr(task, "params", None)
-    normalized_params = normalize_params(raw_params)
-
     base: Dict[str, Any] = {
         "id": getattr(task, "id", "") if not isinstance(task, dict) else task.get("id", ""),
         "url": getattr(task, "url", "") if not isinstance(task, dict) else task.get("url", ""),
-        "method": normalized_params.get("method")
-        or (getattr(task, "method", "GET") if not isinstance(task, dict) else (task.get("method") or "GET")),
+        "method": getattr(task, "method", "GET") if not isinstance(task, dict) else (task.get("method") or "GET"),
         "status": "",
         "progress": getattr(task, "progress", 0) if not isinstance(task, dict) else task.get("progress", 0),
-        "retries": normalized_params.get("retries"),
-        "timeout": normalized_params.get("timeout"),
-        "user_agent": normalized_params.get("user_agent"),
-        "proxy": normalized_params.get("proxy"),
+        "retries": getattr(task, "retries", 0) if not isinstance(task, dict) else task.get("retries", 0),
+        "timeout": getattr(task, "timeout", "") if not isinstance(task, dict) else task.get("timeout", ""),
+        "user_agent": getattr(task, "user_agent", "") if not isinstance(task, dict) else task.get("user_agent", ""),
+        "proxy": getattr(task, "proxy", "") if not isinstance(task, dict) else task.get("proxy", ""),
     }
 
     # status may be enum-like
@@ -186,19 +178,16 @@ def _export_json(tasks: Iterable[Any], path: str) -> None:
     """
     out: List[Dict[str, Any]] = []
     for t in tasks:
-        raw_params = t.get("params") if isinstance(t, dict) else getattr(t, "params", None)
-        normalized_params = normalize_params(raw_params)
         item = {
             "id": getattr(t, "id", "") if not isinstance(t, dict) else t.get("id", ""),
             "url": getattr(t, "url", "") if not isinstance(t, dict) else t.get("url", ""),
-            "method": normalized_params.get("method")
-            or (getattr(t, "method", "GET") if not isinstance(t, dict) else (t.get("method") or "GET")),
+            "method": getattr(t, "method", "GET") if not isinstance(t, dict) else (t.get("method") or "GET"),
             "status": "",
             "progress": getattr(t, "progress", 0) if not isinstance(t, dict) else t.get("progress", 0),
-            "retries": normalized_params.get("retries"),
-            "timeout": normalized_params.get("timeout"),
-            "user_agent": normalized_params.get("user_agent"),
-            "proxy": normalized_params.get("proxy"),
+            "retries": getattr(t, "retries", 0) if not isinstance(t, dict) else t.get("retries", 0),
+            "timeout": getattr(t, "timeout", "") if not isinstance(t, dict) else t.get("timeout", ""),
+            "user_agent": getattr(t, "user_agent", "") if not isinstance(t, dict) else t.get("user_agent", ""),
+            "proxy": getattr(t, "proxy", "") if not isinstance(t, dict) else t.get("proxy", ""),
         }
         status = getattr(t, "status", "") if not isinstance(t, dict) else t.get("status", "")
         item["status"] = getattr(status, "value", str(status))

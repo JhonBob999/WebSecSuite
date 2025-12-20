@@ -11,8 +11,7 @@ from urllib.parse import urlparse
 
 # ========== FS utils ==========
 def cookies_dir() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    d = root / "data" / "cookies"
+    d = Path("data") / "cookies"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -26,6 +25,7 @@ def file_for_domain(domain: str) -> Path:
 def resolve_cookie_path(url: str) -> Path:
     domain = derive_domain_from_url(url or "")
     return file_for_domain(domain).resolve()
+
 
 # ========== JSON <-> CookieJar ==========
 def _cookie_to_dict(c: Cookie) -> Dict[str, Any]:
@@ -137,9 +137,10 @@ def load_cookiejar(url: Optional[str] = None, cookie_file: Optional[str] = None)
     jar = CookieJar()
 
     if cookie_file:
-        path = Path(cookie_file).expanduser().resolve()
+        path = Path(cookie_file)
     else:
-        path = resolve_cookie_path(url or "")
+        domain = derive_domain_from_url(url or "")
+        path = file_for_domain(domain)
 
     loaded = 0
     if path.exists():

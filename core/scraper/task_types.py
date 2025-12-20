@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 import uuid
 
-from .request_params import normalize_params
 
 # === SECTION === Status Enum
 class TaskStatus(str, Enum):
@@ -75,7 +74,7 @@ class ScrapeTask:
         Фабрика новой задачи. params может содержать:
         method, headers, user_agent, proxy, timeout, retries (+ любые будущие поля).
         """
-        p = normalize_params(params)
+        p = dict(params or {})
         task = ScrapeTask(
             id=str(uuid.uuid4()),
             url=url,
@@ -89,9 +88,7 @@ class ScrapeTask:
         синхронизируя верхнеуровневые поля (method/headers/user_agent/…).
         """
         if params is not None:
-            self.params = normalize_params(params)
-        else:
-            self.params = normalize_params(self.params)
+            self.params = dict(params or {})
 
         self.method    = self.params.get("method", self.method or "GET")
         self.headers   = dict(self.params.get("headers", self.headers or {}))

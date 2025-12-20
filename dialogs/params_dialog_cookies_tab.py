@@ -10,8 +10,9 @@ import time
 from http.cookiejar import Cookie, CookieJar
 
 from core.cookies.storage import (
-    load_cookiejar, save_cookiejar, resolve_cookie_path
+    load_cookiejar, save_cookiejar, resolve_cookie_path, derive_domain_from_url
 )
+
 
 class CookieEditDialog(QDialog):
     """Простое окно для редактирования одного cookie."""
@@ -198,7 +199,7 @@ class CookiesTab(QWidget):
         if self.rb_none.isChecked():
             self._current_path = None
         elif cookie_file:
-            self._current_path = Path(cookie_file).expanduser().resolve()
+            self._current_path = Path(cookie_file)
         else:
             self._current_path = None
 
@@ -207,7 +208,7 @@ class CookiesTab(QWidget):
             return
         cookie_file = self.cookie_path_edit.text().strip()
         if not cookie_file and self.rb_auto.isChecked():
-            cookie_file = str(resolve_cookie_path(self.task_url))
+            auto_path = str(resolve_cookie_path(self.task_url))
             self.cookie_path_edit.setText(cookie_file)
 
         jar, path, loaded = load_cookiejar(url=self.task_url, cookie_file=cookie_file)
