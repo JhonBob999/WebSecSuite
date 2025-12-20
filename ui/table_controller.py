@@ -315,7 +315,13 @@ class TaskTableController:
 
     def set_params_cell(self, row: int, text: str):
         it = self.ensure_item(row, Col.Params)
-        it.setText(text or "")
+        if text:
+            it.setText("⚙")
+            it.setToolTip(text)
+        else:
+            it.setText("")
+            it.setToolTip("")
+        it.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
 
     # ---------- Разное ----------
     def ensure_row_visible(self, row: int):
