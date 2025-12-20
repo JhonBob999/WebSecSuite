@@ -48,10 +48,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     headers_req = None
 
     normalized_params = normalize_params(params if isinstance(params, Mapping) else {})
-    if isinstance(params, Mapping):
-        headers_req = params.get("headers")
-    else:
-        headers_req = None
+    headers_req = normalized_params.get("headers", {})
     user_agent = _str_or(normalized_params.get("user_agent"), "")
     proxy = _str_or(normalized_params.get("proxy"), "")
     timeout = normalized_params.get("timeout")

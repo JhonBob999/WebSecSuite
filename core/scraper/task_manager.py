@@ -46,7 +46,7 @@ class TaskManager(QObject):
 
     # === SECTION === CRUD
     def create_task(self, url: str, params: Optional[dict] = None) -> str:
-        task = ScrapeTask.new(url, normalize_params(params))
+        task = ScrapeTask.new(url, params)
         self._tasks[task.id] = task
         return task.id
 
