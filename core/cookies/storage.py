@@ -10,17 +10,26 @@ from http.cookiejar import CookieJar, Cookie
 from urllib.parse import urlparse
 
 # ========== FS utils ==========
+# ========== FS utils ==========
 def cookies_dir() -> Path:
     d = Path("data") / "cookies"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+
 def _sanitize_domain(domain: str) -> str:
     # простая нормализация; при желании можно добавить punycode/PSL
     return (domain or "unknown").strip().lower().replace(":", "_")
 
+
 def file_for_domain(domain: str) -> Path:
     return cookies_dir() / f"cookies_{_sanitize_domain(domain)}.json"
+
+
+def resolve_cookie_path(url: str) -> Path:
+    domain = derive_domain_from_url(url or "")
+    return file_for_domain(domain).resolve()
+
 
 # ========== JSON <-> CookieJar ==========
 def _cookie_to_dict(c: Cookie) -> Dict[str, Any]:
@@ -149,6 +158,17 @@ def load_cookiejar(url: Optional[str] = None, cookie_file: Optional[str] = None)
             loaded = 0
 
     return jar, path, loaded
+
+def load_cookiejar_as_json(cookie_file: str):
+    """
+    Для UI-диалогов: вернуть cookies в JSON-виде из конкретного файла.
+    Возвращает dict (как jar_to_json), либо {} если файл не найден/пустой/битый.
+    """
+    jar, path, loaded = load_cookiejar(cookie_file=cookie_file)
+    if loaded == 0:
+        return {}
+    return jar_to_json(jar)
+
 
 def save_cookiejar(path: Path, jar_like) -> int:
     jar = _as_cookiejar(jar_like)

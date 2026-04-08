@@ -265,13 +265,7 @@ class TaskTableController:
             code = payload.get("status_code")
             size = payload.get("content_len")
             tms  = (payload.get("timings") or {}).get("request_ms")
-            red = payload.get("redirects")
-            if not isinstance(red, int):
-                raw_chain = (payload.get("_raw_result") or {}).get("redirect_chain")
-                if isinstance(raw_chain, (list, tuple)):
-                    red = len(raw_chain)
-                else:
-                    red = len(payload.get("redirect_chain") or [])
+            red  = len(payload.get("redirect_chain") or [])
 
             # humanize helpers
             def _human_bytes(n):
@@ -307,11 +301,45 @@ class TaskTableController:
 
 
 
-    def set_cookies_cell(self, row: int, has: bool, tip: str = ""):
+    def set_cookies_cell(self, row: int, params: dict, url: str = ""):
         it = self.ensure_item(row, Col.Cookies)
-        it.setText("Yes" if has else "No")
-        if tip:
-            it.setToolTip(tip)
+
+        p = params or {}
+
+        cookie_mode = (p.get("cookie_mode") or "").strip().lower()  # "auto" | "custom" | "none"
+        cookies_source = (p.get("cookies_source") or "").strip().lower()  # "auto" | "manual" | ""
+        cookies_count = int(p.get("cookies_count") or 0)
+        cookie_file = (p.get("cookie_file") or "").strip()
+
+        # --- Иконка ---
+        # Правило:
+        # - если выбран Custom mode -> показываем ⚙ (даже если cookies_count == 0), т.к. это "кастомный файл"
+        # - иначе (auto) -> ✅ только когда cookies реально есть
+        # - иначе пусто
+        icon = ""
+        if cookie_mode == "custom":
+            icon = "⚙"
+        elif cookies_count > 0:
+            icon = "✅"
+        else:
+            icon = ""
+
+        it.setText(icon)
+
+        # --- Tooltip ---
+        tip_lines = []
+        if cookie_file:
+            tip_lines.append(f"Path: {cookie_file}")
+        tip_lines.append(f"Loaded: {cookies_count}")
+        if cookie_mode:
+            tip_lines.append(f"Mode: {cookie_mode}")
+        if cookies_source:
+            tip_lines.append(f"Source: {cookies_source}")
+
+        it.setToolTip("\n".join(tip_lines))
+        it.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
+
+
 
     def set_params_cell(self, row: int, text: str):
         it = self.ensure_item(row, Col.Params)
@@ -356,3 +384,4 @@ class TaskTableController:
             header_text = t.model().headerData(col, Qt.Horizontal, Qt.DisplayRole)
             item = QTableWidgetItem(str(header_text) if header_text is not None else "")
             t.setHorizontalHeaderItem(col, item)
+

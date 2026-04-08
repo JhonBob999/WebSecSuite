@@ -6,6 +6,8 @@ import os
 import tempfile
 from dataclasses import is_dataclass, asdict
 from typing import Any, Iterable, Mapping
+from core.scraper.request_params import normalize_params
+
 
 # ---- Публичное API --------------------------------------------------------
 
@@ -39,19 +41,15 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
         if is_dataclass(params):
             params = asdict(params)
 
-    # 2) Достаём поля из params/result
-    user_agent = ""
-    proxy = ""
-    timeout = None
-    retries = None
-    headers_req = None
+        # 2) Достаём поля из params/result
+    normalized_params = normalize_params(params if isinstance(params, Mapping) else {})
 
-    if isinstance(params, Mapping):
-        user_agent = _str_or(params.get("user_agent"), "")
-        proxy = _str_or(params.get("proxy"), "")
-        timeout = params.get("timeout")
-        retries = params.get("retries")
-        headers_req = params.get("headers")
+    user_agent = _str_or(normalized_params.get("user_agent"), "")
+    proxy = _str_or(normalized_params.get("proxy"), "")
+    timeout = normalized_params.get("timeout")
+    retries = normalized_params.get("retries")
+    headers_req = normalized_params.get("headers", {})
+
 
     final_url = _str_or(_deep_get(result, "final_url"), "") or _str_or(result.get("url"), url)
     status_code = _deep_get(result, "status_code")

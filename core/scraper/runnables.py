@@ -4,13 +4,17 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 import time
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
-from core.cookies.storage import load_cookiejar, save_cookiejar
+from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
+from core.discovery.url_discovery import parse_forms_from_html
+
+
 
 
 # === SECTION === Signals
@@ -111,7 +115,7 @@ class ScraperRunnable(QRunnable):
         proxy = getattr(self.task, "proxy", None) or None
         timeout = getattr(self.task, "timeout", None)
 
-        # --- NEW: читаем параметры для cookies из task.params (если есть)
+        # --- читаем параметры для cookies из task.params (если есть)
         params = getattr(self.task, "params", {}) or {}
         cookie_file = params.get("cookie_file") or getattr(self.task, "cookie_file", None)
         auto_save_cookies = params.get("auto_save_cookies", True)
@@ -123,11 +127,13 @@ class ScraperRunnable(QRunnable):
         try:
             # стоп/пауза до старта запроса
             if self._check_stop(tid):
-                self.signals.task_finished.emit(tid); return
+                self.signals.task_finished.emit(tid)
+                return
             if not self._pause_gate(tid):
-                self.signals.task_finished.emit(tid); return
+                self.signals.task_finished.emit(tid)
+                return
 
-            # --- NEW: автозагрузка cookies по cookie_file или домену из URL
+            # --- автозагрузка cookies по cookie_file или домену из URL
             jar, cookie_path, loaded = load_cookiejar(url=url, cookie_file=cookie_file)
             self.signals.task_log.emit(tid, "INFO", f"Cookies loaded: {loaded} from {cookie_path}")
 
@@ -135,15 +141,57 @@ class ScraperRunnable(QRunnable):
             self.signals.task_log.emit(tid, "INFO", f"Request {method} {url}")
 
             # === HTTP request ===
-            # httpx >= 0.28: proxy=, follow_redirects=True
             t0_req = time.perf_counter()
-            with httpx.Client(timeout=timeout, headers=headers, proxy=proxy,
-                          follow_redirects=True, cookies=jar) as client:
+            with httpx.Client(
+                timeout=timeout,
+                headers=headers,
+                proxy=proxy,
+                follow_redirects=True,
+                cookies=jar
+            ) as client:
                 resp = client.request(method, url)
-                # --- NEW: автосохранение cookies (пока клиент ещё открыт)
-                if auto_save_cookies:
-                    saved = save_cookiejar(cookie_path, client.cookies)
-                    self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {cookie_path}")
+
+                # --- автосохранение cookies (пока клиент ещё открыт)
+            if auto_save_cookies:
+                # 1) Выбираем целевой путь:
+                #    - если пользователь выбрал Custom File -> сохраняем туда
+                #    - иначе -> доменный файл по URL
+                if cookie_file:
+                    target_path = Path(cookie_file).expanduser()
+                    if not target_path.is_absolute():
+                        # поддержка относительных путей (если вдруг в UI дадим относительный)
+                        target_path = (Path.cwd() / target_path).resolve()
+                else:
+                    target_path = resolve_cookie_path(str(resp.url) if resp else url)
+
+                saved = save_cookiejar(target_path, client.cookies)
+
+                # сколько cookies реально есть
+                try:
+                    jar_count = len(list(client.cookies.jar))
+                except Exception:
+                    jar_count = len(list(client.cookies))
+
+                # обновляем metadata в params (ВАЖНО: не затираем cookie_file доменным, если был custom)
+                params = getattr(self.task, "params", {}) or {}
+                params["cookie_file"] = str(target_path)
+                params["cookies_count"] = int(jar_count)
+
+                # источник:
+                # - manual оставляем, если пользователь руками выставил custom (не перетираем)
+                # - иначе auto
+                if jar_count > 0:
+                    if not params.get("cookies_source"):
+                        params["cookies_source"] = "auto"
+                else:
+                    params.pop("cookies_source", None)
+
+                setattr(self.task, "params", params)
+                if hasattr(self.task, "cookies_path"):
+                    setattr(self.task, "cookies_path", str(target_path))
+
+                self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {target_path}")
+
                     
             req_ms = int((time.perf_counter() - t0_req) * 1000)
 
@@ -170,13 +218,20 @@ class ScraperRunnable(QRunnable):
             # === Response analysis ===
             html_title = ""
             try:
-                # Если ответ текстовый — извлекаем title
                 html_title = extract_title(resp.text)
             except Exception:
-                # В бинарных ответах .text может кинуть ошибки — тихо игнорим
                 html_title = ""
 
             total_ms = int((time.perf_counter() - t0_total) * 1000)
+            
+            # === Forms parsing (HTML only) ===
+            forms_pack = {"forms": [], "summary": {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}}
+            try:
+                ct = (resp.headers.get("content-type") or resp.headers.get("Content-Type") or "")
+                if "html" in ct.lower():
+                    forms_pack = parse_forms_from_html(resp.text or "", str(resp.url))
+            except Exception:
+                pass
 
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
@@ -185,12 +240,14 @@ class ScraperRunnable(QRunnable):
                 "content_len": len(resp.content),
                 "headers": dict(resp.headers),
                 "redirect_chain": redirect_chain,
+                "forms": forms_pack.get("forms", []),
+                "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
                 "timings": {
                     "request_ms": req_ms,
                     "total_ms": total_ms,
                 },
             }
-            
+
             self.task.result = result
 
             # Последняя проверка остановки перед эмитом
@@ -227,3 +284,4 @@ class ScraperRunnable(QRunnable):
             self.signals.task_status.emit(tid, "Failed")
         finally:
             self.signals.task_finished.emit(tid)
+
