@@ -107,7 +107,8 @@ class DataPreviewDialog(QDialog):
         t.setRowCount(len(records))
         for row, rec in enumerate(records):
             for col, key in enumerate(keys_order):
-                val = rec.get(key, "")
+                raw_val = rec.get(key, "")
+                val = self._compact_preview_value(key, raw_val)
 
                 # вложенные структуры -> компактный текст + красивый tooltip
                 text, pretty = self._to_cell(val)
@@ -125,6 +126,7 @@ class DataPreviewDialog(QDialog):
         t.resizeColumnsToContents()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
+        self._columns = keys_order
 
 
 
@@ -138,6 +140,44 @@ class DataPreviewDialog(QDialog):
             return "", ""
         s = str(val)
         return (s[:200] + "…", s) if len(s) > 200 else (s, "")
+
+    def _compact_preview_value(self, key: str, val):
+        if key == "forms_summary" and isinstance(val, dict):
+            fs = val
+            return (
+                f"total={fs.get('forms_total', 0)}, "
+                f"unique={fs.get('forms_unique', fs.get('forms_total', 0))}, "
+                f"inputs={fs.get('inputs_total', 0)}, "
+                f"unique_inputs={fs.get('inputs_unique_total', fs.get('inputs_total', 0))}, "
+                f"names={fs.get('unique_input_names', 0)}"
+            )
+        if key == "forms" and isinstance(val, list):
+            return self._compact_forms(val)
+        return val
+
+    def _compact_forms(self, forms: list) -> str:
+        if not forms:
+            return "[]"
+        parts = []
+        max_forms = 2
+        for idx, form in enumerate(forms[:max_forms], 1):
+            method = (form.get("method") or "").upper()
+            action = str(form.get("action") or "")
+            action_short = action if len(action) <= 120 else action[:119] + "…"
+            enctype = form.get("enctype") or ""
+            inputs_count = form.get("inputs_count") or len(form.get("inputs", []) or [])
+            has_file = 1 if form.get("has_file") else 0
+            names = form.get("input_names") or []
+            names_short = ", ".join((n or "") for n in names[:10])
+            if len(names) > 10:
+                names_short += ", …"
+            parts.append(
+                f"[{idx}] {method} {action_short} enctype={enctype} inputs={inputs_count} file={has_file} names={names_short}"
+            )
+        if len(forms) > max_forms:
+            parts.append(f"... +{len(forms) - max_forms} more")
+        out = " | ".join(parts)
+        return out if len(out) <= 2000 else out[:1999] + "…"
 
     # ---- действия тулбара ----
     @Slot()

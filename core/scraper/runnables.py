@@ -12,6 +12,8 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 
 from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
+from core.discovery.url_discovery import parse_forms_from_html
+
 
 
 
@@ -221,6 +223,15 @@ class ScraperRunnable(QRunnable):
                 html_title = ""
 
             total_ms = int((time.perf_counter() - t0_total) * 1000)
+            
+            # === Forms parsing (HTML only) ===
+            forms_pack = {"forms": [], "summary": {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}}
+            try:
+                ct = (resp.headers.get("content-type") or resp.headers.get("Content-Type") or "")
+                if "html" in ct.lower():
+                    forms_pack = parse_forms_from_html(resp.text or "", str(resp.url))
+            except Exception:
+                pass
 
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
@@ -229,6 +240,8 @@ class ScraperRunnable(QRunnable):
                 "content_len": len(resp.content),
                 "headers": dict(resp.headers),
                 "redirect_chain": redirect_chain,
+                "forms": forms_pack.get("forms", []),
+                "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
                 "timings": {
                     "request_ms": req_ms,
                     "total_ms": total_ms,

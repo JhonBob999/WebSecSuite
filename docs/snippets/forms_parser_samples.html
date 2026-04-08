@@ -1,0 +1,26 @@
+<!-- Sample 1: GET search form -->
+<form method="get" action="/search">
+  <input type="text" name="q" value="test">
+</form>
+
+<!-- Sample 2: POST login -->
+<form method="post" action="/login">
+  <input type="text" name="user" required>
+  <input type="password" name="pass" required>
+  <button type="submit">Login</button>
+</form>
+
+<!-- Sample 3: select + textarea -->
+<form action="/profile">
+  <select name="country">
+    <option value="us" selected>USA</option>
+    <option value="uk">UK</option>
+  </select>
+  <textarea name="bio">hello world</textarea>
+</form>
+
+<!-- Sample 4: file upload -->
+<form enctype="multipart/form-data" action="/upload">
+  <input type="file" name="upload">
+  <input type="text" name="desc" value="file description">
+</form>

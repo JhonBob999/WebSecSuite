@@ -6,6 +6,7 @@ from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QMenu, QApplication
 from PySide6.QtWidgets import QMessageBox
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
+from dialogs.forms_viewer_dialog import FormsViewerDialog
 
 # Предполагаем, что у тебя есть:
 # - TaskTableController со словами: selected_rows(), set_*_cell(), ...
@@ -72,6 +73,7 @@ class ScraperActions:
         menu.addAction(A["copy_url"])
         menu.addAction(A["discover_urls"])
         menu.addAction(A["view_discovery"]) 
+        menu.addAction(A["view_forms"])
         menu.addAction(A["view_headers"])
         menu.addAction(A["view_cookies"])
         menu.addSeparator()
@@ -84,6 +86,15 @@ class ScraperActions:
 
         # --- Clear Results ---
         menu.addAction(A["clear_results"])
+
+        forms_available = False
+        tids = self._get_selected_task_ids_from_table()
+        if tids:
+            payload = self._task_payload(tids[0])
+            forms = self._extract_forms(payload)
+            forms_available = isinstance(forms, list)
+        if "view_forms" in A:
+            A["view_forms"].setEnabled(bool(forms_available))
 
         menu.exec(global_pos)
 
@@ -112,6 +123,7 @@ class ScraperActions:
             "copy_url":         act("Copy URL",          self.copy_url),
             "discover_urls":    act("Discover URLs",     self.discover_urls),
             "view_discovery":  act("View Discovery…",    self.view_discovery),
+            "view_forms":      act("View Forms",         self.view_forms),
             "view_headers":     act("View Headers…",     self.view_headers),
             "view_cookies":     act("View Cookies…",     self.view_cookies),
 
@@ -152,6 +164,27 @@ class ScraperActions:
             self.log_panel.append_line(msg)
         elif hasattr(self.parent, "append_log_line"):
             self.parent.append_log_line(msg)
+
+    def _task_payload(self, task_id: str) -> dict:
+        task_results = getattr(self.parent, "task_results", None)
+        if task_results is None:
+            task_results = getattr(getattr(self.parent, "parent", None), "task_results", None)
+        if isinstance(task_results, dict):
+            return dict(task_results.get(task_id) or {})
+        return {}
+
+    def _extract_forms(self, payload: dict | None):
+        if not isinstance(payload, dict):
+            return None
+        forms = payload.get("forms")
+        if isinstance(forms, list):
+            return forms
+        discovery = payload.get("discovery")
+        if isinstance(discovery, dict):
+            disc_forms = discovery.get("forms")
+            if isinstance(disc_forms, list):
+                return disc_forms
+        return None
 
     # ---------- Start/Stop/Restart ----------
     def start_selected(self):
@@ -412,9 +445,29 @@ class ScraperActions:
 
         DiscoveryViewerDialog(discovery, parent=self.parent).exec()
 
+    def view_forms(self):
+        task_ids = self._get_selected_task_ids_from_table()
+        if not task_ids:
+            QMessageBox.information(self.parent, "No forms", "Select a task row first.")
+            return
+
+        task_id = task_ids[0]
+        payload = self._task_payload(task_id)
+        forms = self._extract_forms(payload)
+        if forms is None:
+            QMessageBox.information(self.parent, "No forms", "No forms available for this task.")
+            return
+
+        target_url = ""
+        if isinstance(payload, dict):
+            target_url = payload.get("final_url") or payload.get("url") or ""
+            discovery = payload.get("discovery") if isinstance(payload.get("discovery"), dict) else None
+            if discovery:
+                target_url = discovery.get("base_url") or target_url
+
+        FormsViewerDialog(self.parent, forms=forms, target_url=target_url).exec()
 
 
-        
     def _get_selected_task_ids_from_table(self) -> list[str]:
         import re
         from PySide6.QtCore import Qt
