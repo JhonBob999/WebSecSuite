@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
 from core.discovery.url_discovery import parse_forms_from_html
-
+from core.scraper.fingerprinting import build_passive_fingerprint
 
 
 
@@ -233,6 +233,31 @@ class ScraperRunnable(QRunnable):
             except Exception:
                 pass
 
+            # Cookies seen (safe for malformed cookie jars/headers)
+            cookie_names: List[str] = []
+            try:
+                cookie_names = [c.name for c in resp.cookies.jar if getattr(c, "name", None)]
+            except Exception:
+                try:
+                    cookie_names = [k for k in resp.cookies.keys()]
+                except Exception:
+                    cookie_names = []
+
+            set_cookie_headers: List[str] = []
+            try:
+                set_cookie_headers = list(resp.headers.get_list("set-cookie"))
+            except Exception:
+                raw_set_cookie = resp.headers.get("set-cookie") or ""
+                if raw_set_cookie:
+                    set_cookie_headers = [raw_set_cookie]
+
+            fingerprint = build_passive_fingerprint(
+                headers=dict(resp.headers),
+                html=resp.text or "",
+                cookie_names=cookie_names,
+                set_cookie_headers=set_cookie_headers,
+            )
+
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
                 "final_url": str(resp.url),
@@ -242,6 +267,7 @@ class ScraperRunnable(QRunnable):
                 "redirect_chain": redirect_chain,
                 "forms": forms_pack.get("forms", []),
                 "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
+                "fingerprint": fingerprint,
                 "timings": {
                     "request_ms": req_ms,
                     "total_ms": total_ms,
