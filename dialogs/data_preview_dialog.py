@@ -12,7 +12,12 @@ from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгене
 
 class DataPreviewDialog(QDialog):
     export_done = Signal(str, int)
-    export_failed = Signal(str) 
+    export_failed = Signal(str)
+
+    _PREVIEW_HIDDEN_RAW_FIELDS = {
+        "candidates",
+        "candidates_summary",
+    }
     def __init__(self, parent=None,
                  fetch_all: Callable[[], list[dict]] | None = None,
                  fetch_selected: Callable[[], list[dict]] | None = None ):
@@ -82,6 +87,10 @@ class DataPreviewDialog(QDialog):
 
             nr.update(self._extract_candidate_counts(rec))
             nr.update(self._extract_candidate_debug_fields(rec))
+
+            for hidden_key in self._PREVIEW_HIDDEN_RAW_FIELDS:
+                nr.pop(hidden_key, None)
+
             norm_records.append(nr)
 
         records = norm_records
