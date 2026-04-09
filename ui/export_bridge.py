@@ -35,6 +35,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "headers",
     "timings",
     "parameter_intelligence",
+    "response_snapshot",
 }
 
 
@@ -121,6 +122,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record["_raw_result"] = result
 
     record.update(derive_candidate_summary_fields(result))
+    record.update(derive_response_snapshot_summary_fields(result))
 
     return record
 
@@ -146,6 +148,39 @@ def derive_candidate_summary_fields(result: Any) -> dict[str, Any]:
     out.update(_extract_candidate_counts(result))
     out.update(_extract_candidate_debug_fields(result))
     return out
+
+
+def derive_response_snapshot_summary_fields(result: Any) -> dict[str, Any]:
+    """
+    Возвращает compact/flat поля из response_snapshot
+    без модификации исходного payload.
+    """
+    defaults: dict[str, Any] = {
+        "response_status_code": None,
+        "response_content_type": "",
+        "response_content_length": None,
+        "response_body_hash": "",
+        "response_has_body_preview": 0,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    snapshot = result.get("response_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return defaults
+
+    body_preview = snapshot.get("body_preview")
+    has_body_preview = 1 if isinstance(body_preview, str) and body_preview.strip() else 0
+    status_code = snapshot.get("status_code")
+    content_length = snapshot.get("content_length")
+
+    return {
+        "response_status_code": _to_int_count(status_code, None),
+        "response_content_type": _str_or(snapshot.get("content_type"), ""),
+        "response_content_length": _to_int_count(content_length, None),
+        "response_body_hash": _str_or(snapshot.get("body_hash"), ""),
+        "response_has_body_preview": has_body_preview,
+    }
 
 
 def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") -> str:
@@ -443,6 +478,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
             row[nk] = value
 
         row.update(derive_candidate_summary_fields(rec))
+        row.update(derive_response_snapshot_summary_fields(rec))
 
         for hidden_key in PREVIEW_HIDDEN_RAW_FIELDS:
             row.pop(hidden_key, None)
