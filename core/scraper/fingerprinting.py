@@ -147,9 +147,11 @@ def _merge_detections(items: list[dict]) -> list[dict]:
         if not name:
             continue
 
+        incoming_version = str(it.get("version") or "").strip()
         if category == "library":
-            base_name, version = _split_library_name_version(name)
+            base_name, parsed_version = _split_library_name_version(name)
             name = base_name or name
+            version = _pick_better_version(parsed_version, incoming_version)
             key = (name.lower(), category.lower())
         else:
             version = ""
@@ -181,19 +183,19 @@ def _merge_detections(items: list[dict]) -> list[dict]:
         best_version = str(item.get("best_version") or "").strip()
         is_library = item.get("category") == "library"
         primary_evidence = _pick_primary_evidence(evidences)
-        out.append(
-            {
-                "name": base_name,
-                "version": best_version if is_library else "",
-                "category": item.get("category", ""),
-                "confidence": derived_conf,
-                # keep backward-compatible string field; now aggregated
-                "evidence": " | ".join(evidences),
-                # additive structured evidence for step 1B.x
-                "evidence_sources": evidences,
-                "primary_evidence": primary_evidence,
-            }
-        )
+        row = {
+            "name": base_name,
+            "category": item.get("category", ""),
+            "confidence": derived_conf,
+            # keep backward-compatible string field; now aggregated
+            "evidence": " | ".join(evidences),
+            # additive structured evidence for step 1B.x
+            "evidence_sources": evidences,
+            "primary_evidence": primary_evidence,
+        }
+        if is_library and best_version:
+            row["version"] = best_version
+        out.append(row)
 
     out.sort(
         key=lambda x: (
