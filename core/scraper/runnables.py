@@ -14,7 +14,7 @@ from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
 from core.discovery.url_discovery import parse_forms_from_html
 from core.scraper.fingerprinting import build_passive_fingerprint
-
+from core.discovery.parameter_intelligence import analyze_query_params
 
 
 # === SECTION === Signals
@@ -257,6 +257,12 @@ class ScraperRunnable(QRunnable):
                 cookie_names=cookie_names,
                 set_cookie_headers=set_cookie_headers,
             )
+            
+            from urllib.parse import urlparse, parse_qs
+
+            parsed = urlparse(str(resp.url))
+            query_params = parse_qs(parsed.query)
+            param_intel = analyze_query_params(query_params)
 
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
@@ -268,6 +274,7 @@ class ScraperRunnable(QRunnable):
                 "forms": forms_pack.get("forms", []),
                 "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
                 "fingerprint": fingerprint,
+                "parameter_intelligence": param_intel,
                 "timings": {
                     "request_ms": req_ms,
                     "total_ms": total_ms,
