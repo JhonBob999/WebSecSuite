@@ -39,10 +39,17 @@ def _iter_scope_urls(classified_urls_by_scope: dict | None) -> Iterable[tuple[st
         scope_name = str(scope or "unknown").strip().lower() or "unknown"
 
         if isinstance(urls, dict):
-            for url_value in urls.keys():
-                if url_value is None:
-                    continue
-                yield scope_name, str(url_value)
+            nested_urls = urls.get("urls")
+            if isinstance(nested_urls, (list, tuple, set)):
+                for item in nested_urls:
+                    if item is None:
+                        continue
+                    if isinstance(item, dict):
+                        url_value = item.get("url")
+                        if url_value:
+                            yield scope_name, str(url_value)
+                        continue
+                    yield scope_name, str(item)
             continue
 
         if isinstance(urls, (list, tuple, set)):
@@ -57,17 +64,20 @@ def _iter_scope_urls(classified_urls_by_scope: dict | None) -> Iterable[tuple[st
                 yield scope_name, str(item)
 
 
-def _iter_parameter_entries(parameter_intelligence: dict | None) -> Iterable[dict]:
-    if not isinstance(parameter_intelligence, dict):
+def _iter_parameter_entries(parameter_intelligence: dict | list | None) -> Iterable[dict]:
+    if isinstance(parameter_intelligence, dict):
+        params = parameter_intelligence.get("params")
+        if not isinstance(params, list):
+            return
+        for item in params:
+            if isinstance(item, dict):
+                yield item
         return
 
-    params = parameter_intelligence.get("params")
-    if not isinstance(params, list):
-        return
-
-    for item in params:
-        if isinstance(item, dict):
-            yield item
+    if isinstance(parameter_intelligence, list):
+        for item in parameter_intelligence:
+            if isinstance(item, dict):
+                yield item
 
 
 def _safe_add_candidate(
@@ -108,7 +118,7 @@ def _safe_add_candidate(
 def generate_candidates(
     final_url: str,
     classified_urls_by_scope: dict | None = None,
-    parameter_intelligence: dict | None = None,
+    parameter_intelligence: dict | list | None = None,
 ) -> dict:
     """
     Build a baseline list of vulnerability candidates.
@@ -146,32 +156,25 @@ def generate_candidates(
         if not param_name:
             continue
 
-        risk_tags = param_entry.get("risk_tags") or []
         param_confidence = _normalize_confidence(param_entry.get("confidence"))
+        _safe_add_candidate(
+            candidates,
+            seen,
+            fallback_url=normalized_final_url,
+            candidate_type="parameter_probe",
+            url=normalized_final_url,
+            param=param_name,
+            confidence=param_confidence,
+            evidence={"source": "parameter_intelligence", "category": param_entry.get("category", "unknown")},
+        )
 
-        if isinstance(risk_tags, list) and risk_tags:
-            for risk_tag in risk_tags:
-                _safe_add_candidate(
-                    candidates,
-                    seen,
-                    fallback_url=normalized_final_url,
-                    candidate_type=str(risk_tag),
-                    url=normalized_final_url,
-                    param=param_name,
-                    confidence=max(param_confidence, 0.3),
-                    evidence={"source": "parameter_intelligence", "category": param_entry.get("category", "unknown")},
-                )
-        else:
-            _safe_add_candidate(
-                candidates,
-                seen,
-                fallback_url=normalized_final_url,
-                candidate_type="parameter_probe",
-                url=normalized_final_url,
-                param=param_name,
-                confidence=param_confidence,
-                evidence={"source": "parameter_intelligence", "category": param_entry.get("category", "unknown")},
-            )
+    candidates.sort(
+        key=lambda item: (
+            str(item.get("type") or ""),
+            str(item.get("url") or ""),
+            str(item.get("param") or ""),
+        )
+    )
 
     by_type: dict[str, int] = {}
     for candidate in candidates:
