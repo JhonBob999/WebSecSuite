@@ -127,8 +127,8 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
     if fmt not in {"csv", "json", "xlsx"}:
         raise ValueError(f"Unsupported export format: {fmt}")
 
-    # Нормализуем список (нужен второй проход для объединения полей в CSV/XLSX)
-    items = [dict(r) for r in records]
+    # Нормализуем список к export-friendly плоскому виду (включая candidate summary поля).
+    items = [task_to_record(r) for r in records]
 
     # Гарантируем существование директории
     _ensure_parent_dir(path)
@@ -136,9 +136,9 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
     if fmt == "json":
         _to_json(items, path)
     elif fmt == "csv":
-        _to_csv(items, path)
+        _to_csv(_tabular_items(items), path)
     else:
-        _to_xlsx(items, path)
+        _to_xlsx(_tabular_items(items), path)
 
     return path
 
@@ -356,6 +356,17 @@ def _union_keys(items: list[dict[str, Any]]) -> list[str]:
         for k in it.keys():
             keys.setdefault(k, None)
     return list(keys.keys())
+
+
+def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Фильтрует внутренние/сырые поля для CSV/XLSX экспорта.
+    """
+    hidden = {"_raw_result", "candidates", "candidates_summary"}
+    out: list[dict[str, Any]] = []
+    for it in items:
+        out.append({k: v for k, v in it.items() if k not in hidden})
+    return out
 
 
 def _ensure_parent_dir(path: str) -> None:
