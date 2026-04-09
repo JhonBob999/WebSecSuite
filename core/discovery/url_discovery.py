@@ -4,6 +4,7 @@ from html.parser import HTMLParser
 from typing import Iterable, Tuple
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs
 
+from core.discovery.endpoint_classifier import classify_endpoint_type
 from core.discovery.parameter_intelligence import analyze_query_params
 
 try:  # Optional HTML parser if available in the environment
@@ -528,6 +529,7 @@ def discover(html: str, base_url: str | None) -> dict:
     base_url = base_url or ""
     urls = extract_urls_from_html(html or "", base_url)
     internal, external = split_internal_external(urls, base_url)
+    classified_urls = [{"url": u, "endpoint_type": classify_endpoint_type(u)} for u in urls]
     params_map = {u: extract_query_params(u) for u in urls}
     params_map = {u: p for u, p in params_map.items() if p}
 
@@ -552,6 +554,7 @@ def discover(html: str, base_url: str | None) -> dict:
             "all": urls,
             "internal": internal,
             "external": external,
+            "classified": classified_urls,
         },
         "query_params": params_map,
         "parameter_intelligence": parameter_intelligence,
