@@ -4,6 +4,7 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 import time
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -108,6 +109,53 @@ class ScraperRunnable(QRunnable):
             time.sleep(0.05)
         return True
 
+    def _now_iso_utc(self) -> str:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _build_request_recipe(
+        self,
+        *,
+        request_url: str,
+        method: str,
+        headers: Optional[Dict[str, Any]],
+        cookie_path: Optional[str],
+        redirects: int,
+        timeout: Any,
+        payload_source: str,
+        timestamp: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        safe_headers: Dict[str, str] = {}
+        try:
+            for k, v in dict(headers or {}).items():
+                if k is None:
+                    continue
+                safe_headers[str(k)] = "" if v is None else str(v)
+        except Exception:
+            safe_headers = {}
+
+        safe_timeout: Optional[float] = None
+        try:
+            if timeout is not None:
+                safe_timeout = float(timeout)
+        except Exception:
+            safe_timeout = None
+
+        try:
+            safe_redirects = int(redirects)
+        except Exception:
+            safe_redirects = 0
+
+        return {
+            "url": str(request_url or ""),
+            "method": str(method or "GET").upper(),
+            "headers": safe_headers,
+            "cookie_path": str(cookie_path or ""),
+            "redirects": max(0, safe_redirects),
+            "timeout": safe_timeout,
+            "payload_source": str(payload_source or "direct_url"),
+            "timestamp": timestamp or self._now_iso_utc(),
+        }
+
     # --- Main entry point ---
     def run(self) -> None:
         tid = getattr(self.task, "id", "")
@@ -121,6 +169,12 @@ class ScraperRunnable(QRunnable):
         params = getattr(self.task, "params", {}) or {}
         cookie_file = params.get("cookie_file") or getattr(self.task, "cookie_file", None)
         auto_save_cookies = params.get("auto_save_cookies", True)
+        payload_source = (
+            params.get("payload_source")
+            or params.get("source_type")
+            or ("discovered_url" if getattr(self.task, "source_url", None) else "direct_url")
+        )
+        recipe_cookie_path = str(cookie_file or "")
 
         self.signals.task_status.emit(tid, "Running")
         self.signals.task_progress.emit(tid, 0)
@@ -137,6 +191,7 @@ class ScraperRunnable(QRunnable):
 
             # --- автозагрузка cookies по cookie_file или домену из URL
             jar, cookie_path, loaded = load_cookiejar(url=url, cookie_file=cookie_file)
+            recipe_cookie_path = str(cookie_path or recipe_cookie_path or "")
             self.signals.task_log.emit(tid, "INFO", f"Cookies loaded: {loaded} from {cookie_path}")
 
             # лог запроса
@@ -191,6 +246,7 @@ class ScraperRunnable(QRunnable):
                 setattr(self.task, "params", params)
                 if hasattr(self.task, "cookies_path"):
                     setattr(self.task, "cookies_path", str(target_path))
+                recipe_cookie_path = str(target_path)
 
                 self.signals.task_log.emit(tid, "INFO", f"Cookies saved: {saved} → {target_path}")
 
@@ -214,6 +270,13 @@ class ScraperRunnable(QRunnable):
                 }
                 for r in (resp.history or [])
             ]
+            used_method = method
+            used_request_headers: Dict[str, Any] = headers
+            try:
+                used_method = str(getattr(resp.request, "method", method) or method).upper()
+                used_request_headers = dict(getattr(resp.request, "headers", {}) or headers or {})
+            except Exception:
+                pass
 
             self.signals.task_progress.emit(tid, 50)
 
@@ -288,6 +351,16 @@ class ScraperRunnable(QRunnable):
                     "request_ms": req_ms,
                     "total_ms": total_ms,
                 },
+                "request_recipe": self._build_request_recipe(
+                    request_url=url,
+                    method=used_method,
+                    headers=used_request_headers,
+                    cookie_path=recipe_cookie_path,
+                    redirects=len(redirect_chain),
+                    timeout=timeout,
+                    payload_source=str(payload_source or "direct_url"),
+                    timestamp=self._now_iso_utc(),
+                ),
             }
             result["discovery"] = discover(resp.text or "", str(resp.url))
 
@@ -347,9 +420,35 @@ class ScraperRunnable(QRunnable):
             )
 
         except httpx.HTTPError as e:
+            self.task.result = {
+                "error": f"httpx error: {e}",
+                "request_recipe": self._build_request_recipe(
+                    request_url=url,
+                    method=method,
+                    headers=headers,
+                    cookie_path=recipe_cookie_path,
+                    redirects=0,
+                    timeout=timeout,
+                    payload_source=str(payload_source or "direct_url"),
+                    timestamp=self._now_iso_utc(),
+                ),
+            }
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
+            self.task.result = {
+                "error": f"Unhandled error: {e}",
+                "request_recipe": self._build_request_recipe(
+                    request_url=url,
+                    method=method,
+                    headers=headers,
+                    cookie_path=recipe_cookie_path,
+                    redirects=0,
+                    timeout=timeout,
+                    payload_source=str(payload_source or "direct_url"),
+                    timestamp=self._now_iso_utc(),
+                ),
+            }
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         finally:
