@@ -1,0 +1,268 @@
+[2026-04-09T01:17:28.592038700+00:00] startup: base_url=https://chatgpt.com/backend-api path_style=wham
+[2026-04-09T01:17:28.594817700+00:00] auth: mode=ChatGPT account_id=17a96e92-0fc0-4f23-bb79-e0d38b30e78b
+[2026-04-09T01:17:28.595053600+00:00] auth: set ChatGPT-Account-Id header: 17a96e92-0fc0-4f23-bb79-e0d38b30e78b
+[2026-04-09T01:17:28.596089700+00:00] startup: wham_force_internal=false ua=codex_cli_rs/0.118.0 (Windows 10.0.26200; x86_64) vscode/1.115.0 (codex_cloud_tasks_tui)
+[2026-04-09T01:17:28.655606+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:17:28.655783200+00:00] env: git origins: ["https://github.com/JhonBob999/WebSecSuite.git"]
+[2026-04-09T01:17:28.656266+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:17:28.656863400+00:00] env: GET https://chatgpt.com/backend-api/wham/environments/by-repo/github/JhonBob999/WebSecSuite
+[2026-04-09T01:17:29.026478200+00:00] http.list_tasks: env=<all> limit=20 cursor_in=<none> cursor_out=<none> items=7
+[2026-04-09T01:17:29.026915800+00:00] refresh.apply: env=<all> count=6
+[2026-04-09T01:17:29.768478100+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:17:30.172038100+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:17:30.455411200+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:17:30.455802100+00:00] env: by-repo returned 1 env(s) for JhonBob999/WebSecSuite
+[2026-04-09T01:17:30.456017400+00:00] env: single environment available; selecting it
+[2026-04-09T01:17:30.456300800+00:00] env.select: autodetected id=6945fafc236c8191adcacac1b628aa12 label=JhonBob999/WebSecSuite
+[2026-04-09T01:17:30.501145100+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:17:30.874923800+00:00] http.list_tasks: env=6945fafc236c8191adcacac1b628aa12 limit=20 cursor_in=<none> cursor_out=<none> items=7
+[2026-04-09T01:17:30.875446500+00:00] refresh.apply: env=6945fafc236c8191adcacac1b628aa12 count=6
+[2026-04-09T01:17:31.313837100+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:17:31.732469200+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:17:39.234277700+00:00] http.list_tasks: env=6945fafc236c8191adcacac1b628aa12 limit=20 cursor_in=<none> cursor_out=<none> items=7
+[2026-04-09T01:17:39.234806600+00:00] refresh.apply: env=6945fafc236c8191adcacac1b628aa12 count=6
+[2026-04-09T01:30:51.853585600+00:00] startup: base_url=https://chatgpt.com/backend-api path_style=wham
+[2026-04-09T01:30:51.856273400+00:00] auth: mode=ChatGPT account_id=17a96e92-0fc0-4f23-bb79-e0d38b30e78b
+[2026-04-09T01:30:51.856485800+00:00] auth: set ChatGPT-Account-Id header: 17a96e92-0fc0-4f23-bb79-e0d38b30e78b
+[2026-04-09T01:30:51.857545400+00:00] startup: wham_force_internal=false ua=codex_cli_rs/0.118.0 (Windows 10.0.26200; x86_64) vscode/1.115.0 (codex_cloud_tasks_tui)
+[2026-04-09T01:30:51.912968300+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:30:51.913348300+00:00] env: git origins: ["https://github.com/JhonBob999/WebSecSuite.git"]
+[2026-04-09T01:30:51.913595600+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:30:51.913828400+00:00] env: GET https://chatgpt.com/backend-api/wham/environments/by-repo/github/JhonBob999/WebSecSuite
+[2026-04-09T01:30:52.292527800+00:00] http.list_tasks: env=<all> limit=20 cursor_in=<none> cursor_out=<none> items=8
+[2026-04-09T01:30:52.292885200+00:00] refresh.apply: env=<all> count=7
+[2026-04-09T01:30:52.777189+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:30:52.837454200+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:30:52.837793600+00:00] env: by-repo returned 1 env(s) for JhonBob999/WebSecSuite
+[2026-04-09T01:30:52.838089700+00:00] env: single environment available; selecting it
+[2026-04-09T01:30:52.838354500+00:00] env.select: autodetected id=6945fafc236c8191adcacac1b628aa12 label=JhonBob999/WebSecSuite
+[2026-04-09T01:30:52.882479900+00:00] env: parsed HTTP GitHub origin => JhonBob999/WebSecSuite
+[2026-04-09T01:30:53.167576300+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:30:53.221193200+00:00] http.list_tasks: env=6945fafc236c8191adcacac1b628aa12 limit=20 cursor_in=<none> cursor_out=<none> items=8
+[2026-04-09T01:30:53.221608800+00:00] refresh.apply: env=6945fafc236c8191adcacac1b628aa12 count=7
+[2026-04-09T01:30:53.708763200+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:30:54.121857900+00:00] env: status=200 OK content-type=application/json
+[2026-04-09T01:31:07.296800800+00:00] apply_result: mode=preflight id=task_e_69d6fe8842f08332bb623fa678a2373f status=Error applied=0 skipped=1 conflicts=0 cmd=(cd C:/Users/rusla/Desktop/WebSecSuite && git apply --check 'C:\Users\rusla\AppData\Local\Temp\.tmpqDfxy6\patch.diff')
+stdout_tail=
+
+stderr_tail=
+error: patch failed: core/scraper/fingerprinting.py:159
+error: core/scraper/fingerprinting.py: patch does not apply
+
+patch_summary: kind=git-diff lines=81 chars=3245 cwd=C:\Users\rusla\Desktop\WebSecSuite ; head=
+diff --git a/core/scraper/fingerprinting.py b/core/scraper/fingerprinting.py
+index 67ab02b50f2f074fba9c7a12d2156d923e44a710..985d91ccfb4bcf2222511fb4922feae4a146ae1b 100644
+--- a/core/scraper/fingerprinting.py
++++ b/core/scraper/fingerprinting.py
+@@ -159,63 +159,63 @@ def _merge_detections(items: list[dict]) -> list[dict]:
+ 
+         if key not in merged:
+             merged[key] = {
+                 "name": name,
+                 "category": category,
+                 "confidence": conf,
+                 "evidence": ev_list,
+                 "best_version": version,
+             }
+             continue
+ 
+         prev = merged[key]
+         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+         prev["best_version"] = _pick_better_version(str(prev.get("best_vers…
+----- PATCH BEGIN -----
+diff --git a/core/scraper/fingerprinting.py b/core/scraper/fingerprinting.py
+index 67ab02b50f2f074fba9c7a12d2156d923e44a710..985d91ccfb4bcf2222511fb4922feae4a146ae1b 100644
+--- a/core/scraper/fingerprinting.py
++++ b/core/scraper/fingerprinting.py
+@@ -159,63 +159,63 @@ def _merge_detections(items: list[dict]) -> list[dict]:
+ 
+         if key not in merged:
+             merged[key] = {
+                 "name": name,
+                 "category": category,
+                 "confidence": conf,
+                 "evidence": ev_list,
+                 "best_version": version,
+             }
+             continue
+ 
+         prev = merged[key]
+         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+         prev["best_version"] = _pick_better_version(str(prev.get("best_version") or ""), version)
+         prev_e = _evidence_to_list(prev.get("evidence"))
+         prev["evidence"] = sorted(set(prev_e + ev_list))
+ 
+     out: list[dict] = []
+     for _, item in merged.items():
+         evidences = _evidence_to_list(item.get("evidence"))
+         derived_conf = _confidence_from_evidence(evidences, str(item.get("confidence") or "low"))
+         base_name = str(item.get("name") or "")
+         best_version = str(item.get("best_version") or "").strip()
+         is_library = item.get("category") == "library"
+         primary_evidence = _pick_primary_evidence(evidences)
+-        out.append(
+-            {
+-                "name": base_name,
+-                "version": best_version if is_library else "",
+-                "category": item.get("category", ""),
+-                "confidence": derived_conf,
+-                # keep backward-compatible string field; now aggregated
+-                "evidence": " | ".join(evidences),
+-                # additive structured evidence for step 1B.x
+-                "evidence_sources": evidences,
+-                "primary_evidence": primary_evidence,
+-            }
+-        )
++        tech_item = {
++            "name": base_name,
++            "category": item.get("category", ""),
++            "confidence": derived_conf,
++            # keep backward-compatible string field; now aggregated
++            "evidence": " | ".join(evidences),
++            # additive structured evidence for step 1B.x
++            "evidence_sources": evidences,
++            "primary_evidence": primary_evidence,
++        }
++        if is_library and best_version:
++            tech_item["version"] = best_version
++        out.append(tech_item)
+ 
+     out.sort(
+         key=lambda x: (
+             -_CONFIDENCE_SCORE.get(_normalize_confidence(str(x.get("confidence") or "low")), 0),
+             str(x.get("category") or ""),
+             str(x.get("name") or ""),
+         )
+     )
+     return out
+ 
+ 
+ 
+ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
+     """
+     Step 1B.1 follow-up:
+     collapse library-style React/Vue/Angular entries into the main framework entry.
+     Keeps payload compatible and reduces duplicate framework rows.
+     """
+     if not items:
+         return []
+ 
+     framework_roots = {
+         "react": ("React", "frontend_framework"),
+         "vue": ("Vue", "frontend_framework"),
+         "angular": ("Angular", "frontend_framework"),
+
+----- PATCH END -----
+
+[2026-04-09T01:31:33.708456500+00:00] apply_result: mode=preflight id=task_e_69d6fe8842f08332bb623fa678a2373f status=Error applied=0 skipped=1 conflicts=0 cmd=(cd C:/Users/rusla/Desktop/WebSecSuite && git apply --check 'C:\Users\rusla\AppData\Local\Temp\.tmpJYK50D\patch.diff')
+stdout_tail=
+
+stderr_tail=
+error: patch failed: core/scraper/fingerprinting.py:159
+error: core/scraper/fingerprinting.py: patch does not apply
+
+patch_summary: kind=git-diff lines=81 chars=3245 cwd=C:\Users\rusla\Desktop\WebSecSuite ; head=
+diff --git a/core/scraper/fingerprinting.py b/core/scraper/fingerprinting.py
+index 67ab02b50f2f074fba9c7a12d2156d923e44a710..985d91ccfb4bcf2222511fb4922feae4a146ae1b 100644
+--- a/core/scraper/fingerprinting.py
++++ b/core/scraper/fingerprinting.py
+@@ -159,63 +159,63 @@ def _merge_detections(items: list[dict]) -> list[dict]:
+ 
+         if key not in merged:
+             merged[key] = {
+                 "name": name,
+                 "category": category,
+                 "confidence": conf,
+                 "evidence": ev_list,
+                 "best_version": version,
+             }
+             continue
+ 
+         prev = merged[key]
+         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+         prev["best_version"] = _pick_better_version(str(prev.get("best_vers…
+----- PATCH BEGIN -----
+diff --git a/core/scraper/fingerprinting.py b/core/scraper/fingerprinting.py
+index 67ab02b50f2f074fba9c7a12d2156d923e44a710..985d91ccfb4bcf2222511fb4922feae4a146ae1b 100644
+--- a/core/scraper/fingerprinting.py
++++ b/core/scraper/fingerprinting.py
+@@ -159,63 +159,63 @@ def _merge_detections(items: list[dict]) -> list[dict]:
+ 
+         if key not in merged:
+             merged[key] = {
+                 "name": name,
+                 "category": category,
+                 "confidence": conf,
+                 "evidence": ev_list,
+                 "best_version": version,
+             }
+             continue
+ 
+         prev = merged[key]
+         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+         prev["best_version"] = _pick_better_version(str(prev.get("best_version") or ""), version)
+         prev_e = _evidence_to_list(prev.get("evidence"))
+         prev["evidence"] = sorted(set(prev_e + ev_list))
+ 
+     out: list[dict] = []
+     for _, item in merged.items():
+         evidences = _evidence_to_list(item.get("evidence"))
+         derived_conf = _confidence_from_evidence(evidences, str(item.get("confidence") or "low"))
+         base_name = str(item.get("name") or "")
+         best_version = str(item.get("best_version") or "").strip()
+         is_library = item.get("category") == "library"
+         primary_evidence = _pick_primary_evidence(evidences)
+-        out.append(
+-            {
+-                "name": base_name,
+-                "version": best_version if is_library else "",
+-                "category": item.get("category", ""),
+-                "confidence": derived_conf,
+-                # keep backward-compatible string field; now aggregated
+-                "evidence": " | ".join(evidences),
+-                # additive structured evidence for step 1B.x
+-                "evidence_sources": evidences,
+-                "primary_evidence": primary_evidence,
+-            }
+-        )
++        tech_item = {
++            "name": base_name,
++            "category": item.get("category", ""),
++            "confidence": derived_conf,
++            # keep backward-compatible string field; now aggregated
++            "evidence": " | ".join(evidences),
++            # additive structured evidence for step 1B.x
++            "evidence_sources": evidences,
++            "primary_evidence": primary_evidence,
++        }
++        if is_library and best_version:
++            tech_item["version"] = best_version
++        out.append(tech_item)
+ 
+     out.sort(
+         key=lambda x: (
+             -_CONFIDENCE_SCORE.get(_normalize_confidence(str(x.get("confidence") or "low")), 0),
+             str(x.get("category") or ""),
+             str(x.get("name") or ""),
+         )
+     )
+     return out
+ 
+ 
+ 
+ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
+     """
+     Step 1B.1 follow-up:
+     collapse library-style React/Vue/Angular entries into the main framework entry.
+     Keeps payload compatible and reduces duplicate framework rows.
+     """
+     if not items:
+         return []
+ 
+     framework_roots = {
+         "react": ("React", "frontend_framework"),
+         "vue": ("Vue", "frontend_framework"),
+         "angular": ("Angular", "frontend_framework"),
+
+----- PATCH END -----
+
