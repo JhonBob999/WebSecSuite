@@ -46,7 +46,10 @@ class DataPreviewDialog(QDialog):
         keys = set()
         for r in self._records:
             keys.update(r.keys())
-        preferred = ["final_url", "status_code", "title", "content_len", "request_ms", "redirects"]
+        preferred = [
+            "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
+            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf"
+        ]
         rest = sorted(k for k in keys if k not in preferred)
         return [c for c in preferred if c in keys] + rest
 
@@ -75,6 +78,8 @@ class DataPreviewDialog(QDialog):
                         i += 1
                     nk = f"{nk}#{i}"
                 nr[nk] = v
+
+            nr.update(self._extract_candidate_counts(rec))
             norm_records.append(nr)
 
         records = norm_records
@@ -96,7 +101,10 @@ class DataPreviewDialog(QDialog):
         for r in records:
             keys.update(r.keys())
 
-        preferred = ["final_url", "status_code", "title", "content_len", "request_ms", "redirects"]
+        preferred = [
+            "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
+            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf"
+        ]
         rest = sorted(k for k in keys if k not in preferred)
         keys_order = [k for k in preferred if k in keys] + rest
 
@@ -154,6 +162,43 @@ class DataPreviewDialog(QDialog):
         if key == "forms" and isinstance(val, list):
             return self._compact_forms(val)
         return val
+
+    def _to_int_count(self, value, default: int = 0) -> int:
+        try:
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, (int, float)):
+                return int(value)
+            if isinstance(value, str):
+                parsed = int(value.strip())
+                return parsed
+        except Exception:
+            pass
+        return default
+
+    def _extract_candidate_counts(self, rec: dict) -> dict:
+        if not isinstance(rec, dict):
+            return {}
+
+        summary = rec.get("candidates_summary")
+        if not isinstance(summary, dict):
+            candidates = rec.get("candidates")
+            if isinstance(candidates, dict):
+                summary = candidates.get("summary")
+            else:
+                summary = None
+
+        if not isinstance(summary, dict):
+            return {}
+
+        by_type = summary.get("by_type") if isinstance(summary.get("by_type"), dict) else {}
+        return {
+            "candidates_total": self._to_int_count(summary.get("total"), 0),
+            "candidates_xss": self._to_int_count(by_type.get("xss_candidate"), 0),
+            "candidates_sqli": self._to_int_count(by_type.get("sqli_candidate"), 0),
+            "candidates_lfi": self._to_int_count(by_type.get("lfi_candidate"), 0),
+            "candidates_ssrf": self._to_int_count(by_type.get("ssrf_candidate"), 0),
+        }
 
     def _compact_forms(self, forms: list) -> str:
         if not forms:
