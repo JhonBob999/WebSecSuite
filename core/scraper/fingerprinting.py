@@ -231,6 +231,7 @@ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
         category = str(it.get("category") or "").strip() or "unknown"
         conf = _normalize_confidence(str(it.get("confidence") or "low"))
         ev_list = _evidence_to_list(it.get("evidence_sources") or it.get("evidence"))
+        version = str(it.get("version") or "").strip() if category == "library" else ""
 
         root_key = None
         lname = name.lower()
@@ -252,6 +253,7 @@ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
                 "category": framework_roots[root_key][1] if root_key is not None else category,
                 "confidence": conf,
                 "evidence_sources": ev_list,
+                "best_version": "" if root_key is not None else version,
             }
             continue
 
@@ -259,20 +261,25 @@ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
         prev_e = _evidence_to_list(prev.get("evidence_sources"))
         prev["evidence_sources"] = sorted(set(prev_e + ev_list))
+        if prev.get("category") == "library":
+            prev["best_version"] = _pick_better_version(str(prev.get("best_version") or ""), version)
 
     out: list[dict] = []
     for it in by_key.values():
         evidences = _evidence_to_list(it.get("evidence_sources"))
-        out.append(
-            {
-                "name": it.get("name", ""),
-                "category": it.get("category", ""),
-                "confidence": _normalize_confidence(str(it.get("confidence") or "low")),
-                "evidence": " | ".join(evidences),
-                "evidence_sources": evidences,
-                "primary_evidence": _pick_primary_evidence(evidences),
-            }
-        )
+        row = {
+            "name": it.get("name", ""),
+            "category": it.get("category", ""),
+            "confidence": _normalize_confidence(str(it.get("confidence") or "low")),
+            "evidence": " | ".join(evidences),
+            "evidence_sources": evidences,
+            "primary_evidence": _pick_primary_evidence(evidences),
+        }
+        if row.get("category") == "library":
+            best_version = str(it.get("best_version") or "").strip()
+            if best_version:
+                row["version"] = best_version
+        out.append(row)
 
     out.sort(
         key=lambda x: (
