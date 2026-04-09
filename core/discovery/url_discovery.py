@@ -529,7 +529,13 @@ def discover(html: str, base_url: str | None) -> dict:
     base_url = base_url or ""
     urls = extract_urls_from_html(html or "", base_url)
     internal, external = split_internal_external(urls, base_url)
-    classified_urls = [{"url": u, "endpoint_type": classify_endpoint_type(u)} for u in urls]
+
+    def _classify_urls(url_list: Iterable[str]) -> list[dict[str, str]]:
+        return [{"url": u, "endpoint_type": classify_endpoint_type(u)} for u in url_list]
+
+    classified_urls = _classify_urls(urls)
+    classified_internal_urls = _classify_urls(internal)
+    classified_external_urls = _classify_urls(external)
     params_map = {u: extract_query_params(u) for u in urls}
     params_map = {u: p for u, p in params_map.items() if p}
 
@@ -555,6 +561,11 @@ def discover(html: str, base_url: str | None) -> dict:
             "internal": internal,
             "external": external,
             "classified": classified_urls,
+        },
+        "classified_urls": {
+            "all": classified_urls,
+            "internal": classified_internal_urls,
+            "external": classified_external_urls,
         },
         "query_params": params_map,
         "parameter_intelligence": parameter_intelligence,
