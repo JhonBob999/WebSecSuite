@@ -85,8 +85,7 @@ class DataPreviewDialog(QDialog):
                     nk = f"{nk}#{i}"
                 nr[nk] = v
 
-            nr.update(self._extract_candidate_counts(rec))
-            nr.update(self._extract_candidate_debug_fields(rec))
+            nr.update(xb.derive_candidate_summary_fields(rec))
 
             for hidden_key in self._PREVIEW_HIDDEN_RAW_FIELDS:
                 nr.pop(hidden_key, None)
@@ -174,97 +173,6 @@ class DataPreviewDialog(QDialog):
         if key == "forms" and isinstance(val, list):
             return self._compact_forms(val)
         return val
-
-    def _to_int_count(self, value, default: int = 0) -> int:
-        try:
-            if isinstance(value, bool):
-                return int(value)
-            if isinstance(value, (int, float)):
-                return int(value)
-            if isinstance(value, str):
-                parsed = int(value.strip())
-                return parsed
-        except Exception:
-            pass
-        return default
-
-    def _extract_candidate_counts(self, rec: dict) -> dict:
-        if not isinstance(rec, dict):
-            return {}
-
-        summary = rec.get("candidates_summary")
-        if not isinstance(summary, dict):
-            candidates = rec.get("candidates")
-            if isinstance(candidates, dict):
-                summary = candidates.get("summary")
-            else:
-                summary = None
-
-        if not isinstance(summary, dict):
-            return {}
-
-        by_type = summary.get("by_type") if isinstance(summary.get("by_type"), dict) else {}
-        return {
-            "candidates_total": self._to_int_count(summary.get("total"), 0),
-            "candidates_xss": self._to_int_count(by_type.get("xss_candidate"), 0),
-            "candidates_sqli": self._to_int_count(by_type.get("sqli_candidate"), 0),
-            "candidates_lfi": self._to_int_count(by_type.get("lfi_candidate"), 0),
-            "candidates_ssrf": self._to_int_count(by_type.get("ssrf_candidate"), 0),
-        }
-
-    def _extract_candidate_debug_fields(self, rec: dict) -> dict:
-        if not isinstance(rec, dict):
-            return {
-                "candidates_types_present": "",
-                "candidates_max_confidence": "",
-            }
-
-        candidates = rec.get("candidates")
-        candidates_all = candidates.get("all") if isinstance(candidates, dict) else None
-        if not isinstance(candidates_all, list):
-            return {
-                "candidates_types_present": "",
-                "candidates_max_confidence": "",
-            }
-
-        type_map = {
-            "xss_candidate": "xss",
-            "sqli_candidate": "sqli",
-            "lfi_candidate": "lfi",
-            "ssrf_candidate": "ssrf",
-        }
-        type_order = ("xss_candidate", "sqli_candidate", "lfi_candidate", "ssrf_candidate")
-        confidence_rank = {
-            "low": 1,
-            "medium": 2,
-            "high": 3,
-        }
-
-        found_types = set()
-        max_confidence_value = ""
-        max_confidence_rank = 0
-
-        for item in candidates_all:
-            if not isinstance(item, dict):
-                continue
-
-            raw_type = item.get("type")
-            if isinstance(raw_type, str) and raw_type in type_map:
-                found_types.add(raw_type)
-
-            raw_confidence = item.get("confidence")
-            if isinstance(raw_confidence, str):
-                conf = raw_confidence.strip().lower()
-                rank = confidence_rank.get(conf, 0)
-                if rank > max_confidence_rank:
-                    max_confidence_rank = rank
-                    max_confidence_value = conf
-
-        types_compact = ",".join(type_map[t] for t in type_order if t in found_types)
-        return {
-            "candidates_types_present": types_compact,
-            "candidates_max_confidence": max_confidence_value,
-        }
 
     def _compact_forms(self, forms: list) -> str:
         if not forms:

@@ -86,8 +86,32 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
         # Полный сырый result — удобно для JSON-экспорта без потерь:
         "_raw_result": result,
     }
+    record.update(derive_candidate_summary_fields(result))
 
     return record
+
+
+def derive_candidate_summary_fields(result: Any) -> dict[str, Any]:
+    """
+    Возвращает export-friendly candidate-derived summary fields
+    из raw result без модификации исходного payload.
+    """
+    summary_defaults: dict[str, Any] = {
+        "candidates_total": 0,
+        "candidates_xss": 0,
+        "candidates_sqli": 0,
+        "candidates_lfi": 0,
+        "candidates_ssrf": 0,
+        "candidates_types_present": "",
+        "candidates_max_confidence": "",
+    }
+    if not isinstance(result, Mapping):
+        return summary_defaults
+
+    out = dict(summary_defaults)
+    out.update(_extract_candidate_counts(result))
+    out.update(_extract_candidate_debug_fields(result))
+    return out
 
 
 def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") -> str:
@@ -204,6 +228,89 @@ def _to_xlsx(items: list[dict[str, Any]], path: str) -> None:
 
 def _str_or(value: Any, default: str) -> str:
     return value if isinstance(value, str) else default
+
+
+def _to_int_count(value: Any, default: int = 0) -> int:
+    try:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            return int(value.strip())
+    except Exception:
+        pass
+    return default
+
+
+def _extract_candidate_counts(rec: Mapping[str, Any]) -> dict[str, int]:
+    summary = rec.get("candidates_summary")
+    if not isinstance(summary, Mapping):
+        candidates = rec.get("candidates")
+        if isinstance(candidates, Mapping):
+            summary = candidates.get("summary")
+        else:
+            summary = None
+
+    if not isinstance(summary, Mapping):
+        return {}
+
+    by_type = summary.get("by_type") if isinstance(summary.get("by_type"), Mapping) else {}
+    return {
+        "candidates_total": _to_int_count(summary.get("total"), 0),
+        "candidates_xss": _to_int_count(by_type.get("xss_candidate"), 0),
+        "candidates_sqli": _to_int_count(by_type.get("sqli_candidate"), 0),
+        "candidates_lfi": _to_int_count(by_type.get("lfi_candidate"), 0),
+        "candidates_ssrf": _to_int_count(by_type.get("ssrf_candidate"), 0),
+    }
+
+
+def _extract_candidate_debug_fields(rec: Mapping[str, Any]) -> dict[str, str]:
+    candidates = rec.get("candidates")
+    candidates_all = candidates.get("all") if isinstance(candidates, Mapping) else None
+    if not isinstance(candidates_all, list):
+        return {
+            "candidates_types_present": "",
+            "candidates_max_confidence": "",
+        }
+
+    type_map = {
+        "xss_candidate": "xss",
+        "sqli_candidate": "sqli",
+        "lfi_candidate": "lfi",
+        "ssrf_candidate": "ssrf",
+    }
+    type_order = ("xss_candidate", "sqli_candidate", "lfi_candidate", "ssrf_candidate")
+    confidence_rank = {
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+    }
+
+    found_types = set()
+    max_confidence_value = ""
+    max_confidence_rank = 0
+
+    for item in candidates_all:
+        if not isinstance(item, Mapping):
+            continue
+
+        raw_type = item.get("type")
+        if isinstance(raw_type, str) and raw_type in type_map:
+            found_types.add(raw_type)
+
+        raw_confidence = item.get("confidence")
+        if isinstance(raw_confidence, str):
+            conf = raw_confidence.strip().lower()
+            rank = confidence_rank.get(conf, 0)
+            if rank > max_confidence_rank:
+                max_confidence_rank = rank
+                max_confidence_value = conf
+
+    return {
+        "candidates_types_present": ",".join(type_map[t] for t in type_order if t in found_types),
+        "candidates_max_confidence": max_confidence_value,
+    }
 
 
 def _deep_get(obj: Any, *keys: str) -> Any:
