@@ -10,4 +10,4 @@ dist/
 *.csv
 ui/panels/__pycache__/scraper_tab.cpython-313.pyc
 error.log
-.xlsx
+*.xlsx
