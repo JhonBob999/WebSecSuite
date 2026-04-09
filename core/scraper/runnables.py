@@ -4,6 +4,7 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 import time
 import threading
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -154,6 +155,77 @@ class ScraperRunnable(QRunnable):
             "timeout": safe_timeout,
             "payload_source": str(payload_source or "direct_url"),
             "timestamp": timestamp or self._now_iso_utc(),
+        }
+
+    def _compact_headers(self, headers: Optional[Dict[str, Any]]) -> Dict[str, str]:
+        compact: Dict[str, str] = {}
+        try:
+            for k, v in dict(headers or {}).items():
+                if k is None:
+                    continue
+                compact[str(k)] = "" if v is None else str(v)
+        except Exception:
+            compact = {}
+        return compact
+
+    def _safe_body_preview(
+        self,
+        *,
+        body: bytes,
+        content_type: str,
+        max_bytes: int = 8192,
+        max_chars: int = 4096,
+    ) -> str:
+        if not body:
+            return ""
+
+        body_head = body[:max_bytes]
+        ct = (content_type or "").lower()
+        looks_textual = any(
+            token in ct
+            for token in ("text/", "json", "xml", "html", "javascript", "x-www-form-urlencoded")
+        )
+        if not looks_textual and b"\x00" in body_head:
+            return f"[binary body {len(body)} bytes]"
+
+        try:
+            preview = body_head.decode("utf-8", errors="replace")
+        except Exception:
+            return f"[binary body {len(body)} bytes]"
+
+        if len(preview) > max_chars:
+            preview = preview[:max_chars]
+        return preview
+
+    def _build_response_snapshot(self, response: Optional[httpx.Response] = None) -> Dict[str, Any]:
+        if response is None:
+            return {
+                "status_code": None,
+                "headers": {},
+                "content_type": "",
+                "content_length": 0,
+                "body_preview": "",
+                "body_hash": "",
+            }
+
+        headers = self._compact_headers(dict(getattr(response, "headers", {}) or {}))
+        body = b""
+        try:
+            body = bytes(getattr(response, "content", b"") or b"")
+        except Exception:
+            body = b""
+
+        content_type = headers.get("content-type") or headers.get("Content-Type") or ""
+        body_hash = hashlib.sha256(body).hexdigest() if body else ""
+        content_length = len(body)
+
+        return {
+            "status_code": getattr(response, "status_code", None),
+            "headers": headers,
+            "content_type": content_type,
+            "content_length": content_length,
+            "body_preview": self._safe_body_preview(body=body, content_type=content_type),
+            "body_hash": body_hash,
         }
 
     # --- Main entry point ---
@@ -361,6 +433,7 @@ class ScraperRunnable(QRunnable):
                     payload_source=str(payload_source or "direct_url"),
                     timestamp=self._now_iso_utc(),
                 ),
+                "response_snapshot": self._build_response_snapshot(resp),
             }
             result["discovery"] = discover(resp.text or "", str(resp.url))
 
@@ -432,6 +505,7 @@ class ScraperRunnable(QRunnable):
                     payload_source=str(payload_source or "direct_url"),
                     timestamp=self._now_iso_utc(),
                 ),
+                "response_snapshot": self._build_response_snapshot(),
             }
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
@@ -448,6 +522,7 @@ class ScraperRunnable(QRunnable):
                     payload_source=str(payload_source or "direct_url"),
                     timestamp=self._now_iso_utc(),
                 ),
+                "response_snapshot": self._build_response_snapshot(),
             }
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
