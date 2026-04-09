@@ -179,11 +179,12 @@ def _merge_detections(items: list[dict]) -> list[dict]:
         derived_conf = _confidence_from_evidence(evidences, str(item.get("confidence") or "low"))
         base_name = str(item.get("name") or "")
         best_version = str(item.get("best_version") or "").strip()
-        display_name = f"{base_name} {best_version}".strip() if item.get("category") == "library" else base_name
+        is_library = item.get("category") == "library"
         primary_evidence = _pick_primary_evidence(evidences)
         out.append(
             {
-                "name": display_name,
+                "name": base_name,
+                "version": best_version if is_library else "",
                 "category": item.get("category", ""),
                 "confidence": derived_conf,
                 # keep backward-compatible string field; now aggregated
