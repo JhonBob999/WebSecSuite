@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 import httpx
 
 from core.cookies.storage import load_cookiejar
+from core.discovery.candidate_generation import generate_candidates
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
+
+logger = logging.getLogger(__name__)
 
 
 def _headers_with_ua(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,4 +94,35 @@ def run(task_ctx: dict) -> dict:
     }
     result["forms"] = forms_pack.get("forms", [])
     result["forms_summary"] = forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0})
+
+    final_url = (
+        base_url
+        or result.get("final_url")
+        or result.get("source", {}).get("base_url")
+        or _infer_base_url(ctx)
+        or ctx.get("source_url")
+        or ""
+    )
+    classified_urls_by_scope = result.get("classified_urls_by_scope")
+    parameter_intelligence = result.get("parameter_intelligence") if "parameter_intelligence" in result else None
+
+    try:
+        result["candidates"] = generate_candidates(
+            final_url=final_url,
+            classified_urls_by_scope=classified_urls_by_scope,
+            parameter_intelligence=parameter_intelligence,
+        )
+    except Exception:
+        logger.exception("Discover URLs candidate generation failed; using baseline fallback.")
+        try:
+            result["candidates"] = generate_candidates(
+                final_url=final_url,
+                classified_urls_by_scope=None,
+                parameter_intelligence=None,
+            )
+        except Exception:
+            logger.exception("Discover URLs baseline candidate generation failed.")
+            result["candidates"] = {"summary": {}}
+
+    result["candidates_summary"] = result["candidates"].get("summary", {})
     return result
