@@ -122,7 +122,24 @@ def run(task_ctx: dict) -> dict:
             )
         except Exception:
             logger.exception("Discover URLs baseline candidate generation failed.")
-            result["candidates"] = {"summary": {}}
+            result["candidates"] = {
+                "all": [],
+                "by_type": {
+                    "xss_candidate": [],
+                    "sqli_candidate": [],
+                    "lfi_candidate": [],
+                    "ssrf_candidate": [],
+                },
+                "summary": {
+                    "total": 0,
+                    "by_type": {
+                        "xss_candidate": 0,
+                        "sqli_candidate": 0,
+                        "lfi_candidate": 0,
+                        "ssrf_candidate": 0,
+                    },
+                },
+            }
 
     result["candidates_summary"] = result["candidates"].get("summary", {})
     return result
