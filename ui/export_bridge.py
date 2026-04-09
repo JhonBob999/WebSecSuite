@@ -8,6 +8,22 @@ from dataclasses import is_dataclass, asdict
 from typing import Any, Iterable, Mapping
 from core.scraper.request_params import normalize_params
 
+PREVIEW_PREFERRED_COLUMNS: list[str] = [
+    "final_url",
+    "status_code",
+    "title",
+    "content_len",
+    "request_ms",
+    "redirects",
+    "candidates_total",
+    "candidates_xss",
+    "candidates_sqli",
+    "candidates_lfi",
+    "candidates_ssrf",
+    "candidates_types_present",
+    "candidates_max_confidence",
+]
+
 
 # ---- Публичное API --------------------------------------------------------
 
@@ -64,28 +80,33 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
 
     headers_resp = _deep_get(result, "headers")
 
-    # 3) Сформируем плоский record (без вложенности)
-    record: dict[str, Any] = {
-        "task_id": task_id,
-        "url": url,
-        "final_url": final_url,
-        "method": method,
-        "status_code": status_code,
-        "content_len": content_len,
-        "request_ms": request_ms,
-        "redirects": redirects,
-        "title": title,
-        # Параметры запроса
-        "user_agent": user_agent,
-        "proxy": proxy,
-        "timeout": timeout,
-        "retries": retries,
-        # Заголовки (req/resp) — как JSON-строки для CSV/XLSX
-        "headers_request": _maybe_json_string(headers_req),
-        "headers_response": _maybe_json_string(headers_resp),
-        # Полный сырый result — удобно для JSON-экспорта без потерь:
-        "_raw_result": result,
-    }
+    # 3) Сформируем export-friendly record без потери полезных derived полей из payload.
+    #    Важно: начинаем с payload, чтобы preview/export использовали общий нормализованный источник.
+    record: dict[str, Any] = dict(result) if isinstance(result, Mapping) else {}
+
+    record.setdefault("task_id", task_id)
+    record.setdefault("url", url)
+    record["final_url"] = final_url
+    record["method"] = method or _str_or(record.get("method"), "")
+    record["status_code"] = status_code
+    record["content_len"] = content_len
+    record["request_ms"] = request_ms
+    record["redirects"] = redirects
+    record["title"] = title
+
+    # Параметры запроса
+    record["user_agent"] = user_agent
+    record["proxy"] = proxy
+    record["timeout"] = timeout
+    record["retries"] = retries
+
+    # Заголовки (req/resp) — как JSON-строки для CSV/XLSX
+    record["headers_request"] = _maybe_json_string(headers_req)
+    record["headers_response"] = _maybe_json_string(headers_resp)
+
+    # Полный сырый result — удобно для JSON-экспорта без потерь:
+    record["_raw_result"] = result
+
     record.update(derive_candidate_summary_fields(result))
 
     return record
@@ -135,10 +156,13 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
 
     if fmt == "json":
         _to_json(items, path)
-    elif fmt == "csv":
-        _to_csv(_tabular_items(items), path)
     else:
-        _to_xlsx(_tabular_items(items), path)
+        tabular_items = _tabular_items(items)
+        columns = preview_column_order(tabular_items)
+        if fmt == "csv":
+            _to_csv(tabular_items, path, fieldnames=columns)
+        else:
+            _to_xlsx(tabular_items, path, fieldnames=columns)
 
     return path
 
@@ -156,7 +180,7 @@ def _to_json(items: list[dict[str, Any]], path: str) -> None:
     _atomic_write_json(path, data, ensure_ascii=False, indent=2)
 
 
-def _to_csv(items: list[dict[str, Any]], path: str) -> None:
+def _to_csv(items: list[dict[str, Any]], path: str, fieldnames: list[str] | None = None) -> None:
     """
     CSV экспорт: объединяем все ключи как заголовки,
     dict/list значения сериализуем в JSON-строку,
@@ -168,7 +192,7 @@ def _to_csv(items: list[dict[str, Any]], path: str) -> None:
         return
 
     # Объединение ключей всех строк
-    fieldnames = _union_keys(items)
+    fieldnames = fieldnames or _union_keys(items)
 
     def row_gen():
         for it in items:
@@ -181,7 +205,7 @@ def _to_csv(items: list[dict[str, Any]], path: str) -> None:
             writer.writerow(row)
 
 
-def _to_xlsx(items: list[dict[str, Any]], path: str) -> None:
+def _to_xlsx(items: list[dict[str, Any]], path: str, fieldnames: list[str] | None = None) -> None:
     """
     XLSX экспорт через openpyxl.
     dict/list → JSON-строки (как в CSV).
@@ -198,7 +222,7 @@ def _to_xlsx(items: list[dict[str, Any]], path: str) -> None:
     ws = wb.active
     ws.title = "export"
 
-    fieldnames = _union_keys(items)
+    fieldnames = fieldnames or _union_keys(items)
 
     # Заголовки
     ws.append(list(fieldnames))
@@ -356,6 +380,18 @@ def _union_keys(items: list[dict[str, Any]]) -> list[str]:
         for k in it.keys():
             keys.setdefault(k, None)
     return list(keys.keys())
+
+
+def preview_column_order(items: list[Mapping[str, Any]]) -> list[str]:
+    """
+    Общий порядок колонок для Data Preview и CSV/XLSX export:
+    preferred -> остальные (sorted).
+    """
+    keys = set()
+    for it in items:
+        keys.update(it.keys())
+    rest = sorted(k for k in keys if k not in PREVIEW_PREFERRED_COLUMNS)
+    return [k for k in PREVIEW_PREFERRED_COLUMNS if k in keys] + rest
 
 
 def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

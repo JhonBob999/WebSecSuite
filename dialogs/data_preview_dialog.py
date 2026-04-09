@@ -51,13 +51,7 @@ class DataPreviewDialog(QDialog):
         keys = set()
         for r in self._records:
             keys.update(r.keys())
-        preferred = [
-            "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
-            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf",
-            "candidates_types_present", "candidates_max_confidence"
-        ]
-        rest = sorted(k for k in keys if k not in preferred)
-        return [c for c in preferred if c in keys] + rest
+        return xb.preview_column_order([{k: "" for k in keys}])
 
     def _rebuild_table(self, records: list[dict] | None = None):
         """Перерисовать tablePreview по снапшоту/records (стабильно, без "плывущих" колонок)."""
@@ -111,13 +105,7 @@ class DataPreviewDialog(QDialog):
         for r in records:
             keys.update(r.keys())
 
-        preferred = [
-            "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
-            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf",
-            "candidates_types_present", "candidates_max_confidence"
-        ]
-        rest = sorted(k for k in keys if k not in preferred)
-        keys_order = [k for k in preferred if k in keys] + rest
+        keys_order = xb.preview_column_order(records)
 
         t.setColumnCount(len(keys_order))
         t.setHorizontalHeaderLabels(keys_order)

@@ -1203,8 +1203,8 @@ class ScraperTabController(QWidget):
         """
         Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт через export_bridge.
         """
-        tasks = self._tasks_for_mode(mode)
-        if not tasks:
+        rows = self._rows_for_export_mode(mode)
+        if not rows:
             self.log.append("WARN", f"Export: no tasks for mode '{mode}'", tag="UI")
             return
 
@@ -1212,9 +1212,9 @@ class ScraperTabController(QWidget):
         if not path:
             return
 
-        # Формируем записи
+        # Формируем записи из того же источника, что Data Preview.
         try:
-            records = [xb.task_to_record(t) for t in tasks]
+            records = self._records_from_rows(rows)
         except Exception as e:
             self.log.append("ERROR", f"Failed to normalize tasks: {e}", tag="EXPORT")
             return
@@ -1225,6 +1225,21 @@ class ScraperTabController(QWidget):
             self.log.append("INFO", f"Exported ({mode}) {len(records)} rows → {path}", tag="EXPORT")
         except Exception as e:
             self.log.append("ERROR", f"Export failed ({mode}): {e}", tag="EXPORT")
+
+    def _rows_for_export_mode(self, mode: str) -> list[int]:
+        if mode == "Selected":
+            return list(self._selected_rows())
+
+        table_rows = list(range(self.ui.taskTable.rowCount()))
+        if mode != "Completed":
+            return table_rows
+
+        done_rows: list[int] = []
+        for row in table_rows:
+            _, task = self._row_to_task(row)
+            if task and getattr(task, "status", "") == TaskStatus.DONE:
+                done_rows.append(row)
+        return done_rows
 
 
     # ==============================
@@ -1913,9 +1928,14 @@ class ScraperTabController(QWidget):
                 continue
 
             rec = deepcopy(payload)
+            if tid:
+                rec.setdefault("task_id", tid)
+            _, task = self._row_to_task(row) if hasattr(self, "_row_to_task") else (None, None)
+            if task:
+                rec.setdefault("url", getattr(task, "url", "") or "")
             t = (payload.get("timings") or {})
             rc = payload.get("redirect_chain") or []
-            rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
+            rec.setdefault("final_url", payload.get("final_url") or rec.get("url") or payload.get("url"))
             rec["request_ms"] = t.get("request_ms")
             rec["redirects"] = len(rc)
             rec.setdefault("status_code", payload.get("status_code"))
