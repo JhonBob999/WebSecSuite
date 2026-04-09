@@ -530,12 +530,6 @@ def discover(html: str, base_url: str | None) -> dict:
     urls = extract_urls_from_html(html or "", base_url)
     internal, external = split_internal_external(urls, base_url)
 
-    def _classify_urls(url_list: Iterable[str]) -> list[dict[str, str]]:
-        return [{"url": u, "endpoint_type": classify_endpoint_type(u)} for u in url_list]
-
-    classified_urls = _classify_urls(urls)
-    classified_internal_urls = _classify_urls(internal)
-    classified_external_urls = _classify_urls(external)
     params_map = {u: extract_query_params(u) for u in urls}
     params_map = {u: p for u, p in params_map.items() if p}
 
@@ -546,6 +540,9 @@ def discover(html: str, base_url: str | None) -> dict:
         "summary",
         {"total": 0, "by_category": {}, "high_risk": 0},
     )
+    classified_urls = build_scored_classified_urls(urls, params_map, parameter_intelligence)
+    classified_internal_urls = build_scored_classified_urls(internal, params_map, parameter_intelligence)
+    classified_external_urls = build_scored_classified_urls(external, params_map, parameter_intelligence)
 
     stats = {
         "total": len(urls),
@@ -573,3 +570,73 @@ def discover(html: str, base_url: str | None) -> dict:
         "parameter_intelligence_summary": parameter_intelligence_summary,
         "stats": stats,
     }
+
+
+def _score_endpoint(
+    url: str,
+    endpoint_type: str,
+    query_params: dict[str, dict[str, str]] | None,
+    parameter_intelligence: list[dict] | None,
+) -> int:
+    score = 0
+    endpoint_boost = {
+        "admin": 5,
+        "upload": 5,
+        "api": 4,
+        "auth": 3,
+    }
+    score += endpoint_boost.get(endpoint_type, 0)
+
+    lowered_url = (url or "").lower()
+    if "?" in lowered_url:
+        score += 3
+
+    risky_markers = ("id", "user", "account", "file", "path", "redirect", "url")
+    if any(marker in lowered_url for marker in risky_markers):
+        score += 2
+
+    if endpoint_type == "asset":
+        score -= 5
+
+    params_by_url = query_params or {}
+    intel_rows = parameter_intelligence or []
+    normalized_param_intel = {
+        str(item.get("name") or "").strip().lower()
+        for item in intel_rows
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    url_params = params_by_url.get(url) if isinstance(params_by_url, dict) else None
+    if isinstance(url_params, dict):
+        url_param_names = {str(name).strip().lower() for name in url_params.keys() if str(name).strip()}
+        if url_param_names and url_param_names.intersection(normalized_param_intel):
+            score += 2
+
+    return score
+
+
+def _priority_from_score(score: int) -> str:
+    if score >= 8:
+        return "high"
+    if score >= 4:
+        return "medium"
+    return "low"
+
+
+def build_scored_classified_urls(
+    url_list: Iterable[str],
+    query_params: dict[str, dict[str, str]] | None = None,
+    parameter_intelligence: list[dict] | None = None,
+) -> list[dict[str, str | int]]:
+    output: list[dict[str, str | int]] = []
+    for url in url_list:
+        endpoint_type = classify_endpoint_type(url)
+        score = _score_endpoint(url, endpoint_type, query_params, parameter_intelligence)
+        output.append(
+            {
+                "url": url,
+                "endpoint_type": endpoint_type,
+                "score": score,
+                "priority": _priority_from_score(score),
+            }
+        )
+    return output

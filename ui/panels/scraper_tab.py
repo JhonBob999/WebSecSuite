@@ -24,7 +24,7 @@ from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
-from core.discovery.endpoint_classifier import classify_endpoint_type
+from core.discovery.url_discovery import build_scored_classified_urls
 
 # --- палитра ---
 CLR_STATUS = {
@@ -286,11 +286,12 @@ class ScraperTabController(QWidget):
             if not isinstance(source_urls, list) or not source_urls:
                 source_urls = urls_section.get("all")
             if isinstance(source_urls, list):
-                result["classified_urls"] = [
-                    {"url": u, "endpoint_type": classify_endpoint_type(u)}
-                    for u in source_urls
-                    if isinstance(u, str) and u
-                ]
+                normalized_urls = [u for u in source_urls if isinstance(u, str) and u]
+                result["classified_urls"] = build_scored_classified_urls(
+                    normalized_urls,
+                    result.get("query_params") if isinstance(result.get("query_params"), dict) else {},
+                    result.get("parameter_intelligence") if isinstance(result.get("parameter_intelligence"), list) else [],
+                )
 
         merged = deepcopy(self.task_results.get(task_id) or {})
         merged["discovery"] = result
