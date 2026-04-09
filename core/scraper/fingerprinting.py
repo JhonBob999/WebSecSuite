@@ -4,6 +4,196 @@ import re
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Tuple
 
+_CONFIDENCE_SCORE = {"low": 1, "medium": 2, "high": 3}
+
+
+def _normalize_confidence(value: str) -> str:
+    v = str(value or "").strip().lower()
+    return v if v in _CONFIDENCE_SCORE else "low"
+
+
+def _max_confidence(a: str, b: str) -> str:
+    a_n = _normalize_confidence(a)
+    b_n = _normalize_confidence(b)
+    return a_n if _CONFIDENCE_SCORE[a_n] >= _CONFIDENCE_SCORE[b_n] else b_n
+
+
+def _canonical_name(name: str, category: str) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+    n = raw.lower()
+
+    # keep versioned library names stable: "React 18.2.0", "Vue 3.4.5"
+    if category == "library":
+        if n.startswith("jquery"):
+            return "jQuery" + raw[len("jQuery"):]
+        if n.startswith("react"):
+            return "React" + raw[len("React"):]
+        if n.startswith("vue"):
+            return "Vue" + raw[len("Vue"):]
+        if n.startswith("angular"):
+            return "Angular" + raw[len("Angular"):]
+        if n.startswith("bootstrap"):
+            return "Bootstrap" + raw[len("Bootstrap"):]
+
+    canonical_map = {
+        "next": "Next.js",
+        "nextjs": "Next.js",
+        "next.js": "Next.js",
+        "wordpress": "WordPress",
+        "woocommerce": "WooCommerce",
+        "asp.net": "ASP.NET",
+        "reactjs": "React",
+        "vuejs": "Vue",
+        "javascript/jsp": "Java/JSP",
+    }
+    if n in canonical_map:
+        return canonical_map[n]
+    return raw
+
+
+def _evidence_to_list(evidence: Any) -> list[str]:
+    if isinstance(evidence, list):
+        return sorted({str(x).strip() for x in evidence if str(x).strip()})
+    txt = str(evidence or "").strip()
+    if not txt:
+        return []
+    return [txt]
+
+
+def _merge_detections(items: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str], dict] = {}
+
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        name = _canonical_name(str(it.get("name") or ""), str(it.get("category") or ""))
+        category = str(it.get("category") or "").strip() or "unknown"
+        if not name:
+            continue
+
+        key = (name.lower(), category.lower())
+        conf = _normalize_confidence(str(it.get("confidence") or "low"))
+        ev_list = _evidence_to_list(it.get("evidence"))
+
+        if key not in merged:
+            merged[key] = {
+                "name": name,
+                "category": category,
+                "confidence": conf,
+                "evidence": ev_list,
+            }
+            continue
+
+        prev = merged[key]
+        prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+        prev_e = _evidence_to_list(prev.get("evidence"))
+        prev["evidence"] = sorted(set(prev_e + ev_list))
+
+    out: list[dict] = []
+    for _, item in merged.items():
+        evidences = _evidence_to_list(item.get("evidence"))
+        out.append(
+            {
+                "name": item.get("name", ""),
+                "category": item.get("category", ""),
+                "confidence": _normalize_confidence(str(item.get("confidence") or "low")),
+                # keep backward-compatible string field; now aggregated
+                "evidence": " | ".join(evidences),
+                # additive structured evidence for step 1B.x
+                "evidence_sources": evidences,
+            }
+        )
+
+    out.sort(key=lambda x: (_CONFIDENCE_SCORE.get(x.get("confidence", "low"), 0), x.get("name", "")), reverse=True)
+    return out
+
+
+
+def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
+    """
+    Step 1B.1 follow-up:
+    collapse library-style React/Vue/Angular entries into the main framework entry.
+    Keeps payload compatible and reduces duplicate framework rows.
+    """
+    if not items:
+        return []
+
+    framework_roots = {
+        "react": ("React", "frontend_framework"),
+        "vue": ("Vue", "frontend_framework"),
+        "angular": ("Angular", "frontend_framework"),
+    }
+
+    by_key: dict[tuple[str, str], dict] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        category = str(it.get("category") or "").strip() or "unknown"
+        conf = _normalize_confidence(str(it.get("confidence") or "low"))
+        ev_list = _evidence_to_list(it.get("evidence_sources") or it.get("evidence"))
+
+        root_key = None
+        lname = name.lower()
+        if category == "library":
+            for root in framework_roots.keys():
+                if lname == root or lname.startswith(root + " "):
+                    root_key = root
+                    break
+
+        if root_key is not None:
+            canonical_name, canonical_cat = framework_roots[root_key]
+            key = (canonical_name.lower(), canonical_cat.lower())
+        else:
+            key = (name.lower(), category.lower())
+
+        if key not in by_key:
+            by_key[key] = {
+                "name": framework_roots[root_key][0] if root_key is not None else name,
+                "category": framework_roots[root_key][1] if root_key is not None else category,
+                "confidence": conf,
+                "evidence_sources": ev_list,
+            }
+            continue
+
+        prev = by_key[key]
+        prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+        prev_e = _evidence_to_list(prev.get("evidence_sources"))
+        prev["evidence_sources"] = sorted(set(prev_e + ev_list))
+
+    out: list[dict] = []
+    for it in by_key.values():
+        evidences = _evidence_to_list(it.get("evidence_sources"))
+        out.append(
+            {
+                "name": it.get("name", ""),
+                "category": it.get("category", ""),
+                "confidence": _normalize_confidence(str(it.get("confidence") or "low")),
+                "evidence": " | ".join(evidences),
+                "evidence_sources": evidences,
+            }
+        )
+
+    out.sort(key=lambda x: (_CONFIDENCE_SCORE.get(x.get("confidence", "low"), 0), x.get("name", "")), reverse=True)
+    return out
+
+def _build_top_stack(technologies: list[dict], limit: int = 5) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in technologies or []:
+        name = _canonical_name(str(t.get("name") or ""), str(t.get("category") or ""))
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 class _AssetParser(HTMLParser):
     """Safe stdlib-only parser for <script src> and <link href>."""
@@ -139,7 +329,15 @@ def build_passive_fingerprint(
     for hk, human in header_signals.items():
         hv = headers_l.get(hk, "")
         if hv:
+
             name = human if hk != "x-powered-by" else hv
+            
+            if hk == "server":
+                name = hv
+            elif hk == "via":
+                name = f"Via ({hv})"
+            else:
+                name = hv if hk == "x-powered-by" else human
             cat = "server" if hk in {"server", "via"} else "framework"
             _push_detection(
                 technologies,
@@ -245,6 +443,7 @@ def build_passive_fingerprint(
                     evidence=ev,
                 )
 
+
     # de-duplicate by (name, category, evidence)
     def _uniq(items: list[dict]) -> list[dict]:
         seen = set()
@@ -261,6 +460,16 @@ def build_passive_fingerprint(
     infra = _uniq(infra)
 
     top_stack = [t.get("name") for t in technologies[:5] if t.get("name")]
+    # normalize + dedupe + merge repeated detections
+    technologies = _merge_detections(technologies)
+
+    # normalize + dedupe + merge repeated detections
+    technologies = _merge_detections(technologies)
+    technologies = _collapse_framework_libraries(technologies)
+
+    infra = _merge_detections(infra)
+
+    top_stack = _build_top_stack(technologies, limit=5)
     has_cdn = any((i.get("category") == "cdn_waf") for i in infra)
     has_waf_hint = has_cdn
 
