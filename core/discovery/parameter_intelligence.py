@@ -3,6 +3,18 @@ from __future__ import annotations
 from typing import Iterable
 
 
+PARAM_ALIASES = {
+    "id": {"id", "user_id", "uid", "item_id", "product_id"},
+    "file": {"file", "path", "page", "template", "include"},
+    "url": {"url", "redirect", "next", "return", "dest", "callback"},
+    "search": {"q", "query", "search", "term", "keyword"},
+    "token": {"token", "auth_token", "access_token", "csrf_token"},
+    "auth": {"username", "user", "login", "email", "password"},
+    "lang": {"lang", "locale", "language"},
+    "sort_filter": {"sort", "order", "filter", "direction"}
+}
+
+
 _NAME_RULES: list[tuple[set[str], str, list[str], float]] = [
     (
         {"id", "user_id", "uid", "item_id", "account_id", "profile_id", "post_id"},
