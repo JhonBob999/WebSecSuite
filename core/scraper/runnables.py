@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Signal, QRunnable
 from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
 from core.discovery.url_discovery import parse_forms_from_html
+from core.discovery.endpoint_classifier import classify_endpoint_type
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -272,6 +273,7 @@ class ScraperRunnable(QRunnable):
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
                 "final_url": str(resp.url),
+                "endpoint_type": classify_endpoint_type(str(resp.url)),
                 "title": html_title,
                 "content_len": len(resp.content),
                 "headers": dict(resp.headers),
