@@ -24,6 +24,17 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "candidates_max_confidence",
 ]
 
+PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
+    "candidates",
+    "candidates_summary",
+    "discovery",
+    "fingerprint",
+    "forms",
+    "headers",
+    "timings",
+    "parameter_intelligence",
+}
+
 
 # ---- Публичное API --------------------------------------------------------
 
@@ -148,8 +159,9 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
     if fmt not in {"csv", "json", "xlsx"}:
         raise ValueError(f"Unsupported export format: {fmt}")
 
+    source_records = [dict(r) for r in records]
     # Нормализуем список к export-friendly плоскому виду (включая candidate summary поля).
-    items = [task_to_record(r) for r in records]
+    items = [task_to_record(r) for r in source_records]
 
     # Гарантируем существование директории
     _ensure_parent_dir(path)
@@ -157,7 +169,7 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
     if fmt == "json":
         _to_json(items, path)
     else:
-        tabular_items = _tabular_items(items)
+        tabular_items = normalize_preview_rows(source_records)
         columns = preview_column_order(tabular_items)
         if fmt == "csv":
             _to_csv(tabular_items, path, fieldnames=columns)
@@ -403,6 +415,91 @@ def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for it in items:
         out.append({k: v for k, v in it.items() if k not in hidden})
     return out
+
+
+def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Приводит записи к той же normalized schema, что используется в Data Preview table:
+    - нормализует ключи;
+    - добавляет derived candidate summary;
+    - скрывает bulky/raw поля, которых нет в превью-таблице;
+    - применяет compact-значения для колонок превью.
+    """
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, Mapping):
+            rec = {"value": rec}
+
+        row: dict[str, Any] = {}
+        for key, value in rec.items():
+            nk = _normalize_preview_key(key)
+            if nk in row:
+                i = 2
+                while f"{nk}#{i}" in row:
+                    i += 1
+                nk = f"{nk}#{i}"
+            row[nk] = value
+
+        row.update(derive_candidate_summary_fields(rec))
+
+        for hidden_key in PREVIEW_HIDDEN_RAW_FIELDS:
+            row.pop(hidden_key, None)
+
+        compacted: dict[str, Any] = {}
+        for key, value in row.items():
+            compacted[key] = _compact_preview_value(key, value)
+
+        out.append(compacted)
+    return out
+
+
+def _normalize_preview_key(key: Any) -> str:
+    if key is None:
+        return "__none__"
+    norm = str(key).replace("\ufeff", "").strip()
+    return norm if norm else "__empty__"
+
+
+def _compact_preview_value(key: str, val: Any) -> Any:
+    if key == "forms_summary" and isinstance(val, Mapping):
+        fs = val
+        return (
+            f"total={fs.get('forms_total', 0)}, "
+            f"unique={fs.get('forms_unique', fs.get('forms_total', 0))}, "
+            f"inputs={fs.get('inputs_total', 0)}, "
+            f"unique_inputs={fs.get('inputs_unique_total', fs.get('inputs_total', 0))}, "
+            f"names={fs.get('unique_input_names', 0)}"
+        )
+    if key == "forms" and isinstance(val, list):
+        return _compact_forms(val)
+    return val
+
+
+def _compact_forms(forms: list[Any]) -> str:
+    if not forms:
+        return "[]"
+    parts: list[str] = []
+    max_forms = 2
+    for idx, form in enumerate(forms[:max_forms], 1):
+        if not isinstance(form, Mapping):
+            continue
+        method = str(form.get("method") or "").upper()
+        action = str(form.get("action") or "")
+        action_short = action if len(action) <= 120 else action[:119] + "…"
+        enctype = form.get("enctype") or ""
+        inputs_count = form.get("inputs_count") or len(form.get("inputs", []) or [])
+        has_file = 1 if form.get("has_file") else 0
+        names = form.get("input_names") or []
+        names_short = ", ".join((str(n) if n is not None else "") for n in names[:10])
+        if len(names) > 10:
+            names_short += ", …"
+        parts.append(
+            f"[{idx}] {method} {action_short} enctype={enctype} inputs={inputs_count} file={has_file} names={names_short}"
+        )
+    if len(forms) > max_forms:
+        parts.append(f"... +{len(forms) - max_forms} more")
+    out = " | ".join(parts)
+    return out if len(out) <= 2000 else out[:1999] + "…"
 
 
 def _ensure_parent_dir(path: str) -> None:

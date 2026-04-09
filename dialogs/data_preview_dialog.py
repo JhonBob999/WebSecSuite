@@ -13,11 +13,6 @@ from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгене
 class DataPreviewDialog(QDialog):
     export_done = Signal(str, int)
     export_failed = Signal(str)
-
-    _PREVIEW_HIDDEN_RAW_FIELDS = {
-        "candidates",
-        "candidates_summary",
-    }
     def __init__(self, parent=None,
                  fetch_all: Callable[[], list[dict]] | None = None,
                  fetch_selected: Callable[[], list[dict]] | None = None ):
@@ -57,36 +52,7 @@ class DataPreviewDialog(QDialog):
         """Перерисовать tablePreview по снапшоту/records (стабильно, без "плывущих" колонок)."""
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
-
-        def _norm_key(k) -> str:
-            if k is None:
-                return "__none__"
-            s = str(k).replace("\ufeff", "").strip()  # убираем BOM/пробелы
-            return s if s else "__empty__"
-
-        # 1) Нормализуем записи: ключи -> нормальные строки, убираем пустые/кривые
-        norm_records: list[dict] = []
-        for rec in records:
-            if not isinstance(rec, dict):
-                rec = {"value": rec}
-            nr = {}
-            for k, v in rec.items():
-                nk = _norm_key(k)
-                if nk in nr:
-                    i = 2
-                    while f"{nk}#{i}" in nr:
-                        i += 1
-                    nk = f"{nk}#{i}"
-                nr[nk] = v
-
-            nr.update(xb.derive_candidate_summary_fields(rec))
-
-            for hidden_key in self._PREVIEW_HIDDEN_RAW_FIELDS:
-                nr.pop(hidden_key, None)
-
-            norm_records.append(nr)
-
-        records = norm_records
+        records = xb.normalize_preview_rows(records)
 
         # 2) Reset таблицы (жёстко)
         t.setSortingEnabled(False)
@@ -115,7 +81,7 @@ class DataPreviewDialog(QDialog):
         for row, rec in enumerate(records):
             for col, key in enumerate(keys_order):
                 raw_val = rec.get(key, "")
-                val = self._compact_preview_value(key, raw_val)
+                val = raw_val
 
                 # вложенные структуры -> компактный текст + красивый tooltip
                 text, pretty = self._to_cell(val)
@@ -135,8 +101,6 @@ class DataPreviewDialog(QDialog):
         t.setSortingEnabled(True)
         self._columns = keys_order
 
-
-
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):
             compact = json.dumps(val, ensure_ascii=False, separators=(",", ":"))
@@ -147,44 +111,6 @@ class DataPreviewDialog(QDialog):
             return "", ""
         s = str(val)
         return (s[:200] + "…", s) if len(s) > 200 else (s, "")
-
-    def _compact_preview_value(self, key: str, val):
-        if key == "forms_summary" and isinstance(val, dict):
-            fs = val
-            return (
-                f"total={fs.get('forms_total', 0)}, "
-                f"unique={fs.get('forms_unique', fs.get('forms_total', 0))}, "
-                f"inputs={fs.get('inputs_total', 0)}, "
-                f"unique_inputs={fs.get('inputs_unique_total', fs.get('inputs_total', 0))}, "
-                f"names={fs.get('unique_input_names', 0)}"
-            )
-        if key == "forms" and isinstance(val, list):
-            return self._compact_forms(val)
-        return val
-
-    def _compact_forms(self, forms: list) -> str:
-        if not forms:
-            return "[]"
-        parts = []
-        max_forms = 2
-        for idx, form in enumerate(forms[:max_forms], 1):
-            method = (form.get("method") or "").upper()
-            action = str(form.get("action") or "")
-            action_short = action if len(action) <= 120 else action[:119] + "…"
-            enctype = form.get("enctype") or ""
-            inputs_count = form.get("inputs_count") or len(form.get("inputs", []) or [])
-            has_file = 1 if form.get("has_file") else 0
-            names = form.get("input_names") or []
-            names_short = ", ".join((n or "") for n in names[:10])
-            if len(names) > 10:
-                names_short += ", …"
-            parts.append(
-                f"[{idx}] {method} {action_short} enctype={enctype} inputs={inputs_count} file={has_file} names={names_short}"
-            )
-        if len(forms) > max_forms:
-            parts.append(f"... +{len(forms) - max_forms} more")
-        out = " | ".join(parts)
-        return out if len(out) <= 2000 else out[:1999] + "…"
 
     # ---- действия тулбара ----
     @Slot()
