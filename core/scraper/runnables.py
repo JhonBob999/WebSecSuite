@@ -14,6 +14,7 @@ from utils.html_utils import extract_title
 from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_path
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.discovery.endpoint_classifier import classify_endpoint_type
+from core.discovery.candidate_generation import generate_candidates
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -289,6 +290,33 @@ class ScraperRunnable(QRunnable):
                 },
             }
             result["discovery"] = discover(resp.text or "", str(resp.url))
+
+            pipeline_final_url = (
+                result.get("final_url")
+                or str(resp.url or "")
+                or str(url or "")
+                or str(getattr(self.task, "source_url", "") or "")
+            )
+            pipeline_parameter_intelligence = result.get("parameter_intelligence")
+            pipeline_classified_urls_by_scope = None
+            if isinstance(result.get("discovery"), dict):
+                pipeline_classified_urls_by_scope = result["discovery"].get("classified_urls_by_scope")
+
+            try:
+                result["candidates"] = generate_candidates(
+                    final_url=pipeline_final_url,
+                    classified_urls_by_scope=pipeline_classified_urls_by_scope,
+                    parameter_intelligence=pipeline_parameter_intelligence,
+                )
+                result["candidates_summary"] = result["candidates"].get("summary", {})
+            except Exception as e:
+                self.signals.task_log.emit(tid, "ERROR", f"Candidate generation failed: {e}")
+                result["candidates"] = generate_candidates(
+                    final_url=pipeline_final_url,
+                    classified_urls_by_scope=None,
+                    parameter_intelligence=None,
+                )
+                result["candidates_summary"] = result["candidates"].get("summary", {})
 
             self.task.result = result
 
