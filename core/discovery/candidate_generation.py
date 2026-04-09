@@ -7,6 +7,8 @@ _ALLOWED_TYPES = {
     "ssrf_candidate",
 }
 _ALLOWED_CONFIDENCE = {"low", "medium", "high"}
+_ALLOWED_PRIORITY = {"low", "medium", "high"}
+_CONFIDENCE_LEVELS = ("low", "medium", "high")
 
 _CATEGORY_TO_CANDIDATE_TYPE = {
     "id": "sqli_candidate",
@@ -59,6 +61,89 @@ def _normalize_confidence(confidence: str | None) -> str:
     if normalized in _ALLOWED_CONFIDENCE:
         return normalized
     return "low"
+
+
+def _normalize_priority(priority: str | None) -> str | None:
+    normalized = str(priority or "").strip().lower()
+    if normalized in _ALLOWED_PRIORITY:
+        return normalized
+    return None
+
+
+def _normalize_score(score) -> int | None:
+    if score is None or isinstance(score, bool):
+        return None
+    if isinstance(score, int):
+        return score
+    if isinstance(score, float):
+        return int(score) if score.is_integer() else None
+    if isinstance(score, str):
+        normalized = score.strip()
+        if not normalized:
+            return None
+        if normalized.startswith(("+", "-")):
+            sign = normalized[0]
+            payload = normalized[1:]
+            if payload.isdigit():
+                return int(f"{sign}{payload}")
+            return None
+        if normalized.isdigit():
+            return int(normalized)
+    return None
+
+
+def _refine_candidate_confidence(candidate: dict) -> dict:
+    refined_candidate = dict(candidate or {})
+    confidence = _normalize_confidence(refined_candidate.get("confidence"))
+    normalized_priority = _normalize_priority(refined_candidate.get("priority"))
+    normalized_score = _normalize_score(refined_candidate.get("score"))
+    reasons = refined_candidate.get("reasons")
+    normalized_reasons = list(reasons) if isinstance(reasons, list) else []
+
+    confidence_level_index = _CONFIDENCE_LEVELS.index(confidence)
+    boost = 0
+    used_priority = False
+    used_score = False
+
+    if normalized_priority == "high":
+        boost += 1
+        used_priority = True
+    if normalized_score is not None and normalized_score >= 8:
+        boost += 1
+        used_score = True
+    if (
+        boost == 0
+        and normalized_priority == "medium"
+        and normalized_score is not None
+        and normalized_score >= 5
+    ):
+        boost = 1
+        used_priority = True
+        used_score = True
+
+    boost = min(boost, 2)
+    refined_index = min(confidence_level_index + boost, len(_CONFIDENCE_LEVELS) - 1)
+    refined_confidence = _CONFIDENCE_LEVELS[refined_index]
+
+    refined_candidate["confidence"] = refined_confidence
+    refined_candidate["priority"] = normalized_priority
+    refined_candidate["score"] = normalized_score
+
+    if refined_index > confidence_level_index:
+        for reason in ("confidence_refined",):
+            if reason not in normalized_reasons:
+                normalized_reasons.append(reason)
+        if used_priority and normalized_priority:
+            priority_reason = f"priority:{normalized_priority}"
+            if priority_reason not in normalized_reasons:
+                normalized_reasons.append(priority_reason)
+        if used_score and normalized_score is not None:
+            score_reason = f"score:{normalized_score}"
+            if score_reason not in normalized_reasons:
+                normalized_reasons.append(score_reason)
+
+    refined_candidate["reasons"] = normalized_reasons
+    return refined_candidate
 
 
 def _normalize_category(category: str | None) -> str | None:
@@ -163,6 +248,8 @@ def generate_candidates(
     """
     # TODO: future SSRF candidate rules from richer endpoint hints.
     # TODO: add future score-driven prioritization.
+    # TODO: future finding confidence model.
+    # TODO: future evidence weighting.
 
     all_candidates: list[dict] = []
     parameter_entries = _extract_parameter_entries(parameter_intelligence)
@@ -241,6 +328,8 @@ def generate_candidates(
                 score=endpoint_record.get("score"),
                 priority=priority,
             )
+
+    all_candidates = [_refine_candidate_confidence(candidate) for candidate in all_candidates]
 
     by_type = {
         "xss_candidate": [],
