@@ -562,7 +562,8 @@ def discover(html: str, base_url: str | None) -> dict:
             "external": external,
             "classified": classified_urls,
         },
-        "classified_urls": {
+        "classified_urls": classified_urls,
+        "classified_urls_by_scope": {
             "all": classified_urls,
             "internal": classified_internal_urls,
             "external": classified_external_urls,
