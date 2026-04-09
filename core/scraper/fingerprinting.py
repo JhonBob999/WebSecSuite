@@ -62,6 +62,80 @@ def _evidence_to_list(evidence: Any) -> list[str]:
     return [txt]
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", str(version or ""))
+    return tuple(int(p) for p in parts) if parts else ()
+
+
+def _pick_better_version(current: str, candidate: str) -> str:
+    cur = str(current or "").strip()
+    cand = str(candidate or "").strip()
+    if not cur:
+        return cand
+    if not cand:
+        return cur
+
+    cur_t = _version_tuple(cur)
+    cand_t = _version_tuple(cand)
+    if cur_t and cand_t:
+        if cand_t > cur_t:
+            return cand
+        if cand_t < cur_t:
+            return cur
+        return cand if len(cand_t) > len(cur_t) else cur
+
+    # fallback specificity: prefer "x.y.z" over "x.y", then longer token
+    cur_dots = cur.count(".")
+    cand_dots = cand.count(".")
+    if cand_dots > cur_dots:
+        return cand
+    if cand_dots < cur_dots:
+        return cur
+    return cand if len(cand) > len(cur) else cur
+
+
+def _split_library_name_version(name: str) -> tuple[str, str]:
+    txt = str(name or "").strip()
+    if not txt:
+        return "", ""
+    m = re.match(r"^(.*?)(?:\s+v?(\d+(?:\.\d+)*))?$", txt)
+    if not m:
+        return txt, ""
+    base = str(m.group(1) or "").strip()
+    ver = str(m.group(2) or "").strip()
+    return base, ver
+
+
+def _confidence_from_evidence(evidences: list[str], fallback: str = "low") -> str:
+    ev = [str(e or "").strip().lower() for e in (evidences or []) if str(e or "").strip()]
+    if not ev:
+        return _normalize_confidence(fallback)
+    if any(e.startswith("header:") for e in ev):
+        return "high"
+    if any(e.startswith("cookies:") or e.startswith("html:") for e in ev):
+        return "medium"
+    return _normalize_confidence(fallback)
+
+
+def _pick_primary_evidence(evidences: list[str]) -> str:
+    ranked: list[tuple[int, str]] = []
+    for raw in _evidence_to_list(evidences):
+        e = raw.lower()
+        if e.startswith("header:"):
+            pr = 4
+        elif e.startswith("cookies:") or e.startswith("html:"):
+            pr = 3
+        elif e.startswith("assets:"):
+            pr = 2
+        else:
+            pr = 1
+        ranked.append((pr, raw))
+    if not ranked:
+        return ""
+    ranked.sort(key=lambda x: (-x[0], x[1]))
+    return ranked[0][1]
+
+
 def _merge_detections(items: list[dict]) -> list[dict]:
     merged: dict[tuple[str, str], dict] = {}
 
@@ -73,7 +147,13 @@ def _merge_detections(items: list[dict]) -> list[dict]:
         if not name:
             continue
 
-        key = (name.lower(), category.lower())
+        if category == "library":
+            base_name, version = _split_library_name_version(name)
+            name = base_name or name
+            key = (name.lower(), category.lower())
+        else:
+            version = ""
+            key = (name.lower(), category.lower())
         conf = _normalize_confidence(str(it.get("confidence") or "low"))
         ev_list = _evidence_to_list(it.get("evidence"))
 
@@ -83,30 +163,44 @@ def _merge_detections(items: list[dict]) -> list[dict]:
                 "category": category,
                 "confidence": conf,
                 "evidence": ev_list,
+                "best_version": version,
             }
             continue
 
         prev = merged[key]
         prev["confidence"] = _max_confidence(prev.get("confidence", "low"), conf)
+        prev["best_version"] = _pick_better_version(str(prev.get("best_version") or ""), version)
         prev_e = _evidence_to_list(prev.get("evidence"))
         prev["evidence"] = sorted(set(prev_e + ev_list))
 
     out: list[dict] = []
     for _, item in merged.items():
         evidences = _evidence_to_list(item.get("evidence"))
+        derived_conf = _confidence_from_evidence(evidences, str(item.get("confidence") or "low"))
+        base_name = str(item.get("name") or "")
+        best_version = str(item.get("best_version") or "").strip()
+        display_name = f"{base_name} {best_version}".strip() if item.get("category") == "library" else base_name
+        primary_evidence = _pick_primary_evidence(evidences)
         out.append(
             {
-                "name": item.get("name", ""),
+                "name": display_name,
                 "category": item.get("category", ""),
-                "confidence": _normalize_confidence(str(item.get("confidence") or "low")),
+                "confidence": derived_conf,
                 # keep backward-compatible string field; now aggregated
                 "evidence": " | ".join(evidences),
                 # additive structured evidence for step 1B.x
                 "evidence_sources": evidences,
+                "primary_evidence": primary_evidence,
             }
         )
 
-    out.sort(key=lambda x: (_CONFIDENCE_SCORE.get(x.get("confidence", "low"), 0), x.get("name", "")), reverse=True)
+    out.sort(
+        key=lambda x: (
+            -_CONFIDENCE_SCORE.get(_normalize_confidence(str(x.get("confidence") or "low")), 0),
+            str(x.get("category") or ""),
+            str(x.get("name") or ""),
+        )
+    )
     return out
 
 
@@ -173,10 +267,17 @@ def _collapse_framework_libraries(items: list[dict]) -> list[dict]:
                 "confidence": _normalize_confidence(str(it.get("confidence") or "low")),
                 "evidence": " | ".join(evidences),
                 "evidence_sources": evidences,
+                "primary_evidence": _pick_primary_evidence(evidences),
             }
         )
 
-    out.sort(key=lambda x: (_CONFIDENCE_SCORE.get(x.get("confidence", "low"), 0), x.get("name", "")), reverse=True)
+    out.sort(
+        key=lambda x: (
+            -_CONFIDENCE_SCORE.get(_normalize_confidence(str(x.get("confidence") or "low")), 0),
+            str(x.get("category") or ""),
+            str(x.get("name") or ""),
+        )
+    )
     return out
 
 def _build_top_stack(technologies: list[dict], limit: int = 5) -> list[str]:
@@ -458,10 +559,6 @@ def build_passive_fingerprint(
 
     technologies = _uniq(technologies)
     infra = _uniq(infra)
-
-    top_stack = [t.get("name") for t in technologies[:5] if t.get("name")]
-    # normalize + dedupe + merge repeated detections
-    technologies = _merge_detections(technologies)
 
     # normalize + dedupe + merge repeated detections
     technologies = _merge_detections(technologies)
