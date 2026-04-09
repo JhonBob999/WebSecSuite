@@ -532,7 +532,12 @@ def discover(html: str, base_url: str | None) -> dict:
     params_map = {u: p for u, p in params_map.items() if p}
 
     param_names = sorted({name for param_dict in params_map.values() for name in param_dict.keys()})
-    parameter_intelligence = analyze_query_params(param_names)
+    parameter_intelligence_pack = analyze_query_params(param_names)
+    parameter_intelligence = parameter_intelligence_pack.get("params", [])
+    parameter_intelligence_summary = parameter_intelligence_pack.get(
+        "summary",
+        {"total": 0, "by_category": {}, "high_risk": 0},
+    )
 
     stats = {
         "total": len(urls),
@@ -550,5 +555,6 @@ def discover(html: str, base_url: str | None) -> dict:
         },
         "query_params": params_map,
         "parameter_intelligence": parameter_intelligence,
+        "parameter_intelligence_summary": parameter_intelligence_summary,
         "stats": stats,
     }

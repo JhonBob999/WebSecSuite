@@ -262,7 +262,12 @@ class ScraperRunnable(QRunnable):
 
             parsed = urlparse(str(resp.url))
             query_params = parse_qs(parsed.query)
-            param_intel = analyze_query_params(query_params)
+            param_intel_pack = analyze_query_params(query_params)
+            param_intel = param_intel_pack.get("params", [])
+            param_intel_summary = param_intel_pack.get(
+                "summary",
+                {"total": 0, "by_category": {}, "high_risk": 0},
+            )
 
             result: Dict[str, Any] = {
                 "status_code": resp.status_code,
@@ -275,6 +280,7 @@ class ScraperRunnable(QRunnable):
                 "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
                 "fingerprint": fingerprint,
                 "parameter_intelligence": param_intel,
+                "parameter_intelligence_summary": param_intel_summary,
                 "timings": {
                     "request_ms": req_ms,
                     "total_ms": total_ms,
@@ -317,4 +323,3 @@ class ScraperRunnable(QRunnable):
             self.signals.task_status.emit(tid, "Failed")
         finally:
             self.signals.task_finished.emit(tid)
-

@@ -141,13 +141,20 @@ def _iter_param_names(params) -> Iterable[str]:
             yield str(item)
 
 
-def analyze_query_params(params) -> list[dict]:
+def analyze_query_params(params) -> dict:
     """
     Build per-parameter intelligence records based on parameter names.
-    Returns empty list for empty/unsupported input.
+    Returns params + summary with deduplication by normalized parameter name.
     """
     if not params:
-        return []
+        return {
+            "params": [],
+            "summary": {
+                "total": 0,
+                "by_category": {},
+                "high_risk": 0,
+            },
+        }
 
     seen: set[str] = set()
     output: list[dict] = []
@@ -157,7 +164,25 @@ def analyze_query_params(params) -> list[dict]:
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
-        output.append(classify_param_name(name))
+        entry = classify_param_name(normalized)
+        entry["name"] = normalized
+        output.append(entry)
 
     output.sort(key=lambda item: ((item.get("category") or "unknown"), (item.get("name") or "")))
-    return output
+
+    by_category: dict[str, int] = {}
+    high_risk = 0
+    for item in output:
+        category = item.get("category") or "unknown"
+        by_category[category] = by_category.get(category, 0) + 1
+        if item.get("risk_tags"):
+            high_risk += 1
+
+    return {
+        "params": output,
+        "summary": {
+            "total": len(output),
+            "by_category": by_category,
+            "high_risk": high_risk,
+        },
+    }
