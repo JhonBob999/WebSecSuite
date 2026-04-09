@@ -64,14 +64,14 @@ def run(task_ctx: dict) -> dict:
     base_url = _infer_base_url(ctx)
     if not html:
         if not base_url:
-            return {"error": "No URL provided for discovery", "stats": {}, "urls": {}, "query_params": {}}
+            return {"error": "No URL provided for discovery", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
         try:
             html, final_url, headers = _fetch_html(base_url, params)
             base_url = final_url or base_url
         except httpx.HTTPError as e:
-            return {"error": f"HTTP error: {e}", "stats": {}, "urls": {}, "query_params": {}}
+            return {"error": f"HTTP error: {e}", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
         except Exception as e:  # pragma: no cover - defensive fallback
-            return {"error": f"Unhandled fetch error: {e}", "stats": {}, "urls": {}, "query_params": {}}
+            return {"error": f"Unhandled fetch error: {e}", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
     else:
         res_ctx = ctx.get("result")
         headers = dict(res_ctx.get("headers") or {}) if isinstance(res_ctx, dict) else {}
