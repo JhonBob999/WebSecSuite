@@ -24,6 +24,7 @@ from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
+from core.discovery.endpoint_classifier import classify_endpoint_type
 
 # --- палитра ---
 CLR_STATUS = {
@@ -278,6 +279,18 @@ class ScraperTabController(QWidget):
         if result.get("error"):
             self.log.append_log_line(f"[ERROR] Discover URLs ({task_id[:8]}): {result.get('error')}")
             return
+
+        urls_section = result.get("urls") if isinstance(result.get("urls"), dict) else {}
+        if isinstance(urls_section, dict):
+            source_urls = urls_section.get("internal")
+            if not isinstance(source_urls, list) or not source_urls:
+                source_urls = urls_section.get("all")
+            if isinstance(source_urls, list):
+                result["classified_urls"] = [
+                    {"url": u, "endpoint_type": classify_endpoint_type(u)}
+                    for u in source_urls
+                    if isinstance(u, str) and u
+                ]
 
         merged = deepcopy(self.task_results.get(task_id) or {})
         merged["discovery"] = result
