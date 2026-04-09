@@ -37,6 +37,22 @@ _CATEGORY_TO_CANDIDATE_TYPE = {
     "term_like": "xss_candidate",
 }
 
+_ENDPOINT_TYPE_TO_CANDIDATE_TYPES = {
+    "admin": ["xss_candidate", "sqli_candidate"],
+    "auth": ["xss_candidate", "sqli_candidate"],
+    "api": ["sqli_candidate"],
+    "upload": ["lfi_candidate"],
+}
+
+_ENDPOINT_TYPE_BASE_CONFIDENCE = {
+    "admin": "medium",
+    "auth": "low",
+    "api": "low",
+    "upload": "medium",
+}
+
+_IGNORED_ENDPOINT_TYPES = {"asset", "unknown"}
+
 
 def _normalize_confidence(confidence: str | None) -> str:
     normalized = str(confidence or "").strip().lower()
@@ -63,6 +79,27 @@ def _extract_parameter_entries(parameter_intelligence: dict | list | None) -> li
         return [item for item in parameter_intelligence if isinstance(item, dict)]
 
     return []
+
+
+def _extract_internal_endpoint_records(classified_urls_by_scope: dict | None) -> list[dict]:
+    if not isinstance(classified_urls_by_scope, dict):
+        return []
+
+    def _extract_scope_records(scope_value) -> list[dict]:
+        if isinstance(scope_value, dict):
+            nested_urls = scope_value.get("urls")
+            if isinstance(nested_urls, (list, tuple, set)):
+                return [item for item in nested_urls if isinstance(item, dict)]
+            return []
+        if isinstance(scope_value, (list, tuple, set)):
+            return [item for item in scope_value if isinstance(item, dict)]
+        return []
+
+    internal_records = _extract_scope_records(classified_urls_by_scope.get("internal"))
+    if internal_records:
+        return internal_records
+
+    return _extract_scope_records(classified_urls_by_scope.get("all"))
 
 
 def _add_candidate(
@@ -122,15 +159,14 @@ def generate_candidates(
 ) -> dict:
     """Generate strict-contract candidate payload.
 
-    This step intentionally generates candidates only from parameter_intelligence.
+    This step generates candidates from parameter_intelligence and endpoint records.
     """
-    # TODO: add future endpoint-driven candidates.
-    _ = classified_urls_by_scope
-
+    # TODO: future SSRF candidate rules from richer endpoint hints.
     # TODO: add future score-driven prioritization.
 
     all_candidates: list[dict] = []
     parameter_entries = _extract_parameter_entries(parameter_intelligence)
+    endpoint_records = _extract_internal_endpoint_records(classified_urls_by_scope)
 
     for param_entry in parameter_entries:
         param_name = param_entry.get("name")
@@ -168,6 +204,43 @@ def generate_candidates(
             score=score,
             priority=priority,
         )
+
+    for endpoint_record in endpoint_records:
+        endpoint_url = endpoint_record.get("url")
+        if not isinstance(endpoint_url, str) or not endpoint_url.strip():
+            continue
+
+        endpoint_type = str(endpoint_record.get("endpoint_type") or "").strip().lower()
+        if not endpoint_type or endpoint_type in _IGNORED_ENDPOINT_TYPES:
+            continue
+
+        candidate_types = _ENDPOINT_TYPE_TO_CANDIDATE_TYPES.get(endpoint_type, [])
+        if not candidate_types:
+            continue
+
+        priority = endpoint_record.get("priority")
+        base_confidence = _ENDPOINT_TYPE_BASE_CONFIDENCE.get(endpoint_type, "low")
+        effective_confidence = base_confidence
+        reasons = [
+            "endpoint_intelligence",
+            f"endpoint_type:{endpoint_type}",
+        ]
+        if str(priority or "").strip().lower() == "high" and base_confidence == "low":
+            effective_confidence = "medium"
+            reasons.append(f"priority:{priority}")
+
+        for candidate_type in candidate_types:
+            _add_candidate(
+                candidates=all_candidates,
+                candidate_type=candidate_type,
+                url=endpoint_url,
+                param=None,
+                confidence=effective_confidence,
+                reasons=reasons,
+                endpoint_type=endpoint_type,
+                score=endpoint_record.get("score"),
+                priority=priority,
+            )
 
     by_type = {
         "xss_candidate": [],
