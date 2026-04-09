@@ -48,7 +48,8 @@ class DataPreviewDialog(QDialog):
             keys.update(r.keys())
         preferred = [
             "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
-            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf"
+            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf",
+            "candidates_types_present", "candidates_max_confidence"
         ]
         rest = sorted(k for k in keys if k not in preferred)
         return [c for c in preferred if c in keys] + rest
@@ -80,6 +81,7 @@ class DataPreviewDialog(QDialog):
                 nr[nk] = v
 
             nr.update(self._extract_candidate_counts(rec))
+            nr.update(self._extract_candidate_debug_fields(rec))
             norm_records.append(nr)
 
         records = norm_records
@@ -103,7 +105,8 @@ class DataPreviewDialog(QDialog):
 
         preferred = [
             "final_url", "status_code", "title", "content_len", "request_ms", "redirects",
-            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf"
+            "candidates_total", "candidates_xss", "candidates_sqli", "candidates_lfi", "candidates_ssrf",
+            "candidates_types_present", "candidates_max_confidence"
         ]
         rest = sorted(k for k in keys if k not in preferred)
         keys_order = [k for k in preferred if k in keys] + rest
@@ -198,6 +201,60 @@ class DataPreviewDialog(QDialog):
             "candidates_sqli": self._to_int_count(by_type.get("sqli_candidate"), 0),
             "candidates_lfi": self._to_int_count(by_type.get("lfi_candidate"), 0),
             "candidates_ssrf": self._to_int_count(by_type.get("ssrf_candidate"), 0),
+        }
+
+    def _extract_candidate_debug_fields(self, rec: dict) -> dict:
+        if not isinstance(rec, dict):
+            return {
+                "candidates_types_present": "",
+                "candidates_max_confidence": "",
+            }
+
+        candidates = rec.get("candidates")
+        candidates_all = candidates.get("all") if isinstance(candidates, dict) else None
+        if not isinstance(candidates_all, list):
+            return {
+                "candidates_types_present": "",
+                "candidates_max_confidence": "",
+            }
+
+        type_map = {
+            "xss_candidate": "xss",
+            "sqli_candidate": "sqli",
+            "lfi_candidate": "lfi",
+            "ssrf_candidate": "ssrf",
+        }
+        type_order = ("xss_candidate", "sqli_candidate", "lfi_candidate", "ssrf_candidate")
+        confidence_rank = {
+            "low": 1,
+            "medium": 2,
+            "high": 3,
+        }
+
+        found_types = set()
+        max_confidence_value = ""
+        max_confidence_rank = 0
+
+        for item in candidates_all:
+            if not isinstance(item, dict):
+                continue
+
+            raw_type = item.get("type")
+            if isinstance(raw_type, str) and raw_type in type_map:
+                found_types.add(raw_type)
+
+            raw_confidence = item.get("confidence")
+            if isinstance(raw_confidence, str):
+                conf = raw_confidence.strip().lower()
+                rank = confidence_rank.get(conf, 0)
+                if rank > max_confidence_rank:
+                    max_confidence_rank = rank
+                    max_confidence_value = conf
+
+        types_compact = ",".join(type_map[t] for t in type_order if t in found_types)
+        return {
+            "candidates_types_present": types_compact,
+            "candidates_max_confidence": max_confidence_value,
         }
 
     def _compact_forms(self, forms: list) -> str:
