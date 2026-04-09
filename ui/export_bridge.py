@@ -9,6 +9,8 @@ from typing import Any, Iterable, Mapping
 from core.scraper.request_params import normalize_params
 
 PREVIEW_PREFERRED_COLUMNS: list[str] = [
+    "task_id",
+    "url",
     "final_url",
     "status_code",
     "title",
