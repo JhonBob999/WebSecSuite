@@ -84,6 +84,26 @@ def classify_param_name(name: str) -> dict:
             "confidence": 0.1,
         }
 
+    normalized_name = ""
+    for category, aliases in PARAM_ALIASES.items():
+        if normalized in aliases:
+            normalized_name = category
+            break
+
+    if normalized_name:
+        risk_tags: list[str] = []
+        for _, category, candidate_risk_tags, _ in _NAME_RULES:
+            if category == normalized_name:
+                risk_tags = list(candidate_risk_tags)
+                break
+
+        return {
+            "name": name,
+            "category": normalized_name,
+            "risk_tags": risk_tags,
+            "confidence": 0.95,
+        }
+
     for variants, category, risk_tags, confidence in _NAME_RULES:
         if normalized in variants:
             return {
