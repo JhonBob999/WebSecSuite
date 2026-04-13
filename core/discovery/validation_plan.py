@@ -44,6 +44,7 @@ _CHECK_COMPARISON_CONTRACT = {
     },
 }
 _EVIDENCE_RANK = {"": 0, "low": 1, "medium": 2, "strong": 3}
+_BASELINE_FIELD_ORDER = ("body_preview", "status_code", "body_hash", "content_type")
 
 
 def _empty_contract() -> dict[str, Any]:
@@ -108,6 +109,21 @@ def _empty_contract() -> dict[str, Any]:
             "baseline_field_status_code_total": 0,
             "baseline_field_body_hash_total": 0,
             "baseline_field_content_type_total": 0,
+            "execution_ready_check_plan_items": 0,
+            "blocked_check_plan_items": 0,
+            "plans_baseline_inputs_complete": 0,
+            "plans_with_missing_baseline_fields": 0,
+            "missing_body_preview_items": 0,
+            "missing_status_code_items": 0,
+            "missing_body_hash_items": 0,
+            "missing_content_type_items": 0,
+            "missing_baseline_fields_present": [],
+            "plans_blocked_by_body_preview": 0,
+            "plans_blocked_by_status_code": 0,
+            "plans_blocked_by_body_hash": 0,
+            "plans_blocked_by_content_type": 0,
+            "execution_ready_ratio": 0.0,
+            "baseline_completeness_ratio": 0.0,
         },
     }
 
@@ -199,6 +215,7 @@ def _build_check_plan(
     safe_mode: bool,
     target_url: str,
     target_source: str,
+    baseline_availability: Mapping[str, bool],
 ) -> list[dict[str, Any]]:
     if not suggested_checks:
         return []
@@ -215,6 +232,21 @@ def _build_check_plan(
             continue
         comparison = dict(_CHECK_COMPARISON_CONTRACT.get(check_type) or {})
         comparison["baseline_fields"] = list(comparison.get("baseline_fields") or [])
+        missing_fields: list[str] = []
+        for field_name in _BASELINE_FIELD_ORDER:
+            required_flag = bool((comparison or {}).get(f"requires_{field_name}"))
+            if required_flag and not bool(baseline_availability.get(field_name)):
+                missing_fields.append(field_name)
+        all_required_available = not missing_fields
+        baseline_inputs = {
+            "body_preview_available": bool(baseline_availability.get("body_preview")),
+            "status_code_available": bool(baseline_availability.get("status_code")),
+            "body_hash_available": bool(baseline_availability.get("body_hash")),
+            "content_type_available": bool(baseline_availability.get("content_type")),
+            "all_required_available": all_required_available,
+            "missing_fields": missing_fields,
+        }
+        ready = bool(ready_for_validation and safe_mode and check_type in _CHECK_ORDER)
 
         check_plan.append(
             {
@@ -223,11 +255,13 @@ def _build_check_plan(
                 "requires_param_target": requires_param_target,
                 "param_targets_count": int(param_targets_count),
                 "baseline_required": True,
-                "ready": bool(ready_for_validation and safe_mode and check_type in _CHECK_ORDER),
+                "ready": ready,
                 "safe_mode": bool(safe_mode),
                 "target_url": target_url,
                 "target_source": target_source,
                 "comparison": comparison,
+                "baseline_inputs": baseline_inputs,
+                "execution_ready": bool(ready and all_required_available),
             }
         )
     return check_plan
@@ -239,6 +273,7 @@ def build_validation_plan(
     finding_artifacts: Mapping[str, Any] | None = None,
     candidates: Mapping[str, Any] | None = None,
     request_recipe: Mapping[str, Any] | None = None,
+    response_snapshot: Mapping[str, Any] | None = None,
     final_url: Any = "",
     discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -250,6 +285,7 @@ def build_validation_plan(
         return payload
 
     recipe = request_recipe if isinstance(request_recipe, Mapping) else {}
+    snapshot = response_snapshot if isinstance(response_snapshot, Mapping) else {}
     recipe_url = _clean_str(recipe.get("url"))
     recipe_method = _clean_str(recipe.get("method"))
     fallback_final_url = _clean_str(final_url)
@@ -293,6 +329,35 @@ def build_validation_plan(
         )
         evidence_level = _compute_evidence_level(manifest_item, ready_for_validation)
         safe_mode = True
+        baseline_body_preview = _clean_str(snapshot.get("body_preview"))
+        baseline_status_code = _safe_int(manifest_item.get("baseline_status_code"), 0)
+        baseline_body_hash = _clean_str(manifest_item.get("baseline_body_hash"))
+        baseline_content_type = _clean_str(manifest_item.get("baseline_content_type"))
+        if baseline_status_code <= 0:
+            baseline_status_code = _safe_int(snapshot.get("status_code"), 0)
+        if not baseline_body_hash:
+            baseline_body_hash = _clean_str(snapshot.get("body_hash"))
+        if not baseline_content_type:
+            baseline_content_type = _clean_str(snapshot.get("content_type"))
+        if (not baseline_status_code or not baseline_body_hash or not baseline_content_type) and artifact_ids:
+            for artifact_id in artifact_ids:
+                artifact = artifacts_by_id.get(artifact_id)
+                if not isinstance(artifact, Mapping):
+                    continue
+                if baseline_status_code <= 0:
+                    baseline_status_code = _safe_int(artifact.get("baseline_status_code"), 0)
+                if not baseline_body_hash:
+                    baseline_body_hash = _clean_str(artifact.get("baseline_body_hash"))
+                if not baseline_content_type:
+                    baseline_content_type = _clean_str(artifact.get("baseline_content_type"))
+                if baseline_status_code > 0 and baseline_body_hash and baseline_content_type:
+                    break
+        baseline_availability = {
+            "body_preview": bool(baseline_body_preview),
+            "status_code": bool(baseline_status_code > 0),
+            "body_hash": bool(baseline_body_hash),
+            "content_type": bool(baseline_content_type),
+        }
         check_plan = _build_check_plan(
             suggested_checks=suggested_checks,
             param_targets_count=len(param_targets),
@@ -300,7 +365,23 @@ def build_validation_plan(
             safe_mode=safe_mode,
             target_url=target_url,
             target_source=target_source,
+            baseline_availability=baseline_availability,
         )
+        missing_baseline_fields = sorted(
+            {
+                _clean_str(field)
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                for field in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+                if _clean_str(field) in _BASELINE_FIELD_ORDER
+            }
+        )
+        execution_ready_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping) and bool(check_item.get("execution_ready"))
+        )
+        blocked_checks = max(len(check_plan) - execution_ready_checks, 0)
 
         plan_items.append(
             {
@@ -344,6 +425,11 @@ def build_validation_plan(
                         and _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
                     }
                 ),
+                "baseline_inputs_complete": bool(check_plan) and bool(blocked_checks == 0),
+                "missing_baseline_fields": missing_baseline_fields,
+                "execution_ready_checks": execution_ready_checks,
+                "blocked_checks": blocked_checks,
+                "execution_blockers_present": list(missing_baseline_fields),
             }
         )
 
@@ -490,6 +576,63 @@ def build_validation_plan(
         for field in ((check_item.get("comparison") or {}).get("baseline_fields") or [])
         if _clean_str(field) == "content_type"
     )
+    execution_ready_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("execution_ready"))
+    )
+    blocked_check_plan_items = max(total_check_plan_items - execution_ready_check_plan_items, 0)
+    plans_baseline_inputs_complete = sum(1 for item in plan_items if bool(item.get("baseline_inputs_complete")))
+    plans_with_missing_baseline_fields = sum(1 for item in plan_items if bool(item.get("missing_baseline_fields")))
+    missing_body_preview_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and "body_preview" in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+    )
+    missing_status_code_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and "status_code" in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+    )
+    missing_body_hash_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and "body_hash" in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+    )
+    missing_content_type_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and "content_type" in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+    )
+    missing_baseline_fields_present = sorted(
+        {
+            _clean_str(field)
+            for item in plan_items
+            for field in (item.get("missing_baseline_fields") or [])
+            if _clean_str(field) in _BASELINE_FIELD_ORDER
+        }
+    )
+    plans_blocked_by_body_preview = sum(
+        1 for item in plan_items if "body_preview" in (item.get("missing_baseline_fields") or [])
+    )
+    plans_blocked_by_status_code = sum(
+        1 for item in plan_items if "status_code" in (item.get("missing_baseline_fields") or [])
+    )
+    plans_blocked_by_body_hash = sum(
+        1 for item in plan_items if "body_hash" in (item.get("missing_baseline_fields") or [])
+    )
+    plans_blocked_by_content_type = sum(
+        1 for item in plan_items if "content_type" in (item.get("missing_baseline_fields") or [])
+    )
     payload_families_present = sorted(
         {
             _clean_str(check_item.get("payload_family"))
@@ -633,5 +776,24 @@ def build_validation_plan(
         "baseline_field_status_code_total": baseline_field_status_code_total,
         "baseline_field_body_hash_total": baseline_field_body_hash_total,
         "baseline_field_content_type_total": baseline_field_content_type_total,
+        "execution_ready_check_plan_items": execution_ready_check_plan_items,
+        "blocked_check_plan_items": blocked_check_plan_items,
+        "plans_baseline_inputs_complete": plans_baseline_inputs_complete,
+        "plans_with_missing_baseline_fields": plans_with_missing_baseline_fields,
+        "missing_body_preview_items": missing_body_preview_items,
+        "missing_status_code_items": missing_status_code_items,
+        "missing_body_hash_items": missing_body_hash_items,
+        "missing_content_type_items": missing_content_type_items,
+        "missing_baseline_fields_present": missing_baseline_fields_present,
+        "plans_blocked_by_body_preview": plans_blocked_by_body_preview,
+        "plans_blocked_by_status_code": plans_blocked_by_status_code,
+        "plans_blocked_by_body_hash": plans_blocked_by_body_hash,
+        "plans_blocked_by_content_type": plans_blocked_by_content_type,
+        "execution_ready_ratio": _round_metric(
+            (execution_ready_check_plan_items / total_check_plan_items) if total_check_plan_items else 0.0
+        ),
+        "baseline_completeness_ratio": _round_metric(
+            (plans_baseline_inputs_complete / total_plans) if total_plans else 0.0
+        ),
     }
     return payload

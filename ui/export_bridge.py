@@ -113,6 +113,21 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_baseline_field_status_code_total",
     "validation_plan_baseline_field_body_hash_total",
     "validation_plan_baseline_field_content_type_total",
+    "validation_plan_execution_ready_check_plan_items",
+    "validation_plan_blocked_check_plan_items",
+    "validation_plan_plans_baseline_inputs_complete",
+    "validation_plan_plans_with_missing_baseline_fields",
+    "validation_plan_missing_body_preview_items",
+    "validation_plan_missing_status_code_items",
+    "validation_plan_missing_body_hash_items",
+    "validation_plan_missing_content_type_items",
+    "validation_plan_missing_baseline_fields_present",
+    "validation_plan_plans_blocked_by_body_preview",
+    "validation_plan_plans_blocked_by_status_code",
+    "validation_plan_plans_blocked_by_body_hash",
+    "validation_plan_plans_blocked_by_content_type",
+    "validation_plan_execution_ready_ratio",
+    "validation_plan_baseline_completeness_ratio",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -493,6 +508,21 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_baseline_field_status_code_total": 0,
         "validation_plan_baseline_field_body_hash_total": 0,
         "validation_plan_baseline_field_content_type_total": 0,
+        "validation_plan_execution_ready_check_plan_items": 0,
+        "validation_plan_blocked_check_plan_items": 0,
+        "validation_plan_plans_baseline_inputs_complete": 0,
+        "validation_plan_plans_with_missing_baseline_fields": 0,
+        "validation_plan_missing_body_preview_items": 0,
+        "validation_plan_missing_status_code_items": 0,
+        "validation_plan_missing_body_hash_items": 0,
+        "validation_plan_missing_content_type_items": 0,
+        "validation_plan_missing_baseline_fields_present": "",
+        "validation_plan_plans_blocked_by_body_preview": 0,
+        "validation_plan_plans_blocked_by_status_code": 0,
+        "validation_plan_plans_blocked_by_body_hash": 0,
+        "validation_plan_plans_blocked_by_content_type": 0,
+        "validation_plan_execution_ready_ratio": 0.0,
+        "validation_plan_baseline_completeness_ratio": 0.0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -586,6 +616,35 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_baseline_field_content_type_total": _to_int_count(
             summary.get("baseline_field_content_type_total"), 0
         ),
+        "validation_plan_execution_ready_check_plan_items": _to_int_count(
+            summary.get("execution_ready_check_plan_items"), 0
+        ),
+        "validation_plan_blocked_check_plan_items": _to_int_count(summary.get("blocked_check_plan_items"), 0),
+        "validation_plan_plans_baseline_inputs_complete": _to_int_count(
+            summary.get("plans_baseline_inputs_complete"), 0
+        ),
+        "validation_plan_plans_with_missing_baseline_fields": _to_int_count(
+            summary.get("plans_with_missing_baseline_fields"), 0
+        ),
+        "validation_plan_missing_body_preview_items": _to_int_count(summary.get("missing_body_preview_items"), 0),
+        "validation_plan_missing_status_code_items": _to_int_count(summary.get("missing_status_code_items"), 0),
+        "validation_plan_missing_body_hash_items": _to_int_count(summary.get("missing_body_hash_items"), 0),
+        "validation_plan_missing_content_type_items": _to_int_count(summary.get("missing_content_type_items"), 0),
+        "validation_plan_missing_baseline_fields_present": _join_string_list(
+            summary.get("missing_baseline_fields_present")
+        ),
+        "validation_plan_plans_blocked_by_body_preview": _to_int_count(
+            summary.get("plans_blocked_by_body_preview"), 0
+        ),
+        "validation_plan_plans_blocked_by_status_code": _to_int_count(
+            summary.get("plans_blocked_by_status_code"), 0
+        ),
+        "validation_plan_plans_blocked_by_body_hash": _to_int_count(summary.get("plans_blocked_by_body_hash"), 0),
+        "validation_plan_plans_blocked_by_content_type": _to_int_count(
+            summary.get("plans_blocked_by_content_type"), 0
+        ),
+        "validation_plan_execution_ready_ratio": float(summary.get("execution_ready_ratio") or 0.0),
+        "validation_plan_baseline_completeness_ratio": float(summary.get("baseline_completeness_ratio") or 0.0),
     }
 
 

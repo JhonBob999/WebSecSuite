@@ -495,6 +495,7 @@ class ScraperRunnable(QRunnable):
                 finding_artifacts=result.get("finding_artifacts"),
                 candidates=result.get("candidates"),
                 request_recipe=result.get("request_recipe"),
+                response_snapshot=result.get("response_snapshot"),
                 final_url=result.get("final_url"),
                 discovery=result.get("discovery"),
             )
@@ -570,6 +571,7 @@ class ScraperRunnable(QRunnable):
                 finding_artifacts=self.task.result.get("finding_artifacts"),
                 candidates=self.task.result.get("candidates"),
                 request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
                 discovery=self.task.result.get("discovery"),
             )
@@ -618,6 +620,7 @@ class ScraperRunnable(QRunnable):
                 finding_artifacts=self.task.result.get("finding_artifacts"),
                 candidates=self.task.result.get("candidates"),
                 request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
                 discovery=self.task.result.get("discovery"),
             )

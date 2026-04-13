@@ -247,6 +247,7 @@ def run(task_ctx: dict) -> dict:
         finding_artifacts=result.get("finding_artifacts"),
         candidates=result.get("candidates"),
         request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
         final_url=result.get("final_url") or final_url,
         discovery=result.get("discovery"),
     )
