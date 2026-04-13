@@ -165,6 +165,20 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_plans_primary_unavailable",
     "validation_plan_execution_priority_min",
     "validation_plan_execution_priority_max",
+    "validation_plan_param_replace_items",
+    "validation_plan_endpoint_compare_items",
+    "validation_plan_unavailable_mutation_items",
+    "validation_plan_mutating_check_plan_items",
+    "validation_plan_baseline_only_check_plan_items",
+    "validation_plan_mutation_ready_check_plan_items",
+    "validation_plan_mutation_strategies_present",
+    "validation_plan_plans_with_mutating_checks",
+    "validation_plan_plans_with_baseline_only_checks",
+    "validation_plan_total_mutation_slots",
+    "validation_plan_avg_mutation_slots_per_plan",
+    "validation_plan_mutation_ready_ratio",
+    "validation_plan_plans_primary_param_replace",
+    "validation_plan_plans_primary_endpoint_compare",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -597,6 +611,20 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_primary_unavailable": 0,
         "validation_plan_execution_priority_min": 0,
         "validation_plan_execution_priority_max": 0,
+        "validation_plan_param_replace_items": 0,
+        "validation_plan_endpoint_compare_items": 0,
+        "validation_plan_unavailable_mutation_items": 0,
+        "validation_plan_mutating_check_plan_items": 0,
+        "validation_plan_baseline_only_check_plan_items": 0,
+        "validation_plan_mutation_ready_check_plan_items": 0,
+        "validation_plan_mutation_strategies_present": "",
+        "validation_plan_plans_with_mutating_checks": 0,
+        "validation_plan_plans_with_baseline_only_checks": 0,
+        "validation_plan_total_mutation_slots": 0,
+        "validation_plan_avg_mutation_slots_per_plan": 0.0,
+        "validation_plan_mutation_ready_ratio": 0.0,
+        "validation_plan_plans_primary_param_replace": 0,
+        "validation_plan_plans_primary_endpoint_compare": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -774,6 +802,28 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_primary_unavailable": _to_int_count(summary.get("plans_primary_unavailable"), 0),
         "validation_plan_execution_priority_min": _to_int_count(summary.get("execution_priority_min"), 0),
         "validation_plan_execution_priority_max": _to_int_count(summary.get("execution_priority_max"), 0),
+        "validation_plan_param_replace_items": _to_int_count(summary.get("param_replace_items"), 0),
+        "validation_plan_endpoint_compare_items": _to_int_count(summary.get("endpoint_compare_items"), 0),
+        "validation_plan_unavailable_mutation_items": _to_int_count(summary.get("unavailable_mutation_items"), 0),
+        "validation_plan_mutating_check_plan_items": _to_int_count(summary.get("mutating_check_plan_items"), 0),
+        "validation_plan_baseline_only_check_plan_items": _to_int_count(
+            summary.get("baseline_only_check_plan_items"), 0
+        ),
+        "validation_plan_mutation_ready_check_plan_items": _to_int_count(
+            summary.get("mutation_ready_check_plan_items"), 0
+        ),
+        "validation_plan_mutation_strategies_present": _join_string_list(summary.get("mutation_strategies_present")),
+        "validation_plan_plans_with_mutating_checks": _to_int_count(summary.get("plans_with_mutating_checks"), 0),
+        "validation_plan_plans_with_baseline_only_checks": _to_int_count(
+            summary.get("plans_with_baseline_only_checks"), 0
+        ),
+        "validation_plan_total_mutation_slots": _to_int_count(summary.get("total_mutation_slots"), 0),
+        "validation_plan_avg_mutation_slots_per_plan": float(summary.get("avg_mutation_slots_per_plan") or 0.0),
+        "validation_plan_mutation_ready_ratio": float(summary.get("mutation_ready_ratio") or 0.0),
+        "validation_plan_plans_primary_param_replace": _to_int_count(summary.get("plans_primary_param_replace"), 0),
+        "validation_plan_plans_primary_endpoint_compare": _to_int_count(
+            summary.get("plans_primary_endpoint_compare"), 0
+        ),
     }
 
 

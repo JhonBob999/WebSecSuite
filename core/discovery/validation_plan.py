@@ -53,6 +53,17 @@ _EXECUTION_MODE_PARAM_ONLY = "param_only"
 _EXECUTION_MODE_ENDPOINT_ONLY = "endpoint_only"
 _EXECUTION_MODE_HYBRID = "hybrid"
 _EXECUTION_MODE_UNAVAILABLE = "unavailable"
+_MUTATION_STRATEGY_PARAM_REPLACE = "param_replace"
+_MUTATION_STRATEGY_ENDPOINT_COMPARE = "endpoint_compare"
+_MUTATION_STRATEGY_UNAVAILABLE = "unavailable"
+_MUTATION_SLOT_PARAM = "param_slot"
+_MUTATION_SLOT_ENDPOINT = "endpoint_slot"
+_MUTATION_SLOT_NONE = "none"
+_MUTATION_SORT_WEIGHT = {
+    _MUTATION_STRATEGY_PARAM_REPLACE: 1,
+    _MUTATION_STRATEGY_ENDPOINT_COMPARE: 2,
+    _MUTATION_STRATEGY_UNAVAILABLE: 3,
+}
 _EXECUTION_LANE_READY_PARAM = "ready_param"
 _EXECUTION_LANE_READY_ENDPOINT = "ready_endpoint"
 _EXECUTION_LANE_BLOCKED_PARAM = "blocked_param"
@@ -181,6 +192,20 @@ def _empty_contract() -> dict[str, Any]:
             "plans_primary_unavailable": 0,
             "execution_priority_min": 0,
             "execution_priority_max": 0,
+            "param_replace_items": 0,
+            "endpoint_compare_items": 0,
+            "unavailable_mutation_items": 0,
+            "mutating_check_plan_items": 0,
+            "baseline_only_check_plan_items": 0,
+            "mutation_ready_check_plan_items": 0,
+            "mutation_strategies_present": [],
+            "plans_with_mutating_checks": 0,
+            "plans_with_baseline_only_checks": 0,
+            "total_mutation_slots": 0,
+            "avg_mutation_slots_per_plan": 0.0,
+            "mutation_ready_ratio": 0.0,
+            "plans_primary_param_replace": 0,
+            "plans_primary_endpoint_compare": 0,
         },
     }
 
@@ -246,6 +271,40 @@ def _compute_execution_lane(
 
 def _compute_execution_priority(lane: str) -> int:
     return int(_EXECUTION_LANE_PRIORITY.get(_clean_str(lane), 5))
+
+
+def _build_mutation_binding(
+    *,
+    mode: str,
+    effective_target_count: int,
+    has_target_url: bool,
+) -> dict[str, Any]:
+    clean_mode = _clean_str(mode)
+    safe_effective_target_count = max(_safe_int(effective_target_count, 0), 0)
+    if clean_mode in {_EXECUTION_MODE_PARAM_ONLY, _EXECUTION_MODE_HYBRID}:
+        return {
+            "strategy": _MUTATION_STRATEGY_PARAM_REPLACE,
+            "mutating": True,
+            "slot_count": max(1, safe_effective_target_count),
+            "slot_type": _MUTATION_SLOT_PARAM,
+            "baseline_only": False,
+        }
+    if clean_mode == _EXECUTION_MODE_ENDPOINT_ONLY:
+        slot_count = 1 if bool(has_target_url) else 0
+        return {
+            "strategy": _MUTATION_STRATEGY_ENDPOINT_COMPARE,
+            "mutating": False,
+            "slot_count": int(slot_count),
+            "slot_type": _MUTATION_SLOT_ENDPOINT if slot_count == 1 else _MUTATION_SLOT_NONE,
+            "baseline_only": True,
+        }
+    return {
+        "strategy": _MUTATION_STRATEGY_UNAVAILABLE,
+        "mutating": False,
+        "slot_count": 0,
+        "slot_type": _MUTATION_SLOT_NONE,
+        "baseline_only": True,
+    }
 
 
 def _build_execution_sort_key(
@@ -404,6 +463,18 @@ def _build_check_plan(
             if parameterized
             else (1 if endpoint_level and has_target_url else 0)
         )
+        mutation_binding = _build_mutation_binding(
+            mode=mode,
+            effective_target_count=effective_target_count,
+            has_target_url=has_target_url,
+        )
+        mutation_strategy = _clean_str(mutation_binding.get("strategy"))
+        mutation_ready = bool(
+            execution_ready
+            and mutation_strategy != _MUTATION_STRATEGY_UNAVAILABLE
+            and _safe_int(mutation_binding.get("slot_count"), 0) > 0
+        )
+        mutation_sort_weight = int(_MUTATION_SORT_WEIGHT.get(mutation_strategy, 3))
 
         check_plan.append(
             {
@@ -426,6 +497,9 @@ def _build_check_plan(
                 "execution_lane": execution_lane,
                 "execution_priority": int(execution_priority),
                 "execution_sort_key": execution_sort_key,
+                "mutation_binding": mutation_binding,
+                "mutation_ready": mutation_ready,
+                "mutation_sort_weight": mutation_sort_weight,
             }
         )
     return check_plan
@@ -578,6 +652,51 @@ def build_validation_plan(
             if isinstance(check_item, Mapping) and bool(check_item.get("execution_ready"))
         )
         blocked_checks = max(len(check_plan) - execution_ready_checks, 0)
+        mutation_strategies_present = sorted(
+            {
+                _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                and _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+            }
+        )
+        mutating_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+            and bool((check_item.get("mutation_binding") or {}).get("mutating"))
+        )
+        baseline_only_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+            and bool((check_item.get("mutation_binding") or {}).get("baseline_only"))
+        )
+        mutation_ready_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping) and bool(check_item.get("mutation_ready"))
+        )
+        total_mutation_slots = sum(
+            _safe_int((check_item.get("mutation_binding") or {}).get("slot_count"), 0)
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+        )
+        if check_plan:
+            primary_mutation_strategy = min(
+                (
+                    (
+                        _safe_int(check_item.get("mutation_sort_weight"), 3),
+                        _clean_str((check_item.get("mutation_binding") or {}).get("strategy")),
+                    )
+                    for check_item in check_plan
+                    if isinstance(check_item, Mapping)
+                    and _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+                ),
+                default=(3, ""),
+            )[1]
+        else:
+            primary_mutation_strategy = ""
         execution_lanes_present = sorted(
             {
                 _clean_str(check_item.get("execution_lane"))
@@ -691,6 +810,14 @@ def build_validation_plan(
                 "blocked_checks_sorted": int(blocked_checks_sorted),
                 "primary_execution_lane": primary_execution_lane,
                 "execution_queue_size": len(check_plan),
+                "mutation_strategies_present": mutation_strategies_present,
+                "mutating_checks": int(mutating_checks),
+                "baseline_only_checks": int(baseline_only_checks),
+                "mutation_ready_checks": int(mutation_ready_checks),
+                "total_mutation_slots": int(total_mutation_slots),
+                "primary_mutation_strategy": primary_mutation_strategy,
+                "has_mutating_checks": bool(mutating_checks > 0),
+                "has_baseline_only_checks": bool(baseline_only_checks > 0),
             }
         )
 
@@ -957,6 +1084,63 @@ def build_validation_plan(
         for check_item in (item.get("check_plan") or [])
         if isinstance(check_item, Mapping)
     ]
+    mutation_strategies_present = sorted(
+        {
+            _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping)
+            and _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+        }
+    )
+    param_replace_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("mutation_binding") or {}).get("strategy")) == _MUTATION_STRATEGY_PARAM_REPLACE
+    )
+    endpoint_compare_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+        == _MUTATION_STRATEGY_ENDPOINT_COMPARE
+    )
+    unavailable_mutation_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("mutation_binding") or {}).get("strategy")) == _MUTATION_STRATEGY_UNAVAILABLE
+    )
+    mutating_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and bool((check_item.get("mutation_binding") or {}).get("mutating"))
+    )
+    baseline_only_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and bool((check_item.get("mutation_binding") or {}).get("baseline_only"))
+    )
+    mutation_ready_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("mutation_ready"))
+    )
+    total_mutation_slots = sum(
+        _safe_int((check_item.get("mutation_binding") or {}).get("slot_count"), 0)
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+    )
     ready_queue_total = ready_param_items + ready_endpoint_items
     blocked_queue_total = blocked_param_items + blocked_endpoint_items + unavailable_items
     plans_baseline_inputs_complete = sum(1 for item in plan_items if bool(item.get("baseline_inputs_complete")))
@@ -1236,5 +1420,29 @@ def build_validation_plan(
         ),
         "execution_priority_min": min(all_execution_priorities) if all_execution_priorities else 0,
         "execution_priority_max": max(all_execution_priorities) if all_execution_priorities else 0,
+        "param_replace_items": param_replace_items,
+        "endpoint_compare_items": endpoint_compare_items,
+        "unavailable_mutation_items": unavailable_mutation_items,
+        "mutating_check_plan_items": mutating_check_plan_items,
+        "baseline_only_check_plan_items": baseline_only_check_plan_items,
+        "mutation_ready_check_plan_items": mutation_ready_check_plan_items,
+        "mutation_strategies_present": mutation_strategies_present,
+        "plans_with_mutating_checks": sum(1 for item in plan_items if bool(item.get("has_mutating_checks"))),
+        "plans_with_baseline_only_checks": sum(1 for item in plan_items if bool(item.get("has_baseline_only_checks"))),
+        "total_mutation_slots": int(total_mutation_slots),
+        "avg_mutation_slots_per_plan": _round_metric((total_mutation_slots / total_plans) if total_plans else 0.0),
+        "mutation_ready_ratio": _round_metric(
+            (mutation_ready_check_plan_items / total_check_plan_items) if total_check_plan_items else 0.0
+        ),
+        "plans_primary_param_replace": sum(
+            1
+            for item in plan_items
+            if _clean_str(item.get("primary_mutation_strategy")) == _MUTATION_STRATEGY_PARAM_REPLACE
+        ),
+        "plans_primary_endpoint_compare": sum(
+            1
+            for item in plan_items
+            if _clean_str(item.get("primary_mutation_strategy")) == _MUTATION_STRATEGY_ENDPOINT_COMPARE
+        ),
     }
     return payload
