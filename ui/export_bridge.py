@@ -63,6 +63,21 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_status_diff_checks",
     "validation_plan_types_present",
     "validation_plan_checks_present",
+    "validation_plan_total_checks",
+    "validation_plan_unique_checks_present",
+    "validation_plan_plans_with_checks",
+    "validation_plan_plans_without_checks",
+    "validation_plan_safe_mode_total",
+    "validation_plan_candidate_targets_total",
+    "validation_plan_unique_candidate_targets",
+    "validation_plan_candidate_to_check_density",
+    "validation_plan_avg_checks_per_plan",
+    "validation_plan_avg_candidate_targets_per_plan",
+    "validation_plan_ready_candidate_targets_total",
+    "validation_plan_ready_candidate_targets_unique",
+    "validation_plan_ready_candidate_coverage_ratio",
+    "validation_plan_evidence_levels_present",
+    "validation_plan_methods_present",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -393,6 +408,21 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_status_diff_checks": 0,
         "validation_plan_types_present": "",
         "validation_plan_checks_present": "",
+        "validation_plan_total_checks": 0,
+        "validation_plan_unique_checks_present": "",
+        "validation_plan_plans_with_checks": 0,
+        "validation_plan_plans_without_checks": 0,
+        "validation_plan_safe_mode_total": 0,
+        "validation_plan_candidate_targets_total": 0,
+        "validation_plan_unique_candidate_targets": 0,
+        "validation_plan_candidate_to_check_density": 0.0,
+        "validation_plan_avg_checks_per_plan": 0.0,
+        "validation_plan_avg_candidate_targets_per_plan": 0.0,
+        "validation_plan_ready_candidate_targets_total": 0,
+        "validation_plan_ready_candidate_targets_unique": 0,
+        "validation_plan_ready_candidate_coverage_ratio": 0.0,
+        "validation_plan_evidence_levels_present": "",
+        "validation_plan_methods_present": "",
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -414,6 +444,27 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_status_diff_checks": _to_int_count(summary.get("status_diff_checks"), 0),
         "validation_plan_types_present": _join_string_list(summary.get("types_present")),
         "validation_plan_checks_present": _join_string_list(summary.get("checks_present")),
+        "validation_plan_total_checks": _to_int_count(summary.get("total_checks"), 0),
+        "validation_plan_unique_checks_present": _join_string_list(summary.get("unique_checks_present")),
+        "validation_plan_plans_with_checks": _to_int_count(summary.get("plans_with_checks"), 0),
+        "validation_plan_plans_without_checks": _to_int_count(summary.get("plans_without_checks"), 0),
+        "validation_plan_safe_mode_total": _to_int_count(summary.get("plans_safe_mode_total"), 0),
+        "validation_plan_candidate_targets_total": _to_int_count(summary.get("candidate_targets_total"), 0),
+        "validation_plan_unique_candidate_targets": _to_int_count(summary.get("unique_candidate_targets"), 0),
+        "validation_plan_candidate_to_check_density": float(summary.get("candidate_to_check_density") or 0.0),
+        "validation_plan_avg_checks_per_plan": float(summary.get("avg_checks_per_plan") or 0.0),
+        "validation_plan_avg_candidate_targets_per_plan": float(
+            summary.get("avg_candidate_targets_per_plan") or 0.0
+        ),
+        "validation_plan_ready_candidate_targets_total": _to_int_count(
+            summary.get("ready_candidate_targets_total"), 0
+        ),
+        "validation_plan_ready_candidate_targets_unique": _to_int_count(
+            summary.get("ready_candidate_targets_unique"), 0
+        ),
+        "validation_plan_ready_candidate_coverage_ratio": float(summary.get("ready_candidate_coverage_ratio") or 0.0),
+        "validation_plan_evidence_levels_present": _join_string_list(summary.get("evidence_levels_present")),
+        "validation_plan_methods_present": _join_string_list(summary.get("methods_present")),
     }
 
 

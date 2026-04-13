@@ -25,6 +25,21 @@ def _empty_contract() -> dict[str, Any]:
             "status_diff_checks": 0,
             "types_present": [],
             "checks_present": [],
+            "total_checks": 0,
+            "unique_checks_present": [],
+            "plans_with_checks": 0,
+            "plans_without_checks": 0,
+            "plans_safe_mode_total": 0,
+            "candidate_targets_total": 0,
+            "unique_candidate_targets": 0,
+            "candidate_to_check_density": 0.0,
+            "avg_checks_per_plan": 0.0,
+            "avg_candidate_targets_per_plan": 0.0,
+            "ready_candidate_targets_total": 0,
+            "ready_candidate_targets_unique": 0,
+            "ready_candidate_coverage_ratio": 0.0,
+            "evidence_levels_present": [],
+            "methods_present": [],
         },
     }
 
@@ -57,6 +72,10 @@ def _stable_dedup_str_list(value: Any) -> list[str]:
             out.append(clean)
             seen.add(clean)
     return out
+
+
+def _round_metric(value: float) -> float:
+    return round(float(value), 3)
 
 
 def _build_artifact_index(finding_artifacts: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -196,8 +215,44 @@ def build_validation_plan(
                 seen_checks.add(clean)
 
     payload["all"] = plan_items
+    total_plans = len(plan_items)
+    total_checks = sum(len(item.get("suggested_checks") or []) for item in plan_items)
+    plans_with_checks = sum(1 for item in plan_items if bool(item.get("suggested_checks")))
+    candidate_targets_total = sum(len(item.get("artifact_ids") or []) for item in plan_items)
+    all_candidate_ids = {
+        _clean_str(artifact_id)
+        for item in plan_items
+        for artifact_id in (item.get("artifact_ids") or [])
+        if _clean_str(artifact_id)
+    }
+    ready_candidate_ids = {
+        _clean_str(artifact_id)
+        for item in plan_items
+        if bool(item.get("ready_for_validation"))
+        for artifact_id in (item.get("artifact_ids") or [])
+        if _clean_str(artifact_id)
+    }
+    ready_candidate_targets_total = sum(
+        len(item.get("artifact_ids") or []) for item in plan_items if bool(item.get("ready_for_validation"))
+    )
+    unique_candidate_targets = len(all_candidate_ids)
+    methods_present = sorted(
+        {
+            _clean_str(item.get("method"))
+            for item in plan_items
+            if _clean_str(item.get("method"))
+        }
+    )
+    evidence_levels_present = sorted(
+        {
+            _clean_str(item.get("evidence_level"))
+            for item in plan_items
+            if _clean_str(item.get("evidence_level"))
+        }
+    )
+
     payload["summary"] = {
-        "total": len(plan_items),
+        "total": total_plans,
         "ready_total": sum(1 for item in plan_items if bool(item.get("ready_for_validation"))),
         "with_param_targets": sum(1 for item in plan_items if bool(item.get("param_targets"))),
         "reflection_checks": sum(
@@ -211,5 +266,26 @@ def build_validation_plan(
         ),
         "types_present": types_present,
         "checks_present": checks_present,
+        "total_checks": total_checks,
+        "unique_checks_present": sorted(set(checks_present)),
+        "plans_with_checks": plans_with_checks,
+        "plans_without_checks": max(total_plans - plans_with_checks, 0),
+        "plans_safe_mode_total": sum(1 for item in plan_items if bool(item.get("safe_mode"))),
+        "candidate_targets_total": candidate_targets_total,
+        "unique_candidate_targets": unique_candidate_targets,
+        "candidate_to_check_density": _round_metric(
+            (total_checks / unique_candidate_targets) if unique_candidate_targets else 0.0
+        ),
+        "avg_checks_per_plan": _round_metric((total_checks / total_plans) if total_plans else 0.0),
+        "avg_candidate_targets_per_plan": _round_metric(
+            (candidate_targets_total / total_plans) if total_plans else 0.0
+        ),
+        "ready_candidate_targets_total": ready_candidate_targets_total,
+        "ready_candidate_targets_unique": len(ready_candidate_ids),
+        "ready_candidate_coverage_ratio": _round_metric(
+            (len(ready_candidate_ids) / unique_candidate_targets) if unique_candidate_targets else 0.0
+        ),
+        "evidence_levels_present": evidence_levels_present,
+        "methods_present": methods_present,
     }
     return payload
