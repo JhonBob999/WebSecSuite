@@ -24,11 +24,20 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "candidates_ssrf",
     "candidates_types_present",
     "candidates_max_confidence",
+    "findings_total",
+    "findings_xss",
+    "findings_sqli",
+    "findings_lfi",
+    "findings_ssrf",
+    "findings_max_confidence",
+    "findings_with_baseline_hash",
+    "findings_confirmed_total",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "candidates",
     "candidates_summary",
+    "finding_artifacts",
     "discovery",
     "fingerprint",
     "forms",
@@ -123,6 +132,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record["_raw_result"] = result
 
     record.update(derive_candidate_summary_fields(result))
+    record.update(derive_finding_artifact_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
@@ -182,6 +192,41 @@ def derive_response_snapshot_summary_fields(result: Any) -> dict[str, Any]:
         "response_content_length": _to_int_count(content_length, None),
         "response_body_hash": _str_or(snapshot.get("body_hash"), ""),
         "response_has_body_preview": has_body_preview,
+    }
+
+
+def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "findings_total": 0,
+        "findings_xss": 0,
+        "findings_sqli": 0,
+        "findings_lfi": 0,
+        "findings_ssrf": 0,
+        "findings_max_confidence": "",
+        "findings_with_baseline_hash": 0,
+        "findings_confirmed_total": 0,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    finding_artifacts = result.get("finding_artifacts")
+    if not isinstance(finding_artifacts, Mapping):
+        return defaults
+
+    summary = finding_artifacts.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+
+    by_type = summary.get("by_type") if isinstance(summary.get("by_type"), Mapping) else {}
+    return {
+        "findings_total": _to_int_count(summary.get("total"), 0),
+        "findings_xss": _to_int_count(by_type.get("xss_candidate"), 0),
+        "findings_sqli": _to_int_count(by_type.get("sqli_candidate"), 0),
+        "findings_lfi": _to_int_count(by_type.get("lfi_candidate"), 0),
+        "findings_ssrf": _to_int_count(by_type.get("ssrf_candidate"), 0),
+        "findings_max_confidence": _str_or(summary.get("max_confidence"), ""),
+        "findings_with_baseline_hash": _to_int_count(summary.get("with_baseline_hash"), 0),
+        "findings_confirmed_total": _to_int_count(summary.get("confirmed_total"), 0),
     }
 
 
@@ -512,6 +557,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
             row[nk] = value
 
         row.update(derive_candidate_summary_fields(rec))
+        row.update(derive_finding_artifact_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 

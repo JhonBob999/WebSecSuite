@@ -7,10 +7,21 @@ import httpx
 
 from core.cookies.storage import load_cookiejar
 from core.discovery.candidate_generation import generate_candidates
+from core.discovery.finding_artifacts import build_finding_artifacts
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
 
 logger = logging.getLogger(__name__)
+
+
+def _empty_finding_artifacts() -> dict:
+    return build_finding_artifacts(
+        candidates=None,
+        request_recipe=None,
+        response_snapshot=None,
+        status_code=None,
+        final_url="",
+    )
 
 
 def _headers_with_ua(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,14 +79,35 @@ def run(task_ctx: dict) -> dict:
     base_url = _infer_base_url(ctx)
     if not html:
         if not base_url:
-            return {"error": "No URL provided for discovery", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
+            return {
+                "error": "No URL provided for discovery",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "finding_artifacts": _empty_finding_artifacts(),
+            }
         try:
             html, final_url, headers = _fetch_html(base_url, params)
             base_url = final_url or base_url
         except httpx.HTTPError as e:
-            return {"error": f"HTTP error: {e}", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
+            return {
+                "error": f"HTTP error: {e}",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "finding_artifacts": _empty_finding_artifacts(),
+            }
         except Exception as e:  # pragma: no cover - defensive fallback
-            return {"error": f"Unhandled fetch error: {e}", "stats": {}, "urls": {}, "query_params": {}, "parameter_intelligence": []}
+            return {
+                "error": f"Unhandled fetch error: {e}",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "finding_artifacts": _empty_finding_artifacts(),
+            }
     else:
         res_ctx = ctx.get("result")
         headers = dict(res_ctx.get("headers") or {}) if isinstance(res_ctx, dict) else {}
@@ -142,4 +174,11 @@ def run(task_ctx: dict) -> dict:
             }
 
     result["candidates_summary"] = result["candidates"].get("summary", {})
+    result["finding_artifacts"] = build_finding_artifacts(
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        status_code=result.get("status_code"),
+        final_url=result.get("final_url") or final_url,
+    )
     return result

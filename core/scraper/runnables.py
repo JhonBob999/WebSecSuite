@@ -17,6 +17,7 @@ from core.cookies.storage import load_cookiejar, save_cookiejar, resolve_cookie_
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.discovery.endpoint_classifier import classify_endpoint_type
 from core.discovery.candidate_generation import generate_candidates
+from core.discovery.finding_artifacts import build_finding_artifacts
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -463,6 +464,13 @@ class ScraperRunnable(QRunnable):
                     parameter_intelligence=None,
                 )
                 result["candidates_summary"] = result["candidates"].get("summary", {})
+            result["finding_artifacts"] = build_finding_artifacts(
+                candidates=result.get("candidates"),
+                request_recipe=result.get("request_recipe"),
+                response_snapshot=result.get("response_snapshot"),
+                status_code=result.get("status_code"),
+                final_url=result.get("final_url"),
+            )
 
             self.task.result = result
 
@@ -507,6 +515,13 @@ class ScraperRunnable(QRunnable):
                 ),
                 "response_snapshot": self._build_response_snapshot(),
             }
+            self.task.result["finding_artifacts"] = build_finding_artifacts(
+                candidates=self.task.result.get("candidates"),
+                request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
+                status_code=self.task.result.get("status_code"),
+                final_url=self.task.result.get("final_url"),
+            )
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
@@ -524,6 +539,13 @@ class ScraperRunnable(QRunnable):
                 ),
                 "response_snapshot": self._build_response_snapshot(),
             }
+            self.task.result["finding_artifacts"] = build_finding_artifacts(
+                candidates=self.task.result.get("candidates"),
+                request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
+                status_code=self.task.result.get("status_code"),
+                final_url=self.task.result.get("final_url"),
+            )
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         finally:
