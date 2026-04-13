@@ -217,6 +217,23 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validator_queue_validator_job_ready_ratio",
     "validator_queue_primary_ready_queues",
     "validator_queue_unique_validator_job_ids",
+    "validator_queue_ready_only_queues",
+    "validator_queue_mixed_queues",
+    "validator_queue_blocked_only_queues",
+    "validator_queue_unavailable_only_queues",
+    "validator_queue_empty_queues",
+    "validator_queue_dispatch_jobs_total",
+    "validator_queue_blocked_jobs_total",
+    "validator_queue_unavailable_jobs_total",
+    "validator_queue_fully_dispatchable_queues",
+    "validator_queue_partially_dispatchable_queues",
+    "validator_queue_primary_dispatchable_queues",
+    "validator_queue_dispatch_modes_present",
+    "validator_queue_avg_dispatch_jobs_per_queue",
+    "validator_queue_avg_blocked_jobs_per_queue",
+    "validator_queue_avg_unavailable_jobs_per_queue",
+    "validator_queue_fully_dispatchable_ratio",
+    "validator_queue_dispatch_job_ratio",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -939,6 +956,23 @@ def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
         "validator_queue_validator_job_ready_ratio": 0.0,
         "validator_queue_primary_ready_queues": 0,
         "validator_queue_unique_validator_job_ids": 0,
+        "validator_queue_ready_only_queues": 0,
+        "validator_queue_mixed_queues": 0,
+        "validator_queue_blocked_only_queues": 0,
+        "validator_queue_unavailable_only_queues": 0,
+        "validator_queue_empty_queues": 0,
+        "validator_queue_dispatch_jobs_total": 0,
+        "validator_queue_blocked_jobs_total": 0,
+        "validator_queue_unavailable_jobs_total": 0,
+        "validator_queue_fully_dispatchable_queues": 0,
+        "validator_queue_partially_dispatchable_queues": 0,
+        "validator_queue_primary_dispatchable_queues": 0,
+        "validator_queue_dispatch_modes_present": "",
+        "validator_queue_avg_dispatch_jobs_per_queue": 0.0,
+        "validator_queue_avg_blocked_jobs_per_queue": 0.0,
+        "validator_queue_avg_unavailable_jobs_per_queue": 0.0,
+        "validator_queue_fully_dispatchable_ratio": 0.0,
+        "validator_queue_dispatch_job_ratio": 0.0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -969,6 +1003,27 @@ def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
         "validator_queue_validator_job_ready_ratio": float(summary.get("validator_job_ready_ratio") or 0.0),
         "validator_queue_primary_ready_queues": _to_int_count(summary.get("primary_ready_queues"), 0),
         "validator_queue_unique_validator_job_ids": _to_int_count(summary.get("unique_validator_job_ids"), 0),
+        "validator_queue_ready_only_queues": _to_int_count(summary.get("ready_only_queues"), 0),
+        "validator_queue_mixed_queues": _to_int_count(summary.get("mixed_queues"), 0),
+        "validator_queue_blocked_only_queues": _to_int_count(summary.get("blocked_only_queues"), 0),
+        "validator_queue_unavailable_only_queues": _to_int_count(summary.get("unavailable_only_queues"), 0),
+        "validator_queue_empty_queues": _to_int_count(summary.get("empty_queues"), 0),
+        "validator_queue_dispatch_jobs_total": _to_int_count(summary.get("dispatch_jobs_total"), 0),
+        "validator_queue_blocked_jobs_total": _to_int_count(summary.get("blocked_jobs_total"), 0),
+        "validator_queue_unavailable_jobs_total": _to_int_count(summary.get("unavailable_jobs_total"), 0),
+        "validator_queue_fully_dispatchable_queues": _to_int_count(summary.get("fully_dispatchable_queues"), 0),
+        "validator_queue_partially_dispatchable_queues": _to_int_count(
+            summary.get("partially_dispatchable_queues"), 0
+        ),
+        "validator_queue_primary_dispatchable_queues": _to_int_count(summary.get("primary_dispatchable_queues"), 0),
+        "validator_queue_dispatch_modes_present": _join_string_list(summary.get("dispatch_modes_present")),
+        "validator_queue_avg_dispatch_jobs_per_queue": float(summary.get("avg_dispatch_jobs_per_queue") or 0.0),
+        "validator_queue_avg_blocked_jobs_per_queue": float(summary.get("avg_blocked_jobs_per_queue") or 0.0),
+        "validator_queue_avg_unavailable_jobs_per_queue": float(
+            summary.get("avg_unavailable_jobs_per_queue") or 0.0
+        ),
+        "validator_queue_fully_dispatchable_ratio": float(summary.get("fully_dispatchable_ratio") or 0.0),
+        "validator_queue_dispatch_job_ratio": float(summary.get("dispatch_job_ratio") or 0.0),
     }
 
 
