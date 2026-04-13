@@ -30,7 +30,13 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "findings_lfi",
     "findings_ssrf",
     "findings_max_confidence",
+    "findings_max_priority",
     "findings_with_baseline_hash",
+    "findings_with_request_context",
+    "findings_with_response_context",
+    "findings_with_primary_evidence",
+    "findings_types_present",
+    "findings_priorities_present",
     "findings_confirmed_total",
 ]
 
@@ -203,7 +209,13 @@ def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
         "findings_lfi": 0,
         "findings_ssrf": 0,
         "findings_max_confidence": "",
+        "findings_max_priority": "",
         "findings_with_baseline_hash": 0,
+        "findings_with_request_context": 0,
+        "findings_with_response_context": 0,
+        "findings_with_primary_evidence": 0,
+        "findings_types_present": "",
+        "findings_priorities_present": "",
         "findings_confirmed_total": 0,
     }
     if not isinstance(result, Mapping):
@@ -218,6 +230,8 @@ def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
         return defaults
 
     by_type = summary.get("by_type") if isinstance(summary.get("by_type"), Mapping) else {}
+    types_present = summary.get("types_present")
+    priorities_present = summary.get("priorities_present")
     return {
         "findings_total": _to_int_count(summary.get("total"), 0),
         "findings_xss": _to_int_count(by_type.get("xss_candidate"), 0),
@@ -225,7 +239,13 @@ def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
         "findings_lfi": _to_int_count(by_type.get("lfi_candidate"), 0),
         "findings_ssrf": _to_int_count(by_type.get("ssrf_candidate"), 0),
         "findings_max_confidence": _str_or(summary.get("max_confidence"), ""),
+        "findings_max_priority": _str_or(summary.get("max_priority"), ""),
         "findings_with_baseline_hash": _to_int_count(summary.get("with_baseline_hash"), 0),
+        "findings_with_request_context": _to_int_count(summary.get("with_request_context"), 0),
+        "findings_with_response_context": _to_int_count(summary.get("with_response_context"), 0),
+        "findings_with_primary_evidence": _to_int_count(summary.get("with_primary_evidence"), 0),
+        "findings_types_present": _join_string_list(types_present),
+        "findings_priorities_present": _join_string_list(priorities_present),
         "findings_confirmed_total": _to_int_count(summary.get("confirmed_total"), 0),
     }
 
@@ -393,6 +413,20 @@ def _to_int_count(value: Any, default: int = 0) -> int:
     except Exception:
         pass
     return default
+
+
+def _join_string_list(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            clean = item.strip()
+            if clean and clean not in seen:
+                out.append(clean)
+                seen.add(clean)
+    return ",".join(out)
 
 
 def _extract_candidate_counts(rec: Mapping[str, Any]) -> dict[str, int]:

@@ -21,8 +21,14 @@ def _empty_contract() -> dict[str, Any]:
             "total": 0,
             "by_type": {artifact_type: 0 for artifact_type in _ARTIFACT_TYPES},
             "max_confidence": "",
+            "max_priority": "",
             "with_baseline_hash": 0,
+            "with_request_context": 0,
+            "with_response_context": 0,
+            "with_primary_evidence": 0,
             "confirmed_total": 0,
+            "types_present": [],
+            "priorities_present": [],
         },
     }
 
@@ -48,6 +54,80 @@ def _to_status_code(value: Any) -> int:
     except Exception:
         pass
     return 0
+
+
+def _to_clean_string(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _to_reason_sources(reasons: Any) -> list[str]:
+    if not isinstance(reasons, list):
+        return []
+    out: list[str] = []
+    for reason in reasons:
+        reason_value = _to_clean_string(reason)
+        if reason_value:
+            out.append(f"reason:{reason_value}")
+    return out
+
+
+def _build_evidence_sources(
+    *,
+    endpoint_type: str,
+    param: Any,
+    reasons: Any,
+    request_method: str,
+    request_url: str,
+    baseline_status_code: int,
+    baseline_content_type: str,
+    baseline_body_hash: str,
+) -> list[str]:
+    candidates: list[str] = [f"candidate:endpoint_type:{endpoint_type or 'unknown'}"]
+    param_value = _to_clean_string(param)
+    if param_value:
+        candidates.append(f"candidate:param:{param_value}")
+
+    candidates.extend(_to_reason_sources(reasons))
+
+    if request_method:
+        candidates.append(f"request:method:{request_method}")
+    if request_url:
+        candidates.append("request:url")
+
+    if baseline_status_code > 0:
+        candidates.append("response:status_code")
+    if baseline_content_type:
+        candidates.append("response:content_type")
+    if baseline_body_hash:
+        candidates.append("response:body_hash")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if isinstance(item, str) and item and item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
+
+
+def _primary_evidence_from_sources(sources: list[str]) -> str:
+    priority_prefixes = (
+        "response:body_hash",
+        "response:status_code",
+        "response:content_type",
+        "request:url",
+        "request:method:",
+        "candidate:param:",
+        "candidate:endpoint_type:",
+        "reason:",
+    )
+    for prefix in priority_prefixes:
+        for source in sources:
+            if source == prefix or source.startswith(prefix):
+                return source
+    return ""
 
 
 def build_finding_artifacts(
@@ -93,6 +173,21 @@ def build_finding_artifacts(
         reasons = candidate.get("reasons") if isinstance(candidate.get("reasons"), list) else []
         confidence = _normalized_confidence(candidate.get("confidence"))
         priority = _normalized_priority(candidate.get("priority"))
+        evidence_sources = _build_evidence_sources(
+            endpoint_type=endpoint_type,
+            param=param,
+            reasons=reasons,
+            request_method=request_method,
+            request_url=request_url,
+            baseline_status_code=baseline_status_code,
+            baseline_content_type=baseline_content_type,
+            baseline_body_hash=baseline_body_hash,
+        )
+        has_request_context = bool(request_method or request_url)
+        has_response_context = bool(
+            baseline_status_code > 0 or baseline_content_type or baseline_body_hash
+        )
+        primary_evidence = _primary_evidence_from_sources(evidence_sources)
 
         dedupe_key = (candidate_type, candidate_url, param, endpoint_type, baseline_body_hash)
         if dedupe_key in seen:
@@ -117,6 +212,10 @@ def build_finding_artifacts(
                 "confirmed": False,
                 "confirmation_method": "",
                 "mutated_body_hash": "",
+                "evidence_sources": evidence_sources,
+                "primary_evidence": primary_evidence,
+                "has_request_context": has_request_context,
+                "has_response_context": has_response_context,
                 "_stable_index": index,
             }
         )
@@ -146,12 +245,30 @@ def build_finding_artifacts(
         if any(item.get("confidence") == confidence for item in payload["all"]):
             max_confidence = confidence
             break
+    max_priority = ""
+    for priority in ("high", "medium", "low"):
+        if any(item.get("priority") == priority for item in payload["all"]):
+            max_priority = priority
+            break
+    priorities_present: list[str] = []
+    for priority in ("low", "medium", "high"):
+        if any(item.get("priority") == priority for item in payload["all"]):
+            priorities_present.append(priority)
+    types_present: list[str] = [
+        artifact_type for artifact_type in _ARTIFACT_TYPES if summary_by_type.get(artifact_type, 0) > 0
+    ]
 
     payload["summary"] = {
         "total": len(payload["all"]),
         "by_type": summary_by_type,
         "max_confidence": max_confidence,
+        "max_priority": max_priority,
         "with_baseline_hash": sum(1 for item in payload["all"] if str(item.get("baseline_body_hash") or "").strip()),
+        "with_request_context": sum(1 for item in payload["all"] if bool(item.get("has_request_context"))),
+        "with_response_context": sum(1 for item in payload["all"] if bool(item.get("has_response_context"))),
+        "with_primary_evidence": sum(1 for item in payload["all"] if str(item.get("primary_evidence") or "").strip()),
         "confirmed_total": sum(1 for item in payload["all"] if item.get("confirmed") is True),
+        "types_present": types_present,
+        "priorities_present": priorities_present,
     }
     return payload
