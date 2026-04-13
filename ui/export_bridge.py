@@ -47,6 +47,14 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "replay_groups_max_group_size",
     "replay_groups_with_baseline_hash",
     "replay_groups_types_present",
+    "replay_manifest_total",
+    "replay_manifest_ready_total",
+    "replay_manifest_with_headers",
+    "replay_manifest_with_cookie_path",
+    "replay_manifest_with_timeout",
+    "replay_manifest_with_baseline_hash",
+    "replay_manifest_unique_targets",
+    "replay_manifest_types_present",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -62,6 +70,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "request_recipe",
     "response_snapshot",
     "replay_groups",
+    "replay_manifest",
 }
 
 
@@ -150,6 +159,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record.update(derive_candidate_summary_fields(result))
     record.update(derive_finding_artifact_summary_fields(result))
     record.update(derive_replay_group_summary_fields(result))
+    record.update(derive_replay_manifest_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
@@ -326,6 +336,40 @@ def derive_replay_group_summary_fields(result: Any) -> dict[str, Any]:
         "replay_groups_max_group_size": _to_int_count(summary.get("max_group_size"), 0),
         "replay_groups_with_baseline_hash": _to_int_count(summary.get("with_baseline_hash"), 0),
         "replay_groups_types_present": _join_string_list(summary.get("types_present")),
+    }
+
+
+def derive_replay_manifest_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "replay_manifest_total": 0,
+        "replay_manifest_ready_total": 0,
+        "replay_manifest_with_headers": 0,
+        "replay_manifest_with_cookie_path": 0,
+        "replay_manifest_with_timeout": 0,
+        "replay_manifest_with_baseline_hash": 0,
+        "replay_manifest_unique_targets": 0,
+        "replay_manifest_types_present": "",
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    replay_manifest = result.get("replay_manifest")
+    if not isinstance(replay_manifest, Mapping):
+        return defaults
+
+    summary = replay_manifest.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+
+    return {
+        "replay_manifest_total": _to_int_count(summary.get("total"), 0),
+        "replay_manifest_ready_total": _to_int_count(summary.get("ready_total"), 0),
+        "replay_manifest_with_headers": _to_int_count(summary.get("with_headers"), 0),
+        "replay_manifest_with_cookie_path": _to_int_count(summary.get("with_cookie_path"), 0),
+        "replay_manifest_with_timeout": _to_int_count(summary.get("with_timeout"), 0),
+        "replay_manifest_with_baseline_hash": _to_int_count(summary.get("with_baseline_hash"), 0),
+        "replay_manifest_unique_targets": _to_int_count(summary.get("unique_targets"), 0),
+        "replay_manifest_types_present": _join_string_list(summary.get("types_present")),
     }
 
 
@@ -607,7 +651,7 @@ def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Фильтрует внутренние/сырые поля для CSV/XLSX экспорта.
     """
-    hidden = {"_raw_result", "candidates", "candidates_summary", "replay_groups"}
+    hidden = {"_raw_result", "candidates", "candidates_summary", "replay_groups", "replay_manifest"}
     out: list[dict[str, Any]] = []
     for it in items:
         out.append({k: v for k, v in it.items() if k not in hidden})
@@ -640,6 +684,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
         row.update(derive_candidate_summary_fields(rec))
         row.update(derive_finding_artifact_summary_fields(rec))
         row.update(derive_replay_group_summary_fields(rec))
+        row.update(derive_replay_manifest_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 
