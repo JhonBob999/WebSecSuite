@@ -236,6 +236,34 @@ def _empty_contract() -> dict[str, Any]:
     }
 
 
+def _empty_validator_queue_contract() -> dict[str, Any]:
+    return {
+        "all": [],
+        "summary": {
+            "total": 0,
+            "dispatch_ready_total": 0,
+            "jobs_total": 0,
+            "jobs_ready": 0,
+            "jobs_blocked": 0,
+            "jobs_unavailable": 0,
+            "unique_targets": 0,
+            "methods_present": [],
+            "target_sources_present": [],
+            "validator_job_types_present": [],
+            "compare_modes_present": [],
+            "mutation_strategies_present": [],
+            "execution_lanes_present": [],
+            "max_queue_size": 0,
+            "min_queue_size": 0,
+            "avg_queue_size": 0.0,
+            "ready_queue_ratio": 0.0,
+            "validator_job_ready_ratio": 0.0,
+            "primary_ready_queues": 0,
+            "unique_validator_job_ids": 0,
+        },
+    }
+
+
 def _clean_str(value: Any) -> str:
     if value is None:
         return ""
@@ -394,6 +422,226 @@ def _build_validator_job(
         "execution_lane": clean_execution_lane,
         "mutation_strategy": clean_mutation_strategy,
     }
+
+
+def _build_validator_queue_key(
+    *,
+    target_url: str,
+    method: str,
+    target_source: str,
+    safe_mode: bool,
+) -> str:
+    return "|".join(
+        [
+            _safe_sort_value(target_url),
+            _safe_sort_value(method),
+            _safe_sort_value(target_source),
+            "true" if bool(safe_mode) else "false",
+        ]
+    )
+
+
+def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    payload = _empty_validator_queue_contract()
+    if not isinstance(validation_plan, Mapping):
+        return payload
+
+    plan_items = validation_plan.get("all")
+    if not isinstance(plan_items, list):
+        return payload
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for plan_item in plan_items:
+        if not isinstance(plan_item, Mapping):
+            continue
+        method = _clean_str(plan_item.get("method"))
+        safe_mode = bool(plan_item.get("safe_mode"))
+        for check_item in (plan_item.get("check_plan") or []):
+            if not isinstance(check_item, Mapping):
+                continue
+            validator_job = check_item.get("validator_job") or {}
+            if not isinstance(validator_job, Mapping):
+                continue
+            target_url = _clean_str(validator_job.get("target_url"))
+            target_source = _clean_str(validator_job.get("target_source"))
+            queue_key = _build_validator_queue_key(
+                target_url=target_url,
+                method=method,
+                target_source=target_source,
+                safe_mode=safe_mode,
+            )
+            group = grouped.setdefault(
+                queue_key,
+                {
+                    "queue_key": queue_key,
+                    "target_url": target_url,
+                    "method": method,
+                    "target_source": target_source,
+                    "safe_mode": bool(safe_mode),
+                    "validator_job_ids": [],
+                    "validator_job_types": [],
+                    "check_types": [],
+                    "compare_modes": [],
+                    "mutation_strategies": [],
+                    "execution_lanes": [],
+                    "jobs_total": 0,
+                    "jobs_ready": 0,
+                    "jobs_blocked": 0,
+                    "jobs_unavailable": 0,
+                    "primary_job_id": "",
+                    "dispatch_ready": False,
+                    "highest_job_priority": 0,
+                    "queue_job_ids_unique": 0,
+                    "_all_job_ids": set(),
+                    "_ready_job_ids": set(),
+                    "_job_types": set(),
+                    "_check_types": set(),
+                    "_compare_modes": set(),
+                    "_mutation_strategies": set(),
+                    "_execution_lanes": set(),
+                    "_priorities": [],
+                },
+            )
+            job_id = _clean_str(validator_job.get("job_id"))
+            job_type = _clean_str(validator_job.get("job_type"))
+            check_type = _clean_str(validator_job.get("check_type"))
+            compare_mode = _clean_str(validator_job.get("compare_mode"))
+            mutation_strategy = _clean_str(validator_job.get("mutation_strategy"))
+            execution_lane = _clean_str(validator_job.get("execution_lane"))
+            job_ready = bool(validator_job.get("job_ready"))
+            execution_priority = _safe_int(check_item.get("execution_priority"), 0)
+
+            group["jobs_total"] = int(group["jobs_total"]) + 1
+            if job_ready:
+                group["jobs_ready"] = int(group["jobs_ready"]) + 1
+            if job_type == _VALIDATOR_JOB_BLOCKED:
+                group["jobs_blocked"] = int(group["jobs_blocked"]) + 1
+            elif job_type == _VALIDATOR_JOB_UNAVAILABLE:
+                group["jobs_unavailable"] = int(group["jobs_unavailable"]) + 1
+
+            if job_id:
+                group["_all_job_ids"].add(job_id)
+                if job_ready:
+                    group["_ready_job_ids"].add(job_id)
+            if job_type:
+                group["_job_types"].add(job_type)
+            if check_type:
+                group["_check_types"].add(check_type)
+            if compare_mode:
+                group["_compare_modes"].add(compare_mode)
+            if mutation_strategy:
+                group["_mutation_strategies"].add(mutation_strategy)
+            if execution_lane:
+                group["_execution_lanes"].add(execution_lane)
+            if execution_priority > 0:
+                group["_priorities"].append(execution_priority)
+
+    queue_items: list[dict[str, Any]] = []
+    for queue_key in sorted(grouped.keys()):
+        group = grouped[queue_key]
+        all_job_ids = sorted(group.pop("_all_job_ids"))
+        ready_job_ids = sorted(group.pop("_ready_job_ids"))
+        job_types = sorted(group.pop("_job_types"))
+        check_types = sorted(group.pop("_check_types"))
+        compare_modes = sorted(group.pop("_compare_modes"))
+        mutation_strategies = sorted(group.pop("_mutation_strategies"))
+        execution_lanes = sorted(group.pop("_execution_lanes"))
+        priorities = group.pop("_priorities")
+        primary_job_id = ""
+        if ready_job_ids:
+            primary_job_id = ready_job_ids[0]
+        elif all_job_ids:
+            primary_job_id = all_job_ids[0]
+
+        group["validator_job_ids"] = all_job_ids
+        group["validator_job_types"] = job_types
+        group["check_types"] = check_types
+        group["compare_modes"] = compare_modes
+        group["mutation_strategies"] = mutation_strategies
+        group["execution_lanes"] = execution_lanes
+        group["primary_job_id"] = primary_job_id
+        group["dispatch_ready"] = bool(group.get("jobs_ready", 0) > 0)
+        group["highest_job_priority"] = min(priorities) if priorities else 0
+        group["queue_job_ids_unique"] = len(all_job_ids)
+        queue_items.append(group)
+
+    all_job_ids_global = {
+        _clean_str(job_id)
+        for item in queue_items
+        for job_id in (item.get("validator_job_ids") or [])
+        if _clean_str(job_id)
+    }
+    methods_present = sorted({_clean_str(item.get("method")) for item in queue_items if _clean_str(item.get("method"))})
+    target_sources_present = sorted(
+        {_clean_str(item.get("target_source")) for item in queue_items if _clean_str(item.get("target_source"))}
+    )
+    validator_job_types_present = sorted(
+        {
+            _clean_str(job_type)
+            for item in queue_items
+            for job_type in (item.get("validator_job_types") or [])
+            if _clean_str(job_type)
+        }
+    )
+    compare_modes_present = sorted(
+        {
+            _clean_str(compare_mode)
+            for item in queue_items
+            for compare_mode in (item.get("compare_modes") or [])
+            if _clean_str(compare_mode)
+        }
+    )
+    mutation_strategies_present = sorted(
+        {
+            _clean_str(strategy)
+            for item in queue_items
+            for strategy in (item.get("mutation_strategies") or [])
+            if _clean_str(strategy)
+        }
+    )
+    execution_lanes_present = sorted(
+        {
+            _clean_str(lane)
+            for item in queue_items
+            for lane in (item.get("execution_lanes") or [])
+            if _clean_str(lane)
+        }
+    )
+    queue_sizes = [_safe_int(item.get("jobs_total"), 0) for item in queue_items]
+    total = len(queue_items)
+    dispatch_ready_total = sum(1 for item in queue_items if bool(item.get("dispatch_ready")))
+    jobs_total = sum(_safe_int(item.get("jobs_total"), 0) for item in queue_items)
+    jobs_ready = sum(_safe_int(item.get("jobs_ready"), 0) for item in queue_items)
+    jobs_blocked = sum(_safe_int(item.get("jobs_blocked"), 0) for item in queue_items)
+    jobs_unavailable = sum(_safe_int(item.get("jobs_unavailable"), 0) for item in queue_items)
+    unique_targets = len({_clean_str(item.get("target_url")) for item in queue_items if _clean_str(item.get("target_url"))})
+
+    payload["all"] = queue_items
+    payload["summary"] = {
+        "total": total,
+        "dispatch_ready_total": dispatch_ready_total,
+        "jobs_total": jobs_total,
+        "jobs_ready": jobs_ready,
+        "jobs_blocked": jobs_blocked,
+        "jobs_unavailable": jobs_unavailable,
+        "unique_targets": unique_targets,
+        "methods_present": methods_present,
+        "target_sources_present": target_sources_present,
+        "validator_job_types_present": validator_job_types_present,
+        "compare_modes_present": compare_modes_present,
+        "mutation_strategies_present": mutation_strategies_present,
+        "execution_lanes_present": execution_lanes_present,
+        "max_queue_size": max(queue_sizes) if queue_sizes else 0,
+        "min_queue_size": min(queue_sizes) if queue_sizes else 0,
+        "avg_queue_size": _round_metric((jobs_total / total) if total else 0.0),
+        "ready_queue_ratio": _round_metric((dispatch_ready_total / total) if total else 0.0),
+        "validator_job_ready_ratio": _round_metric((jobs_ready / jobs_total) if jobs_total else 0.0),
+        "primary_ready_queues": sum(
+            1 for item in queue_items if bool(item.get("dispatch_ready")) and bool(_clean_str(item.get("primary_job_id")))
+        ),
+        "unique_validator_job_ids": len(all_job_ids_global),
+    }
+    return payload
 
 
 def _build_artifact_index(finding_artifacts: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:

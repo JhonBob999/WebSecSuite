@@ -197,6 +197,26 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_plans_primary_safe_validation",
     "validation_plan_plans_primary_blocked_validation",
     "validation_plan_plans_primary_unavailable_validation",
+    "validator_queue_total",
+    "validator_queue_dispatch_ready_total",
+    "validator_queue_jobs_total",
+    "validator_queue_jobs_ready",
+    "validator_queue_jobs_blocked",
+    "validator_queue_jobs_unavailable",
+    "validator_queue_unique_targets",
+    "validator_queue_methods_present",
+    "validator_queue_target_sources_present",
+    "validator_queue_validator_job_types_present",
+    "validator_queue_compare_modes_present",
+    "validator_queue_mutation_strategies_present",
+    "validator_queue_execution_lanes_present",
+    "validator_queue_max_queue_size",
+    "validator_queue_min_queue_size",
+    "validator_queue_avg_queue_size",
+    "validator_queue_ready_queue_ratio",
+    "validator_queue_validator_job_ready_ratio",
+    "validator_queue_primary_ready_queues",
+    "validator_queue_unique_validator_job_ids",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -214,6 +234,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "replay_groups",
     "replay_manifest",
     "validation_plan",
+    "validator_queue",
 }
 
 
@@ -304,6 +325,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record.update(derive_replay_group_summary_fields(result))
     record.update(derive_replay_manifest_summary_fields(result))
     record.update(derive_validation_plan_summary_fields(result))
+    record.update(derive_validator_queue_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
@@ -895,6 +917,61 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
     }
 
 
+def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "validator_queue_total": 0,
+        "validator_queue_dispatch_ready_total": 0,
+        "validator_queue_jobs_total": 0,
+        "validator_queue_jobs_ready": 0,
+        "validator_queue_jobs_blocked": 0,
+        "validator_queue_jobs_unavailable": 0,
+        "validator_queue_unique_targets": 0,
+        "validator_queue_methods_present": "",
+        "validator_queue_target_sources_present": "",
+        "validator_queue_validator_job_types_present": "",
+        "validator_queue_compare_modes_present": "",
+        "validator_queue_mutation_strategies_present": "",
+        "validator_queue_execution_lanes_present": "",
+        "validator_queue_max_queue_size": 0,
+        "validator_queue_min_queue_size": 0,
+        "validator_queue_avg_queue_size": 0.0,
+        "validator_queue_ready_queue_ratio": 0.0,
+        "validator_queue_validator_job_ready_ratio": 0.0,
+        "validator_queue_primary_ready_queues": 0,
+        "validator_queue_unique_validator_job_ids": 0,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+    validator_queue = result.get("validator_queue")
+    if not isinstance(validator_queue, Mapping):
+        return defaults
+    summary = validator_queue.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+    return {
+        "validator_queue_total": _to_int_count(summary.get("total"), 0),
+        "validator_queue_dispatch_ready_total": _to_int_count(summary.get("dispatch_ready_total"), 0),
+        "validator_queue_jobs_total": _to_int_count(summary.get("jobs_total"), 0),
+        "validator_queue_jobs_ready": _to_int_count(summary.get("jobs_ready"), 0),
+        "validator_queue_jobs_blocked": _to_int_count(summary.get("jobs_blocked"), 0),
+        "validator_queue_jobs_unavailable": _to_int_count(summary.get("jobs_unavailable"), 0),
+        "validator_queue_unique_targets": _to_int_count(summary.get("unique_targets"), 0),
+        "validator_queue_methods_present": _join_string_list(summary.get("methods_present")),
+        "validator_queue_target_sources_present": _join_string_list(summary.get("target_sources_present")),
+        "validator_queue_validator_job_types_present": _join_string_list(summary.get("validator_job_types_present")),
+        "validator_queue_compare_modes_present": _join_string_list(summary.get("compare_modes_present")),
+        "validator_queue_mutation_strategies_present": _join_string_list(summary.get("mutation_strategies_present")),
+        "validator_queue_execution_lanes_present": _join_string_list(summary.get("execution_lanes_present")),
+        "validator_queue_max_queue_size": _to_int_count(summary.get("max_queue_size"), 0),
+        "validator_queue_min_queue_size": _to_int_count(summary.get("min_queue_size"), 0),
+        "validator_queue_avg_queue_size": float(summary.get("avg_queue_size") or 0.0),
+        "validator_queue_ready_queue_ratio": float(summary.get("ready_queue_ratio") or 0.0),
+        "validator_queue_validator_job_ready_ratio": float(summary.get("validator_job_ready_ratio") or 0.0),
+        "validator_queue_primary_ready_queues": _to_int_count(summary.get("primary_ready_queues"), 0),
+        "validator_queue_unique_validator_job_ids": _to_int_count(summary.get("unique_validator_job_ids"), 0),
+    }
+
+
 def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") -> str:
     """
     Единая точка экспорта. Поддержка форматов: csv/json/xlsx
@@ -1173,7 +1250,15 @@ def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Фильтрует внутренние/сырые поля для CSV/XLSX экспорта.
     """
-    hidden = {"_raw_result", "candidates", "candidates_summary", "replay_groups", "replay_manifest", "validation_plan"}
+    hidden = {
+        "_raw_result",
+        "candidates",
+        "candidates_summary",
+        "replay_groups",
+        "replay_manifest",
+        "validation_plan",
+        "validator_queue",
+    }
     out: list[dict[str, Any]] = []
     for it in items:
         out.append({k: v for k, v in it.items() if k not in hidden})
@@ -1208,6 +1293,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
         row.update(derive_replay_group_summary_fields(rec))
         row.update(derive_replay_manifest_summary_fields(rec))
         row.update(derive_validation_plan_summary_fields(rec))
+        row.update(derive_validator_queue_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 

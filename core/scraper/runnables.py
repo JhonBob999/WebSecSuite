@@ -20,7 +20,7 @@ from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
-from core.discovery.validation_plan import build_validation_plan
+from core.discovery.validation_plan import build_validation_plan, build_validator_queue
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -499,6 +499,7 @@ class ScraperRunnable(QRunnable):
                 final_url=result.get("final_url"),
                 discovery=result.get("discovery"),
             )
+            result["validator_queue"] = build_validator_queue(result.get("validation_plan"))
 
             self.task.result = result
 
@@ -575,6 +576,7 @@ class ScraperRunnable(QRunnable):
                 final_url=self.task.result.get("final_url"),
                 discovery=self.task.result.get("discovery"),
             )
+            self.task.result["validator_queue"] = build_validator_queue(self.task.result.get("validation_plan"))
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
@@ -624,6 +626,7 @@ class ScraperRunnable(QRunnable):
                 final_url=self.task.result.get("final_url"),
                 discovery=self.task.result.get("discovery"),
             )
+            self.task.result["validator_queue"] = build_validator_queue(self.task.result.get("validation_plan"))
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         finally:
