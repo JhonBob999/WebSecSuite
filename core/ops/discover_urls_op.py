@@ -24,6 +24,7 @@ def _empty_finding_artifacts() -> dict:
         response_snapshot=None,
         status_code=None,
         final_url="",
+        discovery=None,
     )
 
 
@@ -33,6 +34,7 @@ def _empty_replay_groups() -> dict:
         request_recipe=None,
         response_snapshot=None,
         final_url="",
+        discovery=None,
     )
 
 
@@ -43,6 +45,7 @@ def _empty_replay_manifest() -> dict:
         request_recipe=None,
         response_snapshot=None,
         final_url="",
+        discovery=None,
     )
 
 
@@ -53,6 +56,7 @@ def _empty_validation_plan() -> dict:
         candidates=None,
         request_recipe=None,
         final_url="",
+        discovery=None,
     )
 
 
@@ -221,12 +225,14 @@ def run(task_ctx: dict) -> dict:
         response_snapshot=result.get("response_snapshot"),
         status_code=result.get("status_code"),
         final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
     )
     result["replay_groups"] = build_replay_groups(
         finding_artifacts=result.get("finding_artifacts"),
         request_recipe=result.get("request_recipe"),
         response_snapshot=result.get("response_snapshot"),
         final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
     )
     result["replay_manifest"] = build_replay_manifest(
         replay_groups=result.get("replay_groups"),
@@ -234,6 +240,7 @@ def run(task_ctx: dict) -> dict:
         request_recipe=result.get("request_recipe"),
         response_snapshot=result.get("response_snapshot"),
         final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
     )
     result["validation_plan"] = build_validation_plan(
         replay_manifest=result.get("replay_manifest"),
@@ -241,5 +248,6 @@ def run(task_ctx: dict) -> dict:
         candidates=result.get("candidates"),
         request_recipe=result.get("request_recipe"),
         final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
     )
     return result

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Mapping
 
+from core.discovery.target_binding import resolve_precise_target
+
 _ARTIFACT_TYPES = (
     "xss_candidate",
     "sqli_candidate",
@@ -79,14 +81,6 @@ def _to_reason_sources(reasons: Any) -> list[str]:
 
 def _safe_join(parts: list[Any], separator: str = "|") -> str:
     return separator.join(_to_clean_string(part) for part in parts)
-
-
-def _build_replay_target_url(request_url: str, artifact_url: str) -> str:
-    if request_url:
-        return request_url
-    if artifact_url:
-        return artifact_url
-    return ""
 
 
 def _build_replay_key(
@@ -198,6 +192,7 @@ def build_finding_artifacts(
     response_snapshot: Mapping[str, Any] | None = None,
     status_code: Any = None,
     final_url: Any = "",
+    discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = _empty_contract()
     all_candidates = candidates.get("all") if isinstance(candidates, Mapping) else None
@@ -211,6 +206,7 @@ def build_finding_artifacts(
     request_method = str(recipe.get("method") or "").strip()
     baseline_timestamp = str(recipe.get("timestamp") or "").strip()
     fallback_final_url = str(final_url or "").strip()
+    discovery_base_url = str(discovery.get("base_url") or "").strip() if isinstance(discovery, Mapping) else ""
     baseline_body_hash = str(snapshot.get("body_hash") or "").strip()
     baseline_content_type = str(snapshot.get("content_type") or "").strip()
     baseline_status_code = _to_status_code(snapshot.get("status_code"))
@@ -228,7 +224,14 @@ def build_finding_artifacts(
         if candidate_type not in _ARTIFACT_TYPES:
             continue
 
-        candidate_url = str(candidate.get("url") or "").strip() or request_url or fallback_final_url
+        candidate_original_url = str(candidate.get("url") or "").strip()
+        candidate_origin_url = (
+            str(candidate.get("candidate_origin_url") or "").strip()
+            or str(candidate.get("candidate_origin") or "").strip()
+            or str(candidate.get("origin_url") or "").strip()
+            or str(candidate.get("candidate-origin") or "").strip()
+        )
+        candidate_url = candidate_original_url or request_url or fallback_final_url
         param = candidate.get("param", None)
         endpoint_type = str(candidate.get("endpoint_type") or "").strip() or "unknown"
         reasons = candidate.get("reasons") if isinstance(candidate.get("reasons"), list) else []
@@ -249,7 +252,12 @@ def build_finding_artifacts(
             baseline_status_code > 0 or baseline_content_type or baseline_body_hash
         )
         primary_evidence = _primary_evidence_from_sources(evidence_sources)
-        replay_target_url = _build_replay_target_url(request_url, candidate_url)
+        replay_target_url, replay_target_source = resolve_precise_target(
+            candidate_url=candidate_original_url or candidate_origin_url,
+            final_url=fallback_final_url,
+            request_url=request_url,
+            discovery_base_url=discovery_base_url,
+        )
         replay_key = _build_replay_key(
             request_method=request_method,
             replay_target_url=replay_target_url,
@@ -298,6 +306,7 @@ def build_finding_artifacts(
                 "artifact_id": artifact_id,
                 "replay_key": replay_key,
                 "replay_target_url": replay_target_url,
+                "replay_target_source": replay_target_source,
                 "has_replay_recipe": has_replay_recipe,
                 "_stable_index": index,
             }

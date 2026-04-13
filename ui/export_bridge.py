@@ -78,6 +78,13 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_ready_candidate_coverage_ratio",
     "validation_plan_evidence_levels_present",
     "validation_plan_methods_present",
+    "validation_plan_unique_targets",
+    "validation_plan_target_sources_present",
+    "validation_plan_targets_from_candidate_url",
+    "validation_plan_targets_from_final_url",
+    "validation_plan_targets_from_request_url",
+    "validation_plan_targets_from_discovery_base_url",
+    "validation_plan_targets_from_unknown",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -423,6 +430,13 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_ready_candidate_coverage_ratio": 0.0,
         "validation_plan_evidence_levels_present": "",
         "validation_plan_methods_present": "",
+        "validation_plan_unique_targets": 0,
+        "validation_plan_target_sources_present": "",
+        "validation_plan_targets_from_candidate_url": 0,
+        "validation_plan_targets_from_final_url": 0,
+        "validation_plan_targets_from_request_url": 0,
+        "validation_plan_targets_from_discovery_base_url": 0,
+        "validation_plan_targets_from_unknown": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -465,6 +479,13 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_ready_candidate_coverage_ratio": float(summary.get("ready_candidate_coverage_ratio") or 0.0),
         "validation_plan_evidence_levels_present": _join_string_list(summary.get("evidence_levels_present")),
         "validation_plan_methods_present": _join_string_list(summary.get("methods_present")),
+        "validation_plan_unique_targets": _to_int_count(summary.get("unique_targets"), 0),
+        "validation_plan_target_sources_present": _join_string_list(summary.get("target_sources_present")),
+        "validation_plan_targets_from_candidate_url": _to_int_count(summary.get("targets_from_candidate_url"), 0),
+        "validation_plan_targets_from_final_url": _to_int_count(summary.get("targets_from_final_url"), 0),
+        "validation_plan_targets_from_request_url": _to_int_count(summary.get("targets_from_request_url"), 0),
+        "validation_plan_targets_from_discovery_base_url": _to_int_count(summary.get("targets_from_discovery_base_url"), 0),
+        "validation_plan_targets_from_unknown": _to_int_count(summary.get("targets_from_unknown"), 0),
     }
 
 

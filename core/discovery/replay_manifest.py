@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from core.discovery.target_binding import normalize_target_source, resolve_precise_target
+
 
 def _empty_contract() -> dict[str, Any]:
     return {
@@ -64,6 +66,7 @@ def build_replay_manifest(
     request_recipe: Mapping[str, Any] | None = None,
     response_snapshot: Mapping[str, Any] | None = None,
     final_url: Any = "",
+    discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del finding_artifacts
 
@@ -75,6 +78,7 @@ def build_replay_manifest(
     recipe = request_recipe if isinstance(request_recipe, Mapping) else {}
     snapshot = response_snapshot if isinstance(response_snapshot, Mapping) else {}
     fallback_final_url = _clean_str(final_url)
+    discovery_base_url = _clean_str(discovery.get("base_url")) if isinstance(discovery, Mapping) else ""
 
     recipe_url = _clean_str(recipe.get("url"))
     recipe_method = _clean_str(recipe.get("method"))
@@ -93,12 +97,15 @@ def build_replay_manifest(
             continue
 
         replay_key = _clean_str(raw_group.get("replay_key"))
-        target_url = (
-            _clean_str(raw_group.get("target_url"))
-            or recipe_url
-            or fallback_final_url
-            or ""
+        target_url, target_source = resolve_precise_target(
+            candidate_url=_clean_str(raw_group.get("target_url")),
+            final_url=fallback_final_url,
+            request_url=recipe_url,
+            discovery_base_url=discovery_base_url,
         )
+        group_target_source = normalize_target_source(raw_group.get("target_source"))
+        if target_source == "candidate_url" and group_target_source != "unknown":
+            target_source = group_target_source
         method = _clean_str(raw_group.get("request_method")) or recipe_method or ""
 
         artifact_ids = _stable_dedup_str_list(raw_group.get("artifact_ids"))
@@ -109,6 +116,7 @@ def build_replay_manifest(
             {
                 "replay_key": replay_key,
                 "target_url": target_url,
+                "target_source": target_source,
                 "method": method,
                 "headers_present": headers_present,
                 "cookie_path_present": cookie_path_present,

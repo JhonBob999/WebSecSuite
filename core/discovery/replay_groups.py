@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from core.discovery.target_binding import is_absolute_http_url, normalize_target_source, resolve_precise_target
+
 _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
 _PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
 
@@ -37,13 +39,17 @@ def _stable_dedup(values: list[str]) -> list[str]:
     return out
 
 
-def _artifact_target_url(artifact: Mapping[str, Any], fallback_final_url: str) -> str:
-    return (
-        _clean_str(artifact.get("replay_target_url"))
-        or _clean_str(artifact.get("request_url"))
-        or _clean_str(artifact.get("url"))
-        or fallback_final_url
-        or ""
+def _artifact_target(artifact: Mapping[str, Any], fallback_final_url: str, discovery_base_url: str) -> tuple[str, str]:
+    replay_target_url = _clean_str(artifact.get("replay_target_url"))
+    replay_target_source = normalize_target_source(artifact.get("replay_target_source"))
+    if replay_target_url and is_absolute_http_url(replay_target_url):
+        return replay_target_url, replay_target_source
+
+    return resolve_precise_target(
+        candidate_url=_clean_str(artifact.get("url")),
+        final_url=fallback_final_url,
+        request_url=_clean_str(artifact.get("request_url")),
+        discovery_base_url=discovery_base_url,
     )
 
 
@@ -51,12 +57,12 @@ def _artifact_method(artifact: Mapping[str, Any]) -> str:
     return _clean_str(artifact.get("request_method"))
 
 
-def _artifact_group_key(artifact: Mapping[str, Any], fallback_final_url: str) -> str:
+def _artifact_group_key(artifact: Mapping[str, Any], fallback_final_url: str, discovery_base_url: str) -> str:
     replay_key = _clean_str(artifact.get("replay_key"))
     if replay_key:
         return replay_key
     request_method = _artifact_method(artifact)
-    target_url = _artifact_target_url(artifact, fallback_final_url)
+    target_url, _ = _artifact_target(artifact, fallback_final_url, discovery_base_url)
     return f"__no_replay__|{request_method}|{target_url}"
 
 
@@ -88,6 +94,7 @@ def build_replay_groups(
     request_recipe: Mapping[str, Any] | None = None,
     response_snapshot: Mapping[str, Any] | None = None,
     final_url: Any = "",
+    discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = _empty_contract()
 
@@ -99,6 +106,7 @@ def build_replay_groups(
         return payload
 
     fallback_final_url = _clean_str(final_url)
+    discovery_base_url = _clean_str(discovery.get("base_url")) if isinstance(discovery, Mapping) else ""
 
     groups_map: dict[str, list[Mapping[str, Any]]] = {}
     for index, raw in enumerate(artifacts_all):
@@ -106,16 +114,17 @@ def build_replay_groups(
             continue
         artifact = dict(raw)
         artifact["_stable_index"] = index
-        group_key = _artifact_group_key(artifact, fallback_final_url)
+        group_key = _artifact_group_key(artifact, fallback_final_url, discovery_base_url)
         groups_map.setdefault(group_key, []).append(artifact)
 
     groups: list[dict[str, Any]] = []
     for replay_key, members in groups_map.items():
         target_url = ""
+        target_source = "unknown"
         request_method = ""
         for item in members:
             if not target_url:
-                target_url = _artifact_target_url(item, fallback_final_url)
+                target_url, target_source = _artifact_target(item, fallback_final_url, discovery_base_url)
             if not request_method:
                 request_method = _artifact_method(item)
 
@@ -143,6 +152,7 @@ def build_replay_groups(
             {
                 "replay_key": replay_key,
                 "target_url": target_url,
+                "target_source": target_source,
                 "request_method": request_method,
                 "artifacts_total": len(members),
                 "artifact_ids": artifact_ids,

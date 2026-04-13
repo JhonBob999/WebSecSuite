@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from core.discovery.target_binding import normalize_target_source, resolve_precise_target
+
 _CHECK_REFLECTION_DIFF = "reflection_diff"
 _CHECK_ERROR_PATTERN_DIFF = "error_pattern_diff"
 _CHECK_STATUS_DIFF = "status_diff"
@@ -40,6 +42,13 @@ def _empty_contract() -> dict[str, Any]:
             "ready_candidate_coverage_ratio": 0.0,
             "evidence_levels_present": [],
             "methods_present": [],
+            "unique_targets": 0,
+            "target_sources_present": [],
+            "targets_from_candidate_url": 0,
+            "targets_from_final_url": 0,
+            "targets_from_request_url": 0,
+            "targets_from_discovery_base_url": 0,
+            "targets_from_unknown": 0,
         },
     }
 
@@ -130,6 +139,7 @@ def build_validation_plan(
     candidates: Mapping[str, Any] | None = None,
     request_recipe: Mapping[str, Any] | None = None,
     final_url: Any = "",
+    discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del candidates
 
@@ -142,6 +152,7 @@ def build_validation_plan(
     recipe_url = _clean_str(recipe.get("url"))
     recipe_method = _clean_str(recipe.get("method"))
     fallback_final_url = _clean_str(final_url)
+    discovery_base_url = _clean_str(discovery.get("base_url")) if isinstance(discovery, Mapping) else ""
     artifacts_by_id = _build_artifact_index(finding_artifacts)
 
     plan_items: list[dict[str, Any]] = []
@@ -150,7 +161,15 @@ def build_validation_plan(
             continue
 
         replay_key = _clean_str(manifest_item.get("replay_key"))
-        target_url = _clean_str(manifest_item.get("target_url")) or recipe_url or fallback_final_url or ""
+        target_url, target_source = resolve_precise_target(
+            candidate_url=_clean_str(manifest_item.get("target_url")),
+            final_url=fallback_final_url,
+            request_url=recipe_url,
+            discovery_base_url=discovery_base_url,
+        )
+        manifest_target_source = normalize_target_source(manifest_item.get("target_source"))
+        if target_source == "candidate_url" and manifest_target_source != "unknown":
+            target_source = manifest_target_source
         method = _clean_str(manifest_item.get("method")) or recipe_method or ""
         artifact_ids = _stable_dedup_str_list(manifest_item.get("artifact_ids"))
         artifact_types = _stable_dedup_str_list(manifest_item.get("artifact_types"))
@@ -177,6 +196,7 @@ def build_validation_plan(
             {
                 "replay_key": replay_key,
                 "target_url": target_url,
+                "target_source": target_source,
                 "method": method,
                 "artifact_ids": artifact_ids,
                 "artifact_types": artifact_types,
@@ -251,6 +271,25 @@ def build_validation_plan(
         }
     )
 
+    unique_targets = {
+        _clean_str(item.get("target_url"))
+        for item in plan_items
+        if _clean_str(item.get("target_url"))
+    }
+    target_source_counts = {
+        "candidate_url": 0,
+        "final_url": 0,
+        "request_url": 0,
+        "discovery_base_url": 0,
+        "unknown": 0,
+    }
+    for item in plan_items:
+        source = normalize_target_source(item.get("target_source"))
+        target_source_counts[source] = int(target_source_counts.get(source, 0)) + 1
+    target_sources_present = sorted(
+        source for source, count in target_source_counts.items() if int(count or 0) > 0
+    )
+
     payload["summary"] = {
         "total": total_plans,
         "ready_total": sum(1 for item in plan_items if bool(item.get("ready_for_validation"))),
@@ -287,5 +326,12 @@ def build_validation_plan(
         ),
         "evidence_levels_present": evidence_levels_present,
         "methods_present": methods_present,
+        "unique_targets": len(unique_targets),
+        "target_sources_present": target_sources_present,
+        "targets_from_candidate_url": int(target_source_counts.get("candidate_url", 0)),
+        "targets_from_final_url": int(target_source_counts.get("final_url", 0)),
+        "targets_from_request_url": int(target_source_counts.get("request_url", 0)),
+        "targets_from_discovery_base_url": int(target_source_counts.get("discovery_base_url", 0)),
+        "targets_from_unknown": int(target_source_counts.get("unknown", 0)),
     }
     return payload

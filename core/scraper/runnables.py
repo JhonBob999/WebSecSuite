@@ -473,12 +473,14 @@ class ScraperRunnable(QRunnable):
                 response_snapshot=result.get("response_snapshot"),
                 status_code=result.get("status_code"),
                 final_url=result.get("final_url"),
+                discovery=result.get("discovery"),
             )
             result["replay_groups"] = build_replay_groups(
                 finding_artifacts=result.get("finding_artifacts"),
                 request_recipe=result.get("request_recipe"),
                 response_snapshot=result.get("response_snapshot"),
                 final_url=result.get("final_url"),
+                discovery=result.get("discovery"),
             )
             result["replay_manifest"] = build_replay_manifest(
                 replay_groups=result.get("replay_groups"),
@@ -486,6 +488,7 @@ class ScraperRunnable(QRunnable):
                 request_recipe=result.get("request_recipe"),
                 response_snapshot=result.get("response_snapshot"),
                 final_url=result.get("final_url"),
+                discovery=result.get("discovery"),
             )
             result["validation_plan"] = build_validation_plan(
                 replay_manifest=result.get("replay_manifest"),
@@ -493,6 +496,7 @@ class ScraperRunnable(QRunnable):
                 candidates=result.get("candidates"),
                 request_recipe=result.get("request_recipe"),
                 final_url=result.get("final_url"),
+                discovery=result.get("discovery"),
             )
 
             self.task.result = result
@@ -544,12 +548,14 @@ class ScraperRunnable(QRunnable):
                 response_snapshot=self.task.result.get("response_snapshot"),
                 status_code=self.task.result.get("status_code"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["replay_groups"] = build_replay_groups(
                 finding_artifacts=self.task.result.get("finding_artifacts"),
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["replay_manifest"] = build_replay_manifest(
                 replay_groups=self.task.result.get("replay_groups"),
@@ -557,6 +563,7 @@ class ScraperRunnable(QRunnable):
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["validation_plan"] = build_validation_plan(
                 replay_manifest=self.task.result.get("replay_manifest"),
@@ -564,6 +571,7 @@ class ScraperRunnable(QRunnable):
                 candidates=self.task.result.get("candidates"),
                 request_recipe=self.task.result.get("request_recipe"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
@@ -588,12 +596,14 @@ class ScraperRunnable(QRunnable):
                 response_snapshot=self.task.result.get("response_snapshot"),
                 status_code=self.task.result.get("status_code"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["replay_groups"] = build_replay_groups(
                 finding_artifacts=self.task.result.get("finding_artifacts"),
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["replay_manifest"] = build_replay_manifest(
                 replay_groups=self.task.result.get("replay_groups"),
@@ -601,6 +611,7 @@ class ScraperRunnable(QRunnable):
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.task.result["validation_plan"] = build_validation_plan(
                 replay_manifest=self.task.result.get("replay_manifest"),
@@ -608,6 +619,7 @@ class ScraperRunnable(QRunnable):
                 candidates=self.task.result.get("candidates"),
                 request_recipe=self.task.result.get("request_recipe"),
                 final_url=self.task.result.get("final_url"),
+                discovery=self.task.result.get("discovery"),
             )
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
