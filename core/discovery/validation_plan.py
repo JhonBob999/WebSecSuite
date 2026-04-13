@@ -76,6 +76,14 @@ _EXECUTION_LANE_PRIORITY = {
     _EXECUTION_LANE_BLOCKED_ENDPOINT: 4,
     _EXECUTION_LANE_UNAVAILABLE: 5,
 }
+_VALIDATOR_JOB_SAFE = "safe_validation"
+_VALIDATOR_JOB_BLOCKED = "blocked_validation"
+_VALIDATOR_JOB_UNAVAILABLE = "unavailable_validation"
+_VALIDATOR_JOB_TYPE_PRECEDENCE = {
+    _VALIDATOR_JOB_SAFE: 1,
+    _VALIDATOR_JOB_BLOCKED: 2,
+    _VALIDATOR_JOB_UNAVAILABLE: 3,
+}
 
 
 def _empty_contract() -> dict[str, Any]:
@@ -206,6 +214,24 @@ def _empty_contract() -> dict[str, Any]:
             "mutation_ready_ratio": 0.0,
             "plans_primary_param_replace": 0,
             "plans_primary_endpoint_compare": 0,
+            "validator_jobs_total": 0,
+            "validator_jobs_ready": 0,
+            "validator_jobs_blocked": 0,
+            "validator_jobs_unavailable": 0,
+            "validator_job_types_present": [],
+            "safe_validation_jobs": 0,
+            "blocked_validation_jobs": 0,
+            "unavailable_validation_jobs": 0,
+            "plans_with_ready_validator_jobs": 0,
+            "plans_with_blocked_validator_jobs": 0,
+            "plans_with_unavailable_validator_jobs": 0,
+            "validator_job_ready_ratio": 0.0,
+            "unique_validator_job_ids": 0,
+            "avg_validator_jobs_per_plan": 0.0,
+            "avg_ready_validator_jobs_per_plan": 0.0,
+            "plans_primary_safe_validation": 0,
+            "plans_primary_blocked_validation": 0,
+            "plans_primary_unavailable_validation": 0,
         },
     }
 
@@ -325,6 +351,49 @@ def _build_execution_sort_key(
         _safe_sort_value(primary_surface),
     ]
     return "|".join(parts)
+
+
+def _build_validator_job(
+    *,
+    safe_mode: bool,
+    target_url: str,
+    target_source: str,
+    check_type: str,
+    compare_mode: str,
+    execution_lane: str,
+    mutation_strategy: str,
+    mutation_ready: bool,
+) -> dict[str, Any]:
+    clean_compare_mode = _clean_str(compare_mode)
+    clean_mutation_strategy = _clean_str(mutation_strategy) or _MUTATION_STRATEGY_UNAVAILABLE
+    clean_execution_lane = _clean_str(execution_lane)
+    if clean_execution_lane in {_EXECUTION_LANE_READY_PARAM, _EXECUTION_LANE_READY_ENDPOINT} and bool(mutation_ready):
+        job_type = _VALIDATOR_JOB_SAFE
+    elif clean_execution_lane in {_EXECUTION_LANE_BLOCKED_PARAM, _EXECUTION_LANE_BLOCKED_ENDPOINT}:
+        job_type = _VALIDATOR_JOB_BLOCKED
+    else:
+        job_type = _VALIDATOR_JOB_UNAVAILABLE
+    job_id = "|".join(
+        [
+            _safe_sort_value(target_url),
+            _safe_sort_value(check_type),
+            _safe_sort_value(clean_compare_mode),
+            _safe_sort_value(clean_execution_lane),
+            _safe_sort_value(clean_mutation_strategy),
+        ]
+    )
+    return {
+        "job_id": job_id,
+        "job_type": job_type,
+        "job_ready": bool(job_type == _VALIDATOR_JOB_SAFE),
+        "safe_mode": bool(safe_mode),
+        "target_url": target_url,
+        "target_source": target_source,
+        "check_type": check_type,
+        "compare_mode": clean_compare_mode,
+        "execution_lane": clean_execution_lane,
+        "mutation_strategy": clean_mutation_strategy,
+    }
 
 
 def _build_artifact_index(finding_artifacts: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -475,6 +544,16 @@ def _build_check_plan(
             and _safe_int(mutation_binding.get("slot_count"), 0) > 0
         )
         mutation_sort_weight = int(_MUTATION_SORT_WEIGHT.get(mutation_strategy, 3))
+        validator_job = _build_validator_job(
+            safe_mode=bool(safe_mode),
+            target_url=target_url,
+            target_source=target_source,
+            check_type=check_type,
+            compare_mode=_clean_str(comparison.get("compare_mode")),
+            execution_lane=execution_lane,
+            mutation_strategy=mutation_strategy,
+            mutation_ready=mutation_ready,
+        )
 
         check_plan.append(
             {
@@ -500,6 +579,7 @@ def _build_check_plan(
                 "mutation_binding": mutation_binding,
                 "mutation_ready": mutation_ready,
                 "mutation_sort_weight": mutation_sort_weight,
+                "validator_job": validator_job,
             }
         )
     return check_plan
@@ -749,6 +829,33 @@ def build_validation_plan(
             )
         else:
             primary_execution_lane = ""
+        validator_jobs_total = len(check_plan)
+        validator_jobs_ready = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping) and bool((check_item.get("validator_job") or {}).get("job_ready"))
+        )
+        validator_job_types_present = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("job_type"))
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                and _clean_str((check_item.get("validator_job") or {}).get("job_type"))
+            }
+        )
+        primary_validator_job_type = min(
+            validator_job_types_present,
+            key=lambda job_type: _safe_int(_VALIDATOR_JOB_TYPE_PRECEDENCE.get(job_type), 99),
+            default="",
+        )
+        validator_job_ids_unique = len(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("job_id"))
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                and _clean_str((check_item.get("validator_job") or {}).get("job_id"))
+            }
+        )
 
         plan_items.append(
             {
@@ -818,6 +925,11 @@ def build_validation_plan(
                 "primary_mutation_strategy": primary_mutation_strategy,
                 "has_mutating_checks": bool(mutating_checks > 0),
                 "has_baseline_only_checks": bool(baseline_only_checks > 0),
+                "validator_jobs_total": int(validator_jobs_total),
+                "validator_jobs_ready": int(validator_jobs_ready),
+                "validator_job_types_present": validator_job_types_present,
+                "primary_validator_job_type": primary_validator_job_type,
+                "validator_job_ids_unique": int(validator_job_ids_unique),
             }
         )
 
@@ -1243,6 +1355,29 @@ def build_validation_plan(
             if _clean_str(item.get("evidence_level"))
         }
     )
+    all_validator_jobs = [
+        (check_item.get("validator_job") or {})
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and isinstance((check_item.get("validator_job") or {}), Mapping)
+    ]
+    validator_jobs_total = len(all_validator_jobs)
+    validator_jobs_ready = sum(1 for job in all_validator_jobs if bool(job.get("job_ready")))
+    safe_validation_jobs = sum(
+        1 for job in all_validator_jobs if _clean_str(job.get("job_type")) == _VALIDATOR_JOB_SAFE
+    )
+    blocked_validation_jobs = sum(
+        1 for job in all_validator_jobs if _clean_str(job.get("job_type")) == _VALIDATOR_JOB_BLOCKED
+    )
+    unavailable_validation_jobs = sum(
+        1 for job in all_validator_jobs if _clean_str(job.get("job_type")) == _VALIDATOR_JOB_UNAVAILABLE
+    )
+    validator_job_types_present = sorted(
+        {_clean_str(job.get("job_type")) for job in all_validator_jobs if _clean_str(job.get("job_type"))}
+    )
+    unique_validator_job_ids = len(
+        {_clean_str(job.get("job_id")) for job in all_validator_jobs if _clean_str(job.get("job_id"))}
+    )
 
     unique_targets = {
         _clean_str(item.get("target_url"))
@@ -1443,6 +1578,42 @@ def build_validation_plan(
             1
             for item in plan_items
             if _clean_str(item.get("primary_mutation_strategy")) == _MUTATION_STRATEGY_ENDPOINT_COMPARE
+        ),
+        "validator_jobs_total": validator_jobs_total,
+        "validator_jobs_ready": validator_jobs_ready,
+        "validator_jobs_blocked": blocked_validation_jobs,
+        "validator_jobs_unavailable": unavailable_validation_jobs,
+        "validator_job_types_present": validator_job_types_present,
+        "safe_validation_jobs": safe_validation_jobs,
+        "blocked_validation_jobs": blocked_validation_jobs,
+        "unavailable_validation_jobs": unavailable_validation_jobs,
+        "plans_with_ready_validator_jobs": sum(1 for item in plan_items if _safe_int(item.get("validator_jobs_ready"), 0) > 0),
+        "plans_with_blocked_validator_jobs": sum(
+            1
+            for item in plan_items
+            if _VALIDATOR_JOB_BLOCKED in (item.get("validator_job_types_present") or [])
+        ),
+        "plans_with_unavailable_validator_jobs": sum(
+            1
+            for item in plan_items
+            if _VALIDATOR_JOB_UNAVAILABLE in (item.get("validator_job_types_present") or [])
+        ),
+        "validator_job_ready_ratio": _round_metric(
+            (validator_jobs_ready / validator_jobs_total) if validator_jobs_total else 0.0
+        ),
+        "unique_validator_job_ids": unique_validator_job_ids,
+        "avg_validator_jobs_per_plan": _round_metric((validator_jobs_total / total_plans) if total_plans else 0.0),
+        "avg_ready_validator_jobs_per_plan": _round_metric(
+            (validator_jobs_ready / total_plans) if total_plans else 0.0
+        ),
+        "plans_primary_safe_validation": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_validator_job_type")) == _VALIDATOR_JOB_SAFE
+        ),
+        "plans_primary_blocked_validation": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_validator_job_type")) == _VALIDATOR_JOB_BLOCKED
+        ),
+        "plans_primary_unavailable_validation": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_validator_job_type")) == _VALIDATOR_JOB_UNAVAILABLE
         ),
     }
     return payload

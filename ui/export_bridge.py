@@ -179,6 +179,24 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_mutation_ready_ratio",
     "validation_plan_plans_primary_param_replace",
     "validation_plan_plans_primary_endpoint_compare",
+    "validation_plan_validator_jobs_total",
+    "validation_plan_validator_jobs_ready",
+    "validation_plan_validator_jobs_blocked",
+    "validation_plan_validator_jobs_unavailable",
+    "validation_plan_validator_job_types_present",
+    "validation_plan_safe_validation_jobs",
+    "validation_plan_blocked_validation_jobs",
+    "validation_plan_unavailable_validation_jobs",
+    "validation_plan_plans_with_ready_validator_jobs",
+    "validation_plan_plans_with_blocked_validator_jobs",
+    "validation_plan_plans_with_unavailable_validator_jobs",
+    "validation_plan_validator_job_ready_ratio",
+    "validation_plan_unique_validator_job_ids",
+    "validation_plan_avg_validator_jobs_per_plan",
+    "validation_plan_avg_ready_validator_jobs_per_plan",
+    "validation_plan_plans_primary_safe_validation",
+    "validation_plan_plans_primary_blocked_validation",
+    "validation_plan_plans_primary_unavailable_validation",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -625,6 +643,24 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_mutation_ready_ratio": 0.0,
         "validation_plan_plans_primary_param_replace": 0,
         "validation_plan_plans_primary_endpoint_compare": 0,
+        "validation_plan_validator_jobs_total": 0,
+        "validation_plan_validator_jobs_ready": 0,
+        "validation_plan_validator_jobs_blocked": 0,
+        "validation_plan_validator_jobs_unavailable": 0,
+        "validation_plan_validator_job_types_present": "",
+        "validation_plan_safe_validation_jobs": 0,
+        "validation_plan_blocked_validation_jobs": 0,
+        "validation_plan_unavailable_validation_jobs": 0,
+        "validation_plan_plans_with_ready_validator_jobs": 0,
+        "validation_plan_plans_with_blocked_validator_jobs": 0,
+        "validation_plan_plans_with_unavailable_validator_jobs": 0,
+        "validation_plan_validator_job_ready_ratio": 0.0,
+        "validation_plan_unique_validator_job_ids": 0,
+        "validation_plan_avg_validator_jobs_per_plan": 0.0,
+        "validation_plan_avg_ready_validator_jobs_per_plan": 0.0,
+        "validation_plan_plans_primary_safe_validation": 0,
+        "validation_plan_plans_primary_blocked_validation": 0,
+        "validation_plan_plans_primary_unavailable_validation": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -823,6 +859,38 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_primary_param_replace": _to_int_count(summary.get("plans_primary_param_replace"), 0),
         "validation_plan_plans_primary_endpoint_compare": _to_int_count(
             summary.get("plans_primary_endpoint_compare"), 0
+        ),
+        "validation_plan_validator_jobs_total": _to_int_count(summary.get("validator_jobs_total"), 0),
+        "validation_plan_validator_jobs_ready": _to_int_count(summary.get("validator_jobs_ready"), 0),
+        "validation_plan_validator_jobs_blocked": _to_int_count(summary.get("validator_jobs_blocked"), 0),
+        "validation_plan_validator_jobs_unavailable": _to_int_count(summary.get("validator_jobs_unavailable"), 0),
+        "validation_plan_validator_job_types_present": _join_string_list(summary.get("validator_job_types_present")),
+        "validation_plan_safe_validation_jobs": _to_int_count(summary.get("safe_validation_jobs"), 0),
+        "validation_plan_blocked_validation_jobs": _to_int_count(summary.get("blocked_validation_jobs"), 0),
+        "validation_plan_unavailable_validation_jobs": _to_int_count(summary.get("unavailable_validation_jobs"), 0),
+        "validation_plan_plans_with_ready_validator_jobs": _to_int_count(
+            summary.get("plans_with_ready_validator_jobs"), 0
+        ),
+        "validation_plan_plans_with_blocked_validator_jobs": _to_int_count(
+            summary.get("plans_with_blocked_validator_jobs"), 0
+        ),
+        "validation_plan_plans_with_unavailable_validator_jobs": _to_int_count(
+            summary.get("plans_with_unavailable_validator_jobs"), 0
+        ),
+        "validation_plan_validator_job_ready_ratio": float(summary.get("validator_job_ready_ratio") or 0.0),
+        "validation_plan_unique_validator_job_ids": _to_int_count(summary.get("unique_validator_job_ids"), 0),
+        "validation_plan_avg_validator_jobs_per_plan": float(summary.get("avg_validator_jobs_per_plan") or 0.0),
+        "validation_plan_avg_ready_validator_jobs_per_plan": float(
+            summary.get("avg_ready_validator_jobs_per_plan") or 0.0
+        ),
+        "validation_plan_plans_primary_safe_validation": _to_int_count(
+            summary.get("plans_primary_safe_validation"), 0
+        ),
+        "validation_plan_plans_primary_blocked_validation": _to_int_count(
+            summary.get("plans_primary_blocked_validation"), 0
+        ),
+        "validation_plan_plans_primary_unavailable_validation": _to_int_count(
+            summary.get("plans_primary_unavailable_validation"), 0
         ),
     }
 
