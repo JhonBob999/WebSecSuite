@@ -10,6 +10,7 @@ from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
+from core.discovery.validation_plan import build_validation_plan
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
 
@@ -41,6 +42,16 @@ def _empty_replay_manifest() -> dict:
         finding_artifacts=None,
         request_recipe=None,
         response_snapshot=None,
+        final_url="",
+    )
+
+
+def _empty_validation_plan() -> dict:
+    return build_validation_plan(
+        replay_manifest=None,
+        finding_artifacts=None,
+        candidates=None,
+        request_recipe=None,
         final_url="",
     )
 
@@ -109,6 +120,7 @@ def run(task_ctx: dict) -> dict:
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
             }
         try:
             html, final_url, headers = _fetch_html(base_url, params)
@@ -123,6 +135,7 @@ def run(task_ctx: dict) -> dict:
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
             }
         except Exception as e:  # pragma: no cover - defensive fallback
             return {
@@ -134,6 +147,7 @@ def run(task_ctx: dict) -> dict:
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
             }
     else:
         res_ctx = ctx.get("result")
@@ -219,6 +233,13 @@ def run(task_ctx: dict) -> dict:
         finding_artifacts=result.get("finding_artifacts"),
         request_recipe=result.get("request_recipe"),
         response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url") or final_url,
+    )
+    result["validation_plan"] = build_validation_plan(
+        replay_manifest=result.get("replay_manifest"),
+        finding_artifacts=result.get("finding_artifacts"),
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
         final_url=result.get("final_url") or final_url,
     )
     return result

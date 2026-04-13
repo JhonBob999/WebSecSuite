@@ -20,6 +20,7 @@ from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
+from core.discovery.validation_plan import build_validation_plan
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -486,6 +487,13 @@ class ScraperRunnable(QRunnable):
                 response_snapshot=result.get("response_snapshot"),
                 final_url=result.get("final_url"),
             )
+            result["validation_plan"] = build_validation_plan(
+                replay_manifest=result.get("replay_manifest"),
+                finding_artifacts=result.get("finding_artifacts"),
+                candidates=result.get("candidates"),
+                request_recipe=result.get("request_recipe"),
+                final_url=result.get("final_url"),
+            )
 
             self.task.result = result
 
@@ -550,6 +558,13 @@ class ScraperRunnable(QRunnable):
                 response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
             )
+            self.task.result["validation_plan"] = build_validation_plan(
+                replay_manifest=self.task.result.get("replay_manifest"),
+                finding_artifacts=self.task.result.get("finding_artifacts"),
+                candidates=self.task.result.get("candidates"),
+                request_recipe=self.task.result.get("request_recipe"),
+                final_url=self.task.result.get("final_url"),
+            )
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
@@ -585,6 +600,13 @@ class ScraperRunnable(QRunnable):
                 finding_artifacts=self.task.result.get("finding_artifacts"),
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
+                final_url=self.task.result.get("final_url"),
+            )
+            self.task.result["validation_plan"] = build_validation_plan(
+                replay_manifest=self.task.result.get("replay_manifest"),
+                finding_artifacts=self.task.result.get("finding_artifacts"),
+                candidates=self.task.result.get("candidates"),
+                request_recipe=self.task.result.get("request_recipe"),
                 final_url=self.task.result.get("final_url"),
             )
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
