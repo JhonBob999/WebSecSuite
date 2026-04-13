@@ -41,6 +41,12 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "findings_replay_ready_total",
     "findings_unique_replay_keys",
     "findings_unique_artifact_ids",
+    "replay_groups_total",
+    "replay_groups_replay_ready_total",
+    "replay_groups_unique_targets",
+    "replay_groups_max_group_size",
+    "replay_groups_with_baseline_hash",
+    "replay_groups_types_present",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -55,6 +61,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "parameter_intelligence",
     "request_recipe",
     "response_snapshot",
+    "replay_groups",
 }
 
 
@@ -142,6 +149,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
 
     record.update(derive_candidate_summary_fields(result))
     record.update(derive_finding_artifact_summary_fields(result))
+    record.update(derive_replay_group_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
@@ -288,6 +296,36 @@ def derive_request_recipe_summary_fields(result: Any) -> dict[str, Any]:
         "request_timeout": "" if timeout is None else _scalar_friendly(timeout),
         "request_payload_source": _str_or(recipe.get("payload_source"), ""),
         "request_cookie_path_present": bool(_str_or(recipe.get("cookie_path"), "").strip()),
+    }
+
+
+def derive_replay_group_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "replay_groups_total": 0,
+        "replay_groups_replay_ready_total": 0,
+        "replay_groups_unique_targets": 0,
+        "replay_groups_max_group_size": 0,
+        "replay_groups_with_baseline_hash": 0,
+        "replay_groups_types_present": "",
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    replay_groups = result.get("replay_groups")
+    if not isinstance(replay_groups, Mapping):
+        return defaults
+
+    summary = replay_groups.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+
+    return {
+        "replay_groups_total": _to_int_count(summary.get("total"), 0),
+        "replay_groups_replay_ready_total": _to_int_count(summary.get("replay_ready_total"), 0),
+        "replay_groups_unique_targets": _to_int_count(summary.get("unique_targets"), 0),
+        "replay_groups_max_group_size": _to_int_count(summary.get("max_group_size"), 0),
+        "replay_groups_with_baseline_hash": _to_int_count(summary.get("with_baseline_hash"), 0),
+        "replay_groups_types_present": _join_string_list(summary.get("types_present")),
     }
 
 
@@ -569,7 +607,7 @@ def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Фильтрует внутренние/сырые поля для CSV/XLSX экспорта.
     """
-    hidden = {"_raw_result", "candidates", "candidates_summary"}
+    hidden = {"_raw_result", "candidates", "candidates_summary", "replay_groups"}
     out: list[dict[str, Any]] = []
     for it in items:
         out.append({k: v for k, v in it.items() if k not in hidden})
@@ -601,6 +639,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
 
         row.update(derive_candidate_summary_fields(rec))
         row.update(derive_finding_artifact_summary_fields(rec))
+        row.update(derive_replay_group_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 

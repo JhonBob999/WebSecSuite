@@ -8,6 +8,7 @@ import httpx
 from core.cookies.storage import load_cookiejar
 from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
+from core.discovery.replay_groups import build_replay_groups
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
 
@@ -20,6 +21,15 @@ def _empty_finding_artifacts() -> dict:
         request_recipe=None,
         response_snapshot=None,
         status_code=None,
+        final_url="",
+    )
+
+
+def _empty_replay_groups() -> dict:
+    return build_replay_groups(
+        finding_artifacts=None,
+        request_recipe=None,
+        response_snapshot=None,
         final_url="",
     )
 
@@ -86,6 +96,7 @@ def run(task_ctx: dict) -> dict:
                 "query_params": {},
                 "parameter_intelligence": [],
                 "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
             }
         try:
             html, final_url, headers = _fetch_html(base_url, params)
@@ -98,6 +109,7 @@ def run(task_ctx: dict) -> dict:
                 "query_params": {},
                 "parameter_intelligence": [],
                 "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
             }
         except Exception as e:  # pragma: no cover - defensive fallback
             return {
@@ -107,6 +119,7 @@ def run(task_ctx: dict) -> dict:
                 "query_params": {},
                 "parameter_intelligence": [],
                 "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
             }
     else:
         res_ctx = ctx.get("result")
@@ -179,6 +192,12 @@ def run(task_ctx: dict) -> dict:
         request_recipe=result.get("request_recipe"),
         response_snapshot=result.get("response_snapshot"),
         status_code=result.get("status_code"),
+        final_url=result.get("final_url") or final_url,
+    )
+    result["replay_groups"] = build_replay_groups(
+        finding_artifacts=result.get("finding_artifacts"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
         final_url=result.get("final_url") or final_url,
     )
     return result

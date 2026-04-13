@@ -18,6 +18,7 @@ from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.discovery.endpoint_classifier import classify_endpoint_type
 from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
+from core.discovery.replay_groups import build_replay_groups
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
 
@@ -471,6 +472,12 @@ class ScraperRunnable(QRunnable):
                 status_code=result.get("status_code"),
                 final_url=result.get("final_url"),
             )
+            result["replay_groups"] = build_replay_groups(
+                finding_artifacts=result.get("finding_artifacts"),
+                request_recipe=result.get("request_recipe"),
+                response_snapshot=result.get("response_snapshot"),
+                final_url=result.get("final_url"),
+            )
 
             self.task.result = result
 
@@ -522,6 +529,12 @@ class ScraperRunnable(QRunnable):
                 status_code=self.task.result.get("status_code"),
                 final_url=self.task.result.get("final_url"),
             )
+            self.task.result["replay_groups"] = build_replay_groups(
+                finding_artifacts=self.task.result.get("finding_artifacts"),
+                request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
+                final_url=self.task.result.get("final_url"),
+            )
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
@@ -544,6 +557,12 @@ class ScraperRunnable(QRunnable):
                 request_recipe=self.task.result.get("request_recipe"),
                 response_snapshot=self.task.result.get("response_snapshot"),
                 status_code=self.task.result.get("status_code"),
+                final_url=self.task.result.get("final_url"),
+            )
+            self.task.result["replay_groups"] = build_replay_groups(
+                finding_artifacts=self.task.result.get("finding_artifacts"),
+                request_recipe=self.task.result.get("request_recipe"),
+                response_snapshot=self.task.result.get("response_snapshot"),
                 final_url=self.task.result.get("final_url"),
             )
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
