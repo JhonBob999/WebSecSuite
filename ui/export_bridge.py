@@ -97,6 +97,22 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_plans_with_check_plan",
     "validation_plan_plans_without_check_plan",
     "validation_plan_avg_check_plan_items_per_plan",
+    "validation_plan_plans_requiring_body_preview",
+    "validation_plan_plans_requiring_status_code",
+    "validation_plan_plans_requiring_body_hash",
+    "validation_plan_plans_requiring_content_type",
+    "validation_plan_check_plan_items_requiring_body_preview",
+    "validation_plan_check_plan_items_requiring_status_code",
+    "validation_plan_check_plan_items_requiring_body_hash",
+    "validation_plan_check_plan_items_requiring_content_type",
+    "validation_plan_comparison_modes_present",
+    "validation_plan_reflection_compare_items",
+    "validation_plan_error_pattern_compare_items",
+    "validation_plan_status_compare_items",
+    "validation_plan_baseline_field_body_preview_total",
+    "validation_plan_baseline_field_status_code_total",
+    "validation_plan_baseline_field_body_hash_total",
+    "validation_plan_baseline_field_content_type_total",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -461,6 +477,22 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_with_check_plan": 0,
         "validation_plan_plans_without_check_plan": 0,
         "validation_plan_avg_check_plan_items_per_plan": 0.0,
+        "validation_plan_plans_requiring_body_preview": 0,
+        "validation_plan_plans_requiring_status_code": 0,
+        "validation_plan_plans_requiring_body_hash": 0,
+        "validation_plan_plans_requiring_content_type": 0,
+        "validation_plan_check_plan_items_requiring_body_preview": 0,
+        "validation_plan_check_plan_items_requiring_status_code": 0,
+        "validation_plan_check_plan_items_requiring_body_hash": 0,
+        "validation_plan_check_plan_items_requiring_content_type": 0,
+        "validation_plan_comparison_modes_present": "",
+        "validation_plan_reflection_compare_items": 0,
+        "validation_plan_error_pattern_compare_items": 0,
+        "validation_plan_status_compare_items": 0,
+        "validation_plan_baseline_field_body_preview_total": 0,
+        "validation_plan_baseline_field_status_code_total": 0,
+        "validation_plan_baseline_field_body_hash_total": 0,
+        "validation_plan_baseline_field_content_type_total": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -522,6 +554,38 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_with_check_plan": _to_int_count(summary.get("plans_with_check_plan"), 0),
         "validation_plan_plans_without_check_plan": _to_int_count(summary.get("plans_without_check_plan"), 0),
         "validation_plan_avg_check_plan_items_per_plan": float(summary.get("avg_check_plan_items_per_plan") or 0.0),
+        "validation_plan_plans_requiring_body_preview": _to_int_count(summary.get("plans_requiring_body_preview"), 0),
+        "validation_plan_plans_requiring_status_code": _to_int_count(summary.get("plans_requiring_status_code"), 0),
+        "validation_plan_plans_requiring_body_hash": _to_int_count(summary.get("plans_requiring_body_hash"), 0),
+        "validation_plan_plans_requiring_content_type": _to_int_count(summary.get("plans_requiring_content_type"), 0),
+        "validation_plan_check_plan_items_requiring_body_preview": _to_int_count(
+            summary.get("check_plan_items_requiring_body_preview"), 0
+        ),
+        "validation_plan_check_plan_items_requiring_status_code": _to_int_count(
+            summary.get("check_plan_items_requiring_status_code"), 0
+        ),
+        "validation_plan_check_plan_items_requiring_body_hash": _to_int_count(
+            summary.get("check_plan_items_requiring_body_hash"), 0
+        ),
+        "validation_plan_check_plan_items_requiring_content_type": _to_int_count(
+            summary.get("check_plan_items_requiring_content_type"), 0
+        ),
+        "validation_plan_comparison_modes_present": _join_string_list(summary.get("comparison_modes_present")),
+        "validation_plan_reflection_compare_items": _to_int_count(summary.get("reflection_compare_items"), 0),
+        "validation_plan_error_pattern_compare_items": _to_int_count(summary.get("error_pattern_compare_items"), 0),
+        "validation_plan_status_compare_items": _to_int_count(summary.get("status_compare_items"), 0),
+        "validation_plan_baseline_field_body_preview_total": _to_int_count(
+            summary.get("baseline_field_body_preview_total"), 0
+        ),
+        "validation_plan_baseline_field_status_code_total": _to_int_count(
+            summary.get("baseline_field_status_code_total"), 0
+        ),
+        "validation_plan_baseline_field_body_hash_total": _to_int_count(
+            summary.get("baseline_field_body_hash_total"), 0
+        ),
+        "validation_plan_baseline_field_content_type_total": _to_int_count(
+            summary.get("baseline_field_content_type_total"), 0
+        ),
     }
 
 

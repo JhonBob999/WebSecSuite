@@ -17,6 +17,32 @@ _CHECK_PAYLOAD_FAMILY = {
     _CHECK_ERROR_PATTERN_DIFF: "error_probe",
     _CHECK_STATUS_DIFF: "status_probe",
 }
+_CHECK_COMPARISON_CONTRACT = {
+    _CHECK_REFLECTION_DIFF: {
+        "compare_mode": "reflection_compare",
+        "baseline_fields": ["body_preview", "body_hash"],
+        "requires_body_preview": True,
+        "requires_status_code": False,
+        "requires_body_hash": True,
+        "requires_content_type": False,
+    },
+    _CHECK_ERROR_PATTERN_DIFF: {
+        "compare_mode": "error_pattern_compare",
+        "baseline_fields": ["status_code", "body_preview", "content_type"],
+        "requires_body_preview": True,
+        "requires_status_code": True,
+        "requires_body_hash": False,
+        "requires_content_type": True,
+    },
+    _CHECK_STATUS_DIFF: {
+        "compare_mode": "status_compare",
+        "baseline_fields": ["status_code"],
+        "requires_body_preview": False,
+        "requires_status_code": True,
+        "requires_body_hash": False,
+        "requires_content_type": False,
+    },
+}
 _EVIDENCE_RANK = {"": 0, "low": 1, "medium": 2, "strong": 3}
 
 
@@ -66,6 +92,22 @@ def _empty_contract() -> dict[str, Any]:
             "plans_with_check_plan": 0,
             "plans_without_check_plan": 0,
             "avg_check_plan_items_per_plan": 0.0,
+            "plans_requiring_body_preview": 0,
+            "plans_requiring_status_code": 0,
+            "plans_requiring_body_hash": 0,
+            "plans_requiring_content_type": 0,
+            "check_plan_items_requiring_body_preview": 0,
+            "check_plan_items_requiring_status_code": 0,
+            "check_plan_items_requiring_body_hash": 0,
+            "check_plan_items_requiring_content_type": 0,
+            "comparison_modes_present": [],
+            "reflection_compare_items": 0,
+            "error_pattern_compare_items": 0,
+            "status_compare_items": 0,
+            "baseline_field_body_preview_total": 0,
+            "baseline_field_status_code_total": 0,
+            "baseline_field_body_hash_total": 0,
+            "baseline_field_content_type_total": 0,
         },
     }
 
@@ -171,6 +213,8 @@ def _build_check_plan(
         seen.add(check_type)
         if check_type not in _CHECK_ORDER:
             continue
+        comparison = dict(_CHECK_COMPARISON_CONTRACT.get(check_type) or {})
+        comparison["baseline_fields"] = list(comparison.get("baseline_fields") or [])
 
         check_plan.append(
             {
@@ -183,6 +227,7 @@ def _build_check_plan(
                 "safe_mode": bool(safe_mode),
                 "target_url": target_url,
                 "target_source": target_source,
+                "comparison": comparison,
             }
         )
     return check_plan
@@ -271,6 +316,34 @@ def build_validation_plan(
                 "evidence_level": evidence_level,
                 "ready_for_validation": ready_for_validation,
                 "safe_mode": safe_mode,
+                "requires_any_body_preview": any(
+                    isinstance(check_item, Mapping)
+                    and bool((check_item.get("comparison") or {}).get("requires_body_preview"))
+                    for check_item in check_plan
+                ),
+                "requires_any_status_code": any(
+                    isinstance(check_item, Mapping)
+                    and bool((check_item.get("comparison") or {}).get("requires_status_code"))
+                    for check_item in check_plan
+                ),
+                "requires_any_body_hash": any(
+                    isinstance(check_item, Mapping)
+                    and bool((check_item.get("comparison") or {}).get("requires_body_hash"))
+                    for check_item in check_plan
+                ),
+                "requires_any_content_type": any(
+                    isinstance(check_item, Mapping)
+                    and bool((check_item.get("comparison") or {}).get("requires_content_type"))
+                    for check_item in check_plan
+                ),
+                "comparison_modes_present": sorted(
+                    {
+                        _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+                        for check_item in check_plan
+                        if isinstance(check_item, Mapping)
+                        and _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+                    }
+                ),
             }
         )
 
@@ -335,6 +408,88 @@ def build_validation_plan(
         if isinstance(check_item, Mapping) and bool(check_item.get("requires_param_target"))
     )
     non_param_check_items = max(total_check_plan_items - param_required_check_items, 0)
+    check_plan_items_requiring_body_preview = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool((check_item.get("comparison") or {}).get("requires_body_preview"))
+    )
+    check_plan_items_requiring_status_code = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool((check_item.get("comparison") or {}).get("requires_status_code"))
+    )
+    check_plan_items_requiring_body_hash = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool((check_item.get("comparison") or {}).get("requires_body_hash"))
+    )
+    check_plan_items_requiring_content_type = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool((check_item.get("comparison") or {}).get("requires_content_type"))
+    )
+    comparison_modes_present = sorted(
+        {
+            _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping)
+            and _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+        }
+    )
+    reflection_compare_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("comparison") or {}).get("compare_mode")) == "reflection_compare"
+    )
+    error_pattern_compare_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("comparison") or {}).get("compare_mode")) == "error_pattern_compare"
+    )
+    status_compare_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("comparison") or {}).get("compare_mode")) == "status_compare"
+    )
+    baseline_field_body_preview_total = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        for field in ((check_item.get("comparison") or {}).get("baseline_fields") or [])
+        if _clean_str(field) == "body_preview"
+    )
+    baseline_field_status_code_total = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        for field in ((check_item.get("comparison") or {}).get("baseline_fields") or [])
+        if _clean_str(field) == "status_code"
+    )
+    baseline_field_body_hash_total = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        for field in ((check_item.get("comparison") or {}).get("baseline_fields") or [])
+        if _clean_str(field) == "body_hash"
+    )
+    baseline_field_content_type_total = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        for field in ((check_item.get("comparison") or {}).get("baseline_fields") or [])
+        if _clean_str(field) == "content_type"
+    )
     payload_families_present = sorted(
         {
             _clean_str(check_item.get("payload_family"))
@@ -462,5 +617,21 @@ def build_validation_plan(
         "avg_check_plan_items_per_plan": _round_metric(
             (total_check_plan_items / total_plans) if total_plans else 0.0
         ),
+        "plans_requiring_body_preview": sum(1 for item in plan_items if bool(item.get("requires_any_body_preview"))),
+        "plans_requiring_status_code": sum(1 for item in plan_items if bool(item.get("requires_any_status_code"))),
+        "plans_requiring_body_hash": sum(1 for item in plan_items if bool(item.get("requires_any_body_hash"))),
+        "plans_requiring_content_type": sum(1 for item in plan_items if bool(item.get("requires_any_content_type"))),
+        "check_plan_items_requiring_body_preview": check_plan_items_requiring_body_preview,
+        "check_plan_items_requiring_status_code": check_plan_items_requiring_status_code,
+        "check_plan_items_requiring_body_hash": check_plan_items_requiring_body_hash,
+        "check_plan_items_requiring_content_type": check_plan_items_requiring_content_type,
+        "comparison_modes_present": comparison_modes_present,
+        "reflection_compare_items": reflection_compare_items,
+        "error_pattern_compare_items": error_pattern_compare_items,
+        "status_compare_items": status_compare_items,
+        "baseline_field_body_preview_total": baseline_field_body_preview_total,
+        "baseline_field_status_code_total": baseline_field_status_code_total,
+        "baseline_field_body_hash_total": baseline_field_body_hash_total,
+        "baseline_field_content_type_total": baseline_field_content_type_total,
     }
     return payload
