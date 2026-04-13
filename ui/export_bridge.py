@@ -35,6 +35,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "headers",
     "timings",
     "parameter_intelligence",
+    "request_recipe",
     "response_snapshot",
 }
 
@@ -122,6 +123,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record["_raw_result"] = result
 
     record.update(derive_candidate_summary_fields(result))
+    record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
     return record
@@ -180,6 +182,38 @@ def derive_response_snapshot_summary_fields(result: Any) -> dict[str, Any]:
         "response_content_length": _to_int_count(content_length, None),
         "response_body_hash": _str_or(snapshot.get("body_hash"), ""),
         "response_has_body_preview": has_body_preview,
+    }
+
+
+def derive_request_recipe_summary_fields(result: Any) -> dict[str, Any]:
+    """
+    Возвращает compact/flat поля из request_recipe
+    без модификации исходного payload.
+    """
+    defaults: dict[str, Any] = {
+        "request_url": "",
+        "request_method": "",
+        "request_redirects": 0,
+        "request_timeout": "",
+        "request_payload_source": "",
+        "request_cookie_path_present": False,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    recipe = result.get("request_recipe")
+    if not isinstance(recipe, Mapping):
+        return defaults
+
+    timeout = recipe.get("timeout")
+
+    return {
+        "request_url": _str_or(recipe.get("url"), ""),
+        "request_method": _str_or(recipe.get("method"), ""),
+        "request_redirects": _to_int_count(recipe.get("redirects"), 0),
+        "request_timeout": "" if timeout is None else _scalar_friendly(timeout),
+        "request_payload_source": _str_or(recipe.get("payload_source"), ""),
+        "request_cookie_path_present": bool(_str_or(recipe.get("cookie_path"), "").strip()),
     }
 
 
@@ -478,6 +512,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
             row[nk] = value
 
         row.update(derive_candidate_summary_fields(rec))
+        row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 
         for hidden_key in PREVIEW_HIDDEN_RAW_FIELDS:
@@ -511,6 +546,16 @@ def _compact_preview_value(key: str, val: Any) -> Any:
     if key == "forms" and isinstance(val, list):
         return _compact_forms(val)
     return val
+
+
+def _scalar_friendly(val: Any) -> Any:
+    if val is None:
+        return ""
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, (dict, list, tuple)):
+        return _maybe_json_string(val)
+    return str(val)
 
 
 def _compact_forms(forms: list[Any]) -> str:
