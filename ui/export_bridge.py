@@ -38,6 +38,9 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "findings_types_present",
     "findings_priorities_present",
     "findings_confirmed_total",
+    "findings_replay_ready_total",
+    "findings_unique_replay_keys",
+    "findings_unique_artifact_ids",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -217,6 +220,9 @@ def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
         "findings_types_present": "",
         "findings_priorities_present": "",
         "findings_confirmed_total": 0,
+        "findings_replay_ready_total": 0,
+        "findings_unique_replay_keys": 0,
+        "findings_unique_artifact_ids": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -247,6 +253,9 @@ def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
         "findings_types_present": _join_string_list(types_present),
         "findings_priorities_present": _join_string_list(priorities_present),
         "findings_confirmed_total": _to_int_count(summary.get("confirmed_total"), 0),
+        "findings_replay_ready_total": _to_int_count(summary.get("replay_ready_total"), 0),
+        "findings_unique_replay_keys": _to_int_count(summary.get("unique_replay_keys"), 0),
+        "findings_unique_artifact_ids": _to_int_count(summary.get("unique_artifact_ids"), 0),
     }
 
 

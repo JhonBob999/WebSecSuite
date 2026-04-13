@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Mapping
 
 _ARTIFACT_TYPES = (
@@ -29,6 +30,9 @@ def _empty_contract() -> dict[str, Any]:
             "confirmed_total": 0,
             "types_present": [],
             "priorities_present": [],
+            "replay_ready_total": 0,
+            "unique_replay_keys": 0,
+            "unique_artifact_ids": 0,
         },
     }
 
@@ -71,6 +75,63 @@ def _to_reason_sources(reasons: Any) -> list[str]:
         if reason_value:
             out.append(f"reason:{reason_value}")
     return out
+
+
+def _safe_join(parts: list[Any], separator: str = "|") -> str:
+    return separator.join(_to_clean_string(part) for part in parts)
+
+
+def _build_replay_target_url(request_url: str, artifact_url: str) -> str:
+    if request_url:
+        return request_url
+    if artifact_url:
+        return artifact_url
+    return ""
+
+
+def _build_replay_key(
+    *,
+    request_method: str,
+    replay_target_url: str,
+    candidate_type: str,
+    endpoint_type: str,
+    param: Any,
+) -> str:
+    return _safe_join(
+        [
+            request_method,
+            replay_target_url,
+            candidate_type,
+            endpoint_type,
+            _to_clean_string(param),
+        ]
+    )
+
+
+def _build_artifact_id(
+    *,
+    candidate_type: str,
+    candidate_url: str,
+    param: Any,
+    endpoint_type: str,
+    baseline_body_hash: str,
+    request_method: str,
+    replay_target_url: str,
+) -> str:
+    raw = _safe_join(
+        [
+            candidate_type,
+            candidate_url,
+            _to_clean_string(param),
+            endpoint_type,
+            baseline_body_hash,
+            request_method,
+            replay_target_url,
+        ]
+    )
+    if not raw:
+        return ""
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _build_evidence_sources(
@@ -188,6 +249,24 @@ def build_finding_artifacts(
             baseline_status_code > 0 or baseline_content_type or baseline_body_hash
         )
         primary_evidence = _primary_evidence_from_sources(evidence_sources)
+        replay_target_url = _build_replay_target_url(request_url, candidate_url)
+        replay_key = _build_replay_key(
+            request_method=request_method,
+            replay_target_url=replay_target_url,
+            candidate_type=candidate_type,
+            endpoint_type=endpoint_type,
+            param=param,
+        )
+        has_replay_recipe = bool(request_method and replay_target_url)
+        artifact_id = _build_artifact_id(
+            candidate_type=candidate_type,
+            candidate_url=candidate_url,
+            param=param,
+            endpoint_type=endpoint_type,
+            baseline_body_hash=baseline_body_hash,
+            request_method=request_method,
+            replay_target_url=replay_target_url,
+        )
 
         dedupe_key = (candidate_type, candidate_url, param, endpoint_type, baseline_body_hash)
         if dedupe_key in seen:
@@ -216,6 +295,10 @@ def build_finding_artifacts(
                 "primary_evidence": primary_evidence,
                 "has_request_context": has_request_context,
                 "has_response_context": has_response_context,
+                "artifact_id": artifact_id,
+                "replay_key": replay_key,
+                "replay_target_url": replay_target_url,
+                "has_replay_recipe": has_replay_recipe,
                 "_stable_index": index,
             }
         )
@@ -270,5 +353,20 @@ def build_finding_artifacts(
         "confirmed_total": sum(1 for item in payload["all"] if item.get("confirmed") is True),
         "types_present": types_present,
         "priorities_present": priorities_present,
+        "replay_ready_total": sum(1 for item in payload["all"] if bool(item.get("has_replay_recipe"))),
+        "unique_replay_keys": len(
+            {
+                str(item.get("replay_key") or "").strip()
+                for item in payload["all"]
+                if str(item.get("replay_key") or "").strip()
+            }
+        ),
+        "unique_artifact_ids": len(
+            {
+                str(item.get("artifact_id") or "").strip()
+                for item in payload["all"]
+                if str(item.get("artifact_id") or "").strip()
+            }
+        ),
     }
     return payload
