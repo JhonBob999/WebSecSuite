@@ -146,6 +146,25 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_plans_with_unavailable_surface",
     "validation_plan_parameterized_ratio",
     "validation_plan_endpoint_level_ratio",
+    "validation_plan_ready_param_items",
+    "validation_plan_ready_endpoint_items",
+    "validation_plan_blocked_param_items",
+    "validation_plan_blocked_endpoint_items",
+    "validation_plan_unavailable_items",
+    "validation_plan_execution_lanes_present",
+    "validation_plan_highest_priority_plans",
+    "validation_plan_ready_queue_total",
+    "validation_plan_blocked_queue_total",
+    "validation_plan_avg_queue_size_per_plan",
+    "validation_plan_avg_ready_queue_per_plan",
+    "validation_plan_avg_blocked_queue_per_plan",
+    "validation_plan_plans_primary_ready_param",
+    "validation_plan_plans_primary_ready_endpoint",
+    "validation_plan_plans_primary_blocked_param",
+    "validation_plan_plans_primary_blocked_endpoint",
+    "validation_plan_plans_primary_unavailable",
+    "validation_plan_execution_priority_min",
+    "validation_plan_execution_priority_max",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -559,6 +578,25 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_with_unavailable_surface": 0,
         "validation_plan_parameterized_ratio": 0.0,
         "validation_plan_endpoint_level_ratio": 0.0,
+        "validation_plan_ready_param_items": 0,
+        "validation_plan_ready_endpoint_items": 0,
+        "validation_plan_blocked_param_items": 0,
+        "validation_plan_blocked_endpoint_items": 0,
+        "validation_plan_unavailable_items": 0,
+        "validation_plan_execution_lanes_present": "",
+        "validation_plan_highest_priority_plans": 0,
+        "validation_plan_ready_queue_total": 0,
+        "validation_plan_blocked_queue_total": 0,
+        "validation_plan_avg_queue_size_per_plan": 0.0,
+        "validation_plan_avg_ready_queue_per_plan": 0.0,
+        "validation_plan_avg_blocked_queue_per_plan": 0.0,
+        "validation_plan_plans_primary_ready_param": 0,
+        "validation_plan_plans_primary_ready_endpoint": 0,
+        "validation_plan_plans_primary_blocked_param": 0,
+        "validation_plan_plans_primary_blocked_endpoint": 0,
+        "validation_plan_plans_primary_unavailable": 0,
+        "validation_plan_execution_priority_min": 0,
+        "validation_plan_execution_priority_max": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -711,6 +749,31 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         ),
         "validation_plan_parameterized_ratio": float(summary.get("parameterized_ratio") or 0.0),
         "validation_plan_endpoint_level_ratio": float(summary.get("endpoint_level_ratio") or 0.0),
+        "validation_plan_ready_param_items": _to_int_count(summary.get("ready_param_items"), 0),
+        "validation_plan_ready_endpoint_items": _to_int_count(summary.get("ready_endpoint_items"), 0),
+        "validation_plan_blocked_param_items": _to_int_count(summary.get("blocked_param_items"), 0),
+        "validation_plan_blocked_endpoint_items": _to_int_count(summary.get("blocked_endpoint_items"), 0),
+        "validation_plan_unavailable_items": _to_int_count(summary.get("unavailable_items"), 0),
+        "validation_plan_execution_lanes_present": _join_string_list(summary.get("execution_lanes_present")),
+        "validation_plan_highest_priority_plans": _to_int_count(summary.get("highest_priority_plans"), 0),
+        "validation_plan_ready_queue_total": _to_int_count(summary.get("ready_queue_total"), 0),
+        "validation_plan_blocked_queue_total": _to_int_count(summary.get("blocked_queue_total"), 0),
+        "validation_plan_avg_queue_size_per_plan": float(summary.get("avg_queue_size_per_plan") or 0.0),
+        "validation_plan_avg_ready_queue_per_plan": float(summary.get("avg_ready_queue_per_plan") or 0.0),
+        "validation_plan_avg_blocked_queue_per_plan": float(summary.get("avg_blocked_queue_per_plan") or 0.0),
+        "validation_plan_plans_primary_ready_param": _to_int_count(summary.get("plans_primary_ready_param"), 0),
+        "validation_plan_plans_primary_ready_endpoint": _to_int_count(
+            summary.get("plans_primary_ready_endpoint"), 0
+        ),
+        "validation_plan_plans_primary_blocked_param": _to_int_count(
+            summary.get("plans_primary_blocked_param"), 0
+        ),
+        "validation_plan_plans_primary_blocked_endpoint": _to_int_count(
+            summary.get("plans_primary_blocked_endpoint"), 0
+        ),
+        "validation_plan_plans_primary_unavailable": _to_int_count(summary.get("plans_primary_unavailable"), 0),
+        "validation_plan_execution_priority_min": _to_int_count(summary.get("execution_priority_min"), 0),
+        "validation_plan_execution_priority_max": _to_int_count(summary.get("execution_priority_max"), 0),
     }
 
 

@@ -53,6 +53,18 @@ _EXECUTION_MODE_PARAM_ONLY = "param_only"
 _EXECUTION_MODE_ENDPOINT_ONLY = "endpoint_only"
 _EXECUTION_MODE_HYBRID = "hybrid"
 _EXECUTION_MODE_UNAVAILABLE = "unavailable"
+_EXECUTION_LANE_READY_PARAM = "ready_param"
+_EXECUTION_LANE_READY_ENDPOINT = "ready_endpoint"
+_EXECUTION_LANE_BLOCKED_PARAM = "blocked_param"
+_EXECUTION_LANE_BLOCKED_ENDPOINT = "blocked_endpoint"
+_EXECUTION_LANE_UNAVAILABLE = "unavailable"
+_EXECUTION_LANE_PRIORITY = {
+    _EXECUTION_LANE_READY_PARAM: 1,
+    _EXECUTION_LANE_READY_ENDPOINT: 2,
+    _EXECUTION_LANE_BLOCKED_PARAM: 3,
+    _EXECUTION_LANE_BLOCKED_ENDPOINT: 4,
+    _EXECUTION_LANE_UNAVAILABLE: 5,
+}
 
 
 def _empty_contract() -> dict[str, Any]:
@@ -150,6 +162,25 @@ def _empty_contract() -> dict[str, Any]:
             "plans_with_unavailable_surface": 0,
             "parameterized_ratio": 0.0,
             "endpoint_level_ratio": 0.0,
+            "ready_param_items": 0,
+            "ready_endpoint_items": 0,
+            "blocked_param_items": 0,
+            "blocked_endpoint_items": 0,
+            "unavailable_items": 0,
+            "execution_lanes_present": [],
+            "highest_priority_plans": 0,
+            "ready_queue_total": 0,
+            "blocked_queue_total": 0,
+            "avg_queue_size_per_plan": 0.0,
+            "avg_ready_queue_per_plan": 0.0,
+            "avg_blocked_queue_per_plan": 0.0,
+            "plans_primary_ready_param": 0,
+            "plans_primary_ready_endpoint": 0,
+            "plans_primary_blocked_param": 0,
+            "plans_primary_blocked_endpoint": 0,
+            "plans_primary_unavailable": 0,
+            "execution_priority_min": 0,
+            "execution_priority_max": 0,
         },
     }
 
@@ -186,6 +217,55 @@ def _stable_dedup_str_list(value: Any) -> list[str]:
 
 def _round_metric(value: float) -> float:
     return round(float(value), 3)
+
+
+def _safe_sort_value(value: Any, default: str = "-") -> str:
+    clean = _clean_str(value)
+    return clean if clean else default
+
+
+def _compute_execution_lane(
+    *,
+    mode: str,
+    execution_ready: bool,
+    parameterized: bool,
+    endpoint_level: bool,
+) -> str:
+    if mode == _EXECUTION_MODE_UNAVAILABLE:
+        return _EXECUTION_LANE_UNAVAILABLE
+    if execution_ready and parameterized:
+        return _EXECUTION_LANE_READY_PARAM
+    if execution_ready and endpoint_level:
+        return _EXECUTION_LANE_READY_ENDPOINT
+    if (not execution_ready) and parameterized:
+        return _EXECUTION_LANE_BLOCKED_PARAM
+    if (not execution_ready) and endpoint_level:
+        return _EXECUTION_LANE_BLOCKED_ENDPOINT
+    return _EXECUTION_LANE_UNAVAILABLE
+
+
+def _compute_execution_priority(lane: str) -> int:
+    return int(_EXECUTION_LANE_PRIORITY.get(_clean_str(lane), 5))
+
+
+def _build_execution_sort_key(
+    *,
+    lane: str,
+    priority: int,
+    target_url: str,
+    check_type: str,
+    target_source: str,
+    primary_surface: str,
+) -> str:
+    parts = [
+        _safe_sort_value(lane),
+        str(int(priority)),
+        _safe_sort_value(target_url),
+        _safe_sort_value(check_type),
+        _safe_sort_value(target_source),
+        _safe_sort_value(primary_surface),
+    ]
+    return "|".join(parts)
 
 
 def _build_artifact_index(finding_artifacts: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -303,6 +383,22 @@ def _build_check_plan(
         mode = _clean_str(execution_surface.get("mode"))
         parameterized = bool(mode == _EXECUTION_MODE_PARAM_ONLY)
         endpoint_level = bool(mode == _EXECUTION_MODE_ENDPOINT_ONLY)
+        execution_ready = bool(ready and all_required_available)
+        execution_lane = _compute_execution_lane(
+            mode=mode,
+            execution_ready=execution_ready,
+            parameterized=parameterized,
+            endpoint_level=endpoint_level,
+        )
+        execution_priority = _compute_execution_priority(execution_lane)
+        execution_sort_key = _build_execution_sort_key(
+            lane=execution_lane,
+            priority=execution_priority,
+            target_url=target_url,
+            check_type=check_type,
+            target_source=target_source,
+            primary_surface=_clean_str(execution_surface.get("primary_surface")),
+        )
         effective_target_count = (
             int(execution_surface.get("target_count") or 0)
             if parameterized
@@ -322,11 +418,14 @@ def _build_check_plan(
                 "target_source": target_source,
                 "comparison": comparison,
                 "baseline_inputs": baseline_inputs,
-                "execution_ready": bool(ready and all_required_available),
+                "execution_ready": execution_ready,
                 "execution_surface": execution_surface,
                 "parameterized": parameterized,
                 "endpoint_level": endpoint_level,
                 "effective_target_count": int(effective_target_count),
+                "execution_lane": execution_lane,
+                "execution_priority": int(execution_priority),
+                "execution_sort_key": execution_sort_key,
             }
         )
     return check_plan
@@ -479,6 +578,58 @@ def build_validation_plan(
             if isinstance(check_item, Mapping) and bool(check_item.get("execution_ready"))
         )
         blocked_checks = max(len(check_plan) - execution_ready_checks, 0)
+        execution_lanes_present = sorted(
+            {
+                _clean_str(check_item.get("execution_lane"))
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                and _clean_str(check_item.get("execution_lane")) in _EXECUTION_LANE_PRIORITY
+            }
+        )
+        execution_priorities = [
+            _compute_execution_priority(check_item.get("execution_lane"))
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+        ]
+        highest_execution_priority = min(execution_priorities) if execution_priorities else 0
+        ready_checks_sorted = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+            and _clean_str(check_item.get("execution_lane"))
+            in {_EXECUTION_LANE_READY_PARAM, _EXECUTION_LANE_READY_ENDPOINT}
+        )
+        blocked_checks_sorted = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
+            and _clean_str(check_item.get("execution_lane"))
+            in {
+                _EXECUTION_LANE_BLOCKED_PARAM,
+                _EXECUTION_LANE_BLOCKED_ENDPOINT,
+                _EXECUTION_LANE_UNAVAILABLE,
+            }
+        )
+        if check_plan:
+            primary_check_item = min(
+                (
+                    check_item
+                    for check_item in check_plan
+                    if isinstance(check_item, Mapping)
+                ),
+                key=lambda item: (
+                    _compute_execution_priority(item.get("execution_lane")),
+                    _safe_sort_value(item.get("execution_sort_key")),
+                ),
+                default={},
+            )
+            primary_execution_lane = (
+                _clean_str(primary_check_item.get("execution_lane"))
+                if isinstance(primary_check_item, Mapping)
+                else ""
+            )
+        else:
+            primary_execution_lane = ""
 
         plan_items.append(
             {
@@ -534,6 +685,12 @@ def build_validation_plan(
                 "total_effective_targets": int(total_effective_targets),
                 "has_parameterized_checks": bool(parameterized_checks > 0),
                 "has_endpoint_level_checks": bool(endpoint_level_checks > 0),
+                "execution_lanes_present": execution_lanes_present,
+                "highest_execution_priority": int(highest_execution_priority),
+                "ready_checks_sorted": int(ready_checks_sorted),
+                "blocked_checks_sorted": int(blocked_checks_sorted),
+                "primary_execution_lane": primary_execution_lane,
+                "execution_queue_size": len(check_plan),
             }
         )
 
@@ -752,6 +909,56 @@ def build_validation_plan(
         if isinstance(check_item, Mapping) and bool(check_item.get("execution_ready"))
     )
     blocked_check_plan_items = max(total_check_plan_items - execution_ready_check_plan_items, 0)
+    ready_param_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and _clean_str(check_item.get("execution_lane")) == _EXECUTION_LANE_READY_PARAM
+    )
+    ready_endpoint_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str(check_item.get("execution_lane")) == _EXECUTION_LANE_READY_ENDPOINT
+    )
+    blocked_param_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str(check_item.get("execution_lane")) == _EXECUTION_LANE_BLOCKED_PARAM
+    )
+    blocked_endpoint_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str(check_item.get("execution_lane")) == _EXECUTION_LANE_BLOCKED_ENDPOINT
+    )
+    unavailable_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and _clean_str(check_item.get("execution_lane")) == _EXECUTION_LANE_UNAVAILABLE
+    )
+    execution_lanes_present = sorted(
+        {
+            _clean_str(check_item.get("execution_lane"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping)
+            and _clean_str(check_item.get("execution_lane")) in _EXECUTION_LANE_PRIORITY
+        }
+    )
+    all_execution_priorities = [
+        _compute_execution_priority(check_item.get("execution_lane"))
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+    ]
+    ready_queue_total = ready_param_items + ready_endpoint_items
+    blocked_queue_total = blocked_param_items + blocked_endpoint_items + unavailable_items
     plans_baseline_inputs_complete = sum(1 for item in plan_items if bool(item.get("baseline_inputs_complete")))
     plans_with_missing_baseline_fields = sum(1 for item in plan_items if bool(item.get("missing_baseline_fields")))
     missing_body_preview_items = sum(
@@ -994,5 +1201,40 @@ def build_validation_plan(
         "endpoint_level_ratio": _round_metric(
             (endpoint_level_check_plan_items / total_check_plan_items) if total_check_plan_items else 0.0
         ),
+        "ready_param_items": ready_param_items,
+        "ready_endpoint_items": ready_endpoint_items,
+        "blocked_param_items": blocked_param_items,
+        "blocked_endpoint_items": blocked_endpoint_items,
+        "unavailable_items": unavailable_items,
+        "execution_lanes_present": execution_lanes_present,
+        "highest_priority_plans": sum(
+            1 for item in plan_items if _safe_int(item.get("highest_execution_priority"), 0) == 1
+        ),
+        "ready_queue_total": ready_queue_total,
+        "blocked_queue_total": blocked_queue_total,
+        "avg_queue_size_per_plan": _round_metric((total_check_plan_items / total_plans) if total_plans else 0.0),
+        "avg_ready_queue_per_plan": _round_metric((ready_queue_total / total_plans) if total_plans else 0.0),
+        "avg_blocked_queue_per_plan": _round_metric((blocked_queue_total / total_plans) if total_plans else 0.0),
+        "plans_primary_ready_param": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_execution_lane")) == _EXECUTION_LANE_READY_PARAM
+        ),
+        "plans_primary_ready_endpoint": sum(
+            1
+            for item in plan_items
+            if _clean_str(item.get("primary_execution_lane")) == _EXECUTION_LANE_READY_ENDPOINT
+        ),
+        "plans_primary_blocked_param": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_execution_lane")) == _EXECUTION_LANE_BLOCKED_PARAM
+        ),
+        "plans_primary_blocked_endpoint": sum(
+            1
+            for item in plan_items
+            if _clean_str(item.get("primary_execution_lane")) == _EXECUTION_LANE_BLOCKED_ENDPOINT
+        ),
+        "plans_primary_unavailable": sum(
+            1 for item in plan_items if _clean_str(item.get("primary_execution_lane")) == _EXECUTION_LANE_UNAVAILABLE
+        ),
+        "execution_priority_min": min(all_execution_priorities) if all_execution_priorities else 0,
+        "execution_priority_max": max(all_execution_priorities) if all_execution_priorities else 0,
     }
     return payload
