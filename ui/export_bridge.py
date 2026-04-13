@@ -85,6 +85,18 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_targets_from_request_url",
     "validation_plan_targets_from_discovery_base_url",
     "validation_plan_targets_from_unknown",
+    "validation_plan_total_check_plan_items",
+    "validation_plan_ready_check_plan_items",
+    "validation_plan_reflection_probe_items",
+    "validation_plan_error_probe_items",
+    "validation_plan_status_probe_items",
+    "validation_plan_param_required_check_items",
+    "validation_plan_non_param_check_items",
+    "validation_plan_payload_families_present",
+    "validation_plan_check_types_present",
+    "validation_plan_plans_with_check_plan",
+    "validation_plan_plans_without_check_plan",
+    "validation_plan_avg_check_plan_items_per_plan",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -437,6 +449,18 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_targets_from_request_url": 0,
         "validation_plan_targets_from_discovery_base_url": 0,
         "validation_plan_targets_from_unknown": 0,
+        "validation_plan_total_check_plan_items": 0,
+        "validation_plan_ready_check_plan_items": 0,
+        "validation_plan_reflection_probe_items": 0,
+        "validation_plan_error_probe_items": 0,
+        "validation_plan_status_probe_items": 0,
+        "validation_plan_param_required_check_items": 0,
+        "validation_plan_non_param_check_items": 0,
+        "validation_plan_payload_families_present": "",
+        "validation_plan_check_types_present": "",
+        "validation_plan_plans_with_check_plan": 0,
+        "validation_plan_plans_without_check_plan": 0,
+        "validation_plan_avg_check_plan_items_per_plan": 0.0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -486,6 +510,18 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_targets_from_request_url": _to_int_count(summary.get("targets_from_request_url"), 0),
         "validation_plan_targets_from_discovery_base_url": _to_int_count(summary.get("targets_from_discovery_base_url"), 0),
         "validation_plan_targets_from_unknown": _to_int_count(summary.get("targets_from_unknown"), 0),
+        "validation_plan_total_check_plan_items": _to_int_count(summary.get("total_check_plan_items"), 0),
+        "validation_plan_ready_check_plan_items": _to_int_count(summary.get("ready_check_plan_items"), 0),
+        "validation_plan_reflection_probe_items": _to_int_count(summary.get("reflection_probe_items"), 0),
+        "validation_plan_error_probe_items": _to_int_count(summary.get("error_probe_items"), 0),
+        "validation_plan_status_probe_items": _to_int_count(summary.get("status_probe_items"), 0),
+        "validation_plan_param_required_check_items": _to_int_count(summary.get("param_required_check_items"), 0),
+        "validation_plan_non_param_check_items": _to_int_count(summary.get("non_param_check_items"), 0),
+        "validation_plan_payload_families_present": _join_string_list(summary.get("payload_families_present")),
+        "validation_plan_check_types_present": _join_string_list(summary.get("check_types_present")),
+        "validation_plan_plans_with_check_plan": _to_int_count(summary.get("plans_with_check_plan"), 0),
+        "validation_plan_plans_without_check_plan": _to_int_count(summary.get("plans_without_check_plan"), 0),
+        "validation_plan_avg_check_plan_items_per_plan": float(summary.get("avg_check_plan_items_per_plan") or 0.0),
     }
 
 

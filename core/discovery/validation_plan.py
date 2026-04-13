@@ -12,6 +12,11 @@ _CHECK_ORDER = (
     _CHECK_ERROR_PATTERN_DIFF,
     _CHECK_STATUS_DIFF,
 )
+_CHECK_PAYLOAD_FAMILY = {
+    _CHECK_REFLECTION_DIFF: "reflection_probe",
+    _CHECK_ERROR_PATTERN_DIFF: "error_probe",
+    _CHECK_STATUS_DIFF: "status_probe",
+}
 _EVIDENCE_RANK = {"": 0, "low": 1, "medium": 2, "strong": 3}
 
 
@@ -49,6 +54,18 @@ def _empty_contract() -> dict[str, Any]:
             "targets_from_request_url": 0,
             "targets_from_discovery_base_url": 0,
             "targets_from_unknown": 0,
+            "total_check_plan_items": 0,
+            "ready_check_plan_items": 0,
+            "reflection_probe_items": 0,
+            "error_probe_items": 0,
+            "status_probe_items": 0,
+            "param_required_check_items": 0,
+            "non_param_check_items": 0,
+            "payload_families_present": [],
+            "check_types_present": [],
+            "plans_with_check_plan": 0,
+            "plans_without_check_plan": 0,
+            "avg_check_plan_items_per_plan": 0.0,
         },
     }
 
@@ -132,6 +149,45 @@ def _compute_evidence_level(item: Mapping[str, Any], ready_for_validation: bool)
     return ""
 
 
+def _build_check_plan(
+    *,
+    suggested_checks: list[str],
+    param_targets_count: int,
+    ready_for_validation: bool,
+    safe_mode: bool,
+    target_url: str,
+    target_source: str,
+) -> list[dict[str, Any]]:
+    if not suggested_checks:
+        return []
+
+    requires_param_target = bool(param_targets_count > 0)
+    seen: set[str] = set()
+    check_plan: list[dict[str, Any]] = []
+    for raw_check in suggested_checks:
+        check_type = _clean_str(raw_check)
+        if check_type in seen:
+            continue
+        seen.add(check_type)
+        if check_type not in _CHECK_ORDER:
+            continue
+
+        check_plan.append(
+            {
+                "check_type": check_type,
+                "payload_family": _CHECK_PAYLOAD_FAMILY[check_type],
+                "requires_param_target": requires_param_target,
+                "param_targets_count": int(param_targets_count),
+                "baseline_required": True,
+                "ready": bool(ready_for_validation and safe_mode and check_type in _CHECK_ORDER),
+                "safe_mode": bool(safe_mode),
+                "target_url": target_url,
+                "target_source": target_source,
+            }
+        )
+    return check_plan
+
+
 def build_validation_plan(
     *,
     replay_manifest: Mapping[str, Any] | None = None,
@@ -191,6 +247,15 @@ def build_validation_plan(
             and bool(method)
         )
         evidence_level = _compute_evidence_level(manifest_item, ready_for_validation)
+        safe_mode = True
+        check_plan = _build_check_plan(
+            suggested_checks=suggested_checks,
+            param_targets_count=len(param_targets),
+            ready_for_validation=ready_for_validation,
+            safe_mode=safe_mode,
+            target_url=target_url,
+            target_source=target_source,
+        )
 
         plan_items.append(
             {
@@ -202,9 +267,10 @@ def build_validation_plan(
                 "artifact_types": artifact_types,
                 "param_targets": param_targets,
                 "suggested_checks": suggested_checks,
+                "check_plan": check_plan,
                 "evidence_level": evidence_level,
                 "ready_for_validation": ready_for_validation,
-                "safe_mode": True,
+                "safe_mode": safe_mode,
             }
         )
 
@@ -237,7 +303,56 @@ def build_validation_plan(
     payload["all"] = plan_items
     total_plans = len(plan_items)
     total_checks = sum(len(item.get("suggested_checks") or []) for item in plan_items)
+    total_check_plan_items = sum(len(item.get("check_plan") or []) for item in plan_items)
+    ready_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("ready"))
+    )
+    reflection_probe_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and _clean_str(check_item.get("payload_family")) == "reflection_probe"
+    )
+    error_probe_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and _clean_str(check_item.get("payload_family")) == "error_probe"
+    )
+    status_probe_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and _clean_str(check_item.get("payload_family")) == "status_probe"
+    )
+    param_required_check_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("requires_param_target"))
+    )
+    non_param_check_items = max(total_check_plan_items - param_required_check_items, 0)
+    payload_families_present = sorted(
+        {
+            _clean_str(check_item.get("payload_family"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping) and _clean_str(check_item.get("payload_family"))
+        }
+    )
+    check_types_present = sorted(
+        {
+            _clean_str(check_item.get("check_type"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping) and _clean_str(check_item.get("check_type"))
+        }
+    )
     plans_with_checks = sum(1 for item in plan_items if bool(item.get("suggested_checks")))
+    plans_with_check_plan = sum(1 for item in plan_items if bool(item.get("check_plan")))
     candidate_targets_total = sum(len(item.get("artifact_ids") or []) for item in plan_items)
     all_candidate_ids = {
         _clean_str(artifact_id)
@@ -333,5 +448,19 @@ def build_validation_plan(
         "targets_from_request_url": int(target_source_counts.get("request_url", 0)),
         "targets_from_discovery_base_url": int(target_source_counts.get("discovery_base_url", 0)),
         "targets_from_unknown": int(target_source_counts.get("unknown", 0)),
+        "total_check_plan_items": total_check_plan_items,
+        "ready_check_plan_items": ready_check_plan_items,
+        "reflection_probe_items": reflection_probe_items,
+        "error_probe_items": error_probe_items,
+        "status_probe_items": status_probe_items,
+        "param_required_check_items": param_required_check_items,
+        "non_param_check_items": non_param_check_items,
+        "payload_families_present": payload_families_present,
+        "check_types_present": check_types_present,
+        "plans_with_check_plan": plans_with_check_plan,
+        "plans_without_check_plan": max(total_plans - plans_with_check_plan, 0),
+        "avg_check_plan_items_per_plan": _round_metric(
+            (total_check_plan_items / total_plans) if total_plans else 0.0
+        ),
     }
     return payload
