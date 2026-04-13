@@ -128,6 +128,24 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validation_plan_plans_blocked_by_content_type",
     "validation_plan_execution_ready_ratio",
     "validation_plan_baseline_completeness_ratio",
+    "validation_plan_parameterized_check_plan_items",
+    "validation_plan_endpoint_level_check_plan_items",
+    "validation_plan_plans_with_parameterized_checks",
+    "validation_plan_plans_with_endpoint_level_checks",
+    "validation_plan_total_effective_targets",
+    "validation_plan_avg_effective_targets_per_plan",
+    "validation_plan_execution_modes_present",
+    "validation_plan_surface_types_present",
+    "validation_plan_param_only_items",
+    "validation_plan_endpoint_only_items",
+    "validation_plan_hybrid_items",
+    "validation_plan_unavailable_surface_items",
+    "validation_plan_plans_param_only",
+    "validation_plan_plans_endpoint_only",
+    "validation_plan_plans_hybrid",
+    "validation_plan_plans_with_unavailable_surface",
+    "validation_plan_parameterized_ratio",
+    "validation_plan_endpoint_level_ratio",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -523,6 +541,24 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         "validation_plan_plans_blocked_by_content_type": 0,
         "validation_plan_execution_ready_ratio": 0.0,
         "validation_plan_baseline_completeness_ratio": 0.0,
+        "validation_plan_parameterized_check_plan_items": 0,
+        "validation_plan_endpoint_level_check_plan_items": 0,
+        "validation_plan_plans_with_parameterized_checks": 0,
+        "validation_plan_plans_with_endpoint_level_checks": 0,
+        "validation_plan_total_effective_targets": 0,
+        "validation_plan_avg_effective_targets_per_plan": 0.0,
+        "validation_plan_execution_modes_present": "",
+        "validation_plan_surface_types_present": "",
+        "validation_plan_param_only_items": 0,
+        "validation_plan_endpoint_only_items": 0,
+        "validation_plan_hybrid_items": 0,
+        "validation_plan_unavailable_surface_items": 0,
+        "validation_plan_plans_param_only": 0,
+        "validation_plan_plans_endpoint_only": 0,
+        "validation_plan_plans_hybrid": 0,
+        "validation_plan_plans_with_unavailable_surface": 0,
+        "validation_plan_parameterized_ratio": 0.0,
+        "validation_plan_endpoint_level_ratio": 0.0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -645,6 +681,36 @@ def derive_validation_plan_summary_fields(result: Any) -> dict[str, Any]:
         ),
         "validation_plan_execution_ready_ratio": float(summary.get("execution_ready_ratio") or 0.0),
         "validation_plan_baseline_completeness_ratio": float(summary.get("baseline_completeness_ratio") or 0.0),
+        "validation_plan_parameterized_check_plan_items": _to_int_count(
+            summary.get("parameterized_check_plan_items"), 0
+        ),
+        "validation_plan_endpoint_level_check_plan_items": _to_int_count(
+            summary.get("endpoint_level_check_plan_items"), 0
+        ),
+        "validation_plan_plans_with_parameterized_checks": _to_int_count(
+            summary.get("plans_with_parameterized_checks"), 0
+        ),
+        "validation_plan_plans_with_endpoint_level_checks": _to_int_count(
+            summary.get("plans_with_endpoint_level_checks"), 0
+        ),
+        "validation_plan_total_effective_targets": _to_int_count(summary.get("total_effective_targets"), 0),
+        "validation_plan_avg_effective_targets_per_plan": float(
+            summary.get("avg_effective_targets_per_plan") or 0.0
+        ),
+        "validation_plan_execution_modes_present": _join_string_list(summary.get("execution_modes_present")),
+        "validation_plan_surface_types_present": _join_string_list(summary.get("surface_types_present")),
+        "validation_plan_param_only_items": _to_int_count(summary.get("param_only_items"), 0),
+        "validation_plan_endpoint_only_items": _to_int_count(summary.get("endpoint_only_items"), 0),
+        "validation_plan_hybrid_items": _to_int_count(summary.get("hybrid_items"), 0),
+        "validation_plan_unavailable_surface_items": _to_int_count(summary.get("unavailable_surface_items"), 0),
+        "validation_plan_plans_param_only": _to_int_count(summary.get("plans_param_only"), 0),
+        "validation_plan_plans_endpoint_only": _to_int_count(summary.get("plans_endpoint_only"), 0),
+        "validation_plan_plans_hybrid": _to_int_count(summary.get("plans_hybrid"), 0),
+        "validation_plan_plans_with_unavailable_surface": _to_int_count(
+            summary.get("plans_with_unavailable_surface"), 0
+        ),
+        "validation_plan_parameterized_ratio": float(summary.get("parameterized_ratio") or 0.0),
+        "validation_plan_endpoint_level_ratio": float(summary.get("endpoint_level_ratio") or 0.0),
     }
 
 

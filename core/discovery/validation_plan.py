@@ -45,6 +45,14 @@ _CHECK_COMPARISON_CONTRACT = {
 }
 _EVIDENCE_RANK = {"": 0, "low": 1, "medium": 2, "strong": 3}
 _BASELINE_FIELD_ORDER = ("body_preview", "status_code", "body_hash", "content_type")
+_EXECUTION_SURFACE_QUERY_PARAM = "query_param"
+_EXECUTION_SURFACE_FORM_FIELD = "form_field"
+_EXECUTION_SURFACE_ENDPOINT = "endpoint"
+_EXECUTION_SURFACE_UNKNOWN = "unknown"
+_EXECUTION_MODE_PARAM_ONLY = "param_only"
+_EXECUTION_MODE_ENDPOINT_ONLY = "endpoint_only"
+_EXECUTION_MODE_HYBRID = "hybrid"
+_EXECUTION_MODE_UNAVAILABLE = "unavailable"
 
 
 def _empty_contract() -> dict[str, Any]:
@@ -124,6 +132,24 @@ def _empty_contract() -> dict[str, Any]:
             "plans_blocked_by_content_type": 0,
             "execution_ready_ratio": 0.0,
             "baseline_completeness_ratio": 0.0,
+            "parameterized_check_plan_items": 0,
+            "endpoint_level_check_plan_items": 0,
+            "plans_with_parameterized_checks": 0,
+            "plans_with_endpoint_level_checks": 0,
+            "total_effective_targets": 0,
+            "avg_effective_targets_per_plan": 0.0,
+            "execution_modes_present": [],
+            "surface_types_present": [],
+            "param_only_items": 0,
+            "endpoint_only_items": 0,
+            "hybrid_items": 0,
+            "unavailable_surface_items": 0,
+            "plans_param_only": 0,
+            "plans_endpoint_only": 0,
+            "plans_hybrid": 0,
+            "plans_with_unavailable_surface": 0,
+            "parameterized_ratio": 0.0,
+            "endpoint_level_ratio": 0.0,
         },
     }
 
@@ -210,7 +236,7 @@ def _compute_evidence_level(item: Mapping[str, Any], ready_for_validation: bool)
 def _build_check_plan(
     *,
     suggested_checks: list[str],
-    param_targets_count: int,
+    param_targets: list[str],
     ready_for_validation: bool,
     safe_mode: bool,
     target_url: str,
@@ -220,6 +246,8 @@ def _build_check_plan(
     if not suggested_checks:
         return []
 
+    clean_param_targets = _stable_dedup_str_list(param_targets)
+    param_targets_count = len(clean_param_targets)
     requires_param_target = bool(param_targets_count > 0)
     seen: set[str] = set()
     check_plan: list[dict[str, Any]] = []
@@ -247,6 +275,39 @@ def _build_check_plan(
             "missing_fields": missing_fields,
         }
         ready = bool(ready_for_validation and safe_mode and check_type in _CHECK_ORDER)
+        has_target_url = bool(_clean_str(target_url))
+        if not has_target_url and not clean_param_targets:
+            execution_surface = {
+                "mode": _EXECUTION_MODE_UNAVAILABLE,
+                "target_count": 0,
+                "targets_present": False,
+                "surface_types": [],
+                "primary_surface": _EXECUTION_SURFACE_UNKNOWN,
+            }
+        elif clean_param_targets:
+            execution_surface = {
+                "mode": _EXECUTION_MODE_PARAM_ONLY,
+                "target_count": param_targets_count,
+                "targets_present": True,
+                "surface_types": [_EXECUTION_SURFACE_QUERY_PARAM],
+                "primary_surface": _EXECUTION_SURFACE_QUERY_PARAM,
+            }
+        else:
+            execution_surface = {
+                "mode": _EXECUTION_MODE_ENDPOINT_ONLY,
+                "target_count": 0,
+                "targets_present": False,
+                "surface_types": [_EXECUTION_SURFACE_ENDPOINT],
+                "primary_surface": _EXECUTION_SURFACE_ENDPOINT,
+            }
+        mode = _clean_str(execution_surface.get("mode"))
+        parameterized = bool(mode == _EXECUTION_MODE_PARAM_ONLY)
+        endpoint_level = bool(mode == _EXECUTION_MODE_ENDPOINT_ONLY)
+        effective_target_count = (
+            int(execution_surface.get("target_count") or 0)
+            if parameterized
+            else (1 if endpoint_level and has_target_url else 0)
+        )
 
         check_plan.append(
             {
@@ -262,6 +323,10 @@ def _build_check_plan(
                 "comparison": comparison,
                 "baseline_inputs": baseline_inputs,
                 "execution_ready": bool(ready and all_required_available),
+                "execution_surface": execution_surface,
+                "parameterized": parameterized,
+                "endpoint_level": endpoint_level,
+                "effective_target_count": int(effective_target_count),
             }
         )
     return check_plan
@@ -360,12 +425,44 @@ def build_validation_plan(
         }
         check_plan = _build_check_plan(
             suggested_checks=suggested_checks,
-            param_targets_count=len(param_targets),
+            param_targets=param_targets,
             ready_for_validation=ready_for_validation,
             safe_mode=safe_mode,
             target_url=target_url,
             target_source=target_source,
             baseline_availability=baseline_availability,
+        )
+        execution_modes_present = sorted(
+            {
+                _clean_str((check_item.get("execution_surface") or {}).get("mode"))
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                and _clean_str((check_item.get("execution_surface") or {}).get("mode"))
+            }
+        )
+        surface_types_present = sorted(
+            {
+                _clean_str(surface_type)
+                for check_item in check_plan
+                if isinstance(check_item, Mapping)
+                for surface_type in ((check_item.get("execution_surface") or {}).get("surface_types") or [])
+                if _clean_str(surface_type)
+            }
+        )
+        parameterized_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping) and bool(check_item.get("parameterized"))
+        )
+        endpoint_level_checks = sum(
+            1
+            for check_item in check_plan
+            if isinstance(check_item, Mapping) and bool(check_item.get("endpoint_level"))
+        )
+        total_effective_targets = sum(
+            _safe_int(check_item.get("effective_target_count"), 0)
+            for check_item in check_plan
+            if isinstance(check_item, Mapping)
         )
         missing_baseline_fields = sorted(
             {
@@ -430,6 +527,13 @@ def build_validation_plan(
                 "execution_ready_checks": execution_ready_checks,
                 "blocked_checks": blocked_checks,
                 "execution_blockers_present": list(missing_baseline_fields),
+                "execution_modes_present": execution_modes_present,
+                "surface_types_present": surface_types_present,
+                "parameterized_checks": parameterized_checks,
+                "endpoint_level_checks": endpoint_level_checks,
+                "total_effective_targets": int(total_effective_targets),
+                "has_parameterized_checks": bool(parameterized_checks > 0),
+                "has_endpoint_level_checks": bool(endpoint_level_checks > 0),
             }
         )
 
@@ -468,6 +572,71 @@ def build_validation_plan(
         for item in plan_items
         for check_item in (item.get("check_plan") or [])
         if isinstance(check_item, Mapping) and bool(check_item.get("ready"))
+    )
+    parameterized_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("parameterized"))
+    )
+    endpoint_level_check_plan_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping) and bool(check_item.get("endpoint_level"))
+    )
+    total_effective_targets = sum(
+        _safe_int(check_item.get("effective_target_count"), 0)
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+    )
+    execution_modes_present = sorted(
+        {
+            _clean_str((check_item.get("execution_surface") or {}).get("mode"))
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping)
+            and _clean_str((check_item.get("execution_surface") or {}).get("mode"))
+        }
+    )
+    surface_types_present = sorted(
+        {
+            _clean_str(surface_type)
+            for item in plan_items
+            for check_item in (item.get("check_plan") or [])
+            if isinstance(check_item, Mapping)
+            for surface_type in ((check_item.get("execution_surface") or {}).get("surface_types") or [])
+            if _clean_str(surface_type)
+        }
+    )
+    param_only_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("execution_surface") or {}).get("mode")) == _EXECUTION_MODE_PARAM_ONLY
+    )
+    endpoint_only_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("execution_surface") or {}).get("mode")) == _EXECUTION_MODE_ENDPOINT_ONLY
+    )
+    hybrid_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("execution_surface") or {}).get("mode")) == _EXECUTION_MODE_HYBRID
+    )
+    unavailable_surface_items = sum(
+        1
+        for item in plan_items
+        for check_item in (item.get("check_plan") or [])
+        if isinstance(check_item, Mapping)
+        and _clean_str((check_item.get("execution_surface") or {}).get("mode")) == _EXECUTION_MODE_UNAVAILABLE
     )
     reflection_probe_items = sum(
         1
@@ -794,6 +963,36 @@ def build_validation_plan(
         ),
         "baseline_completeness_ratio": _round_metric(
             (plans_baseline_inputs_complete / total_plans) if total_plans else 0.0
+        ),
+        "parameterized_check_plan_items": parameterized_check_plan_items,
+        "endpoint_level_check_plan_items": endpoint_level_check_plan_items,
+        "plans_with_parameterized_checks": sum(1 for item in plan_items if bool(item.get("has_parameterized_checks"))),
+        "plans_with_endpoint_level_checks": sum(
+            1 for item in plan_items if bool(item.get("has_endpoint_level_checks"))
+        ),
+        "total_effective_targets": int(total_effective_targets),
+        "avg_effective_targets_per_plan": _round_metric(
+            (total_effective_targets / total_plans) if total_plans else 0.0
+        ),
+        "execution_modes_present": execution_modes_present,
+        "surface_types_present": surface_types_present,
+        "param_only_items": param_only_items,
+        "endpoint_only_items": endpoint_only_items,
+        "hybrid_items": hybrid_items,
+        "unavailable_surface_items": unavailable_surface_items,
+        "plans_param_only": sum(1 for item in plan_items if _EXECUTION_MODE_PARAM_ONLY in (item.get("execution_modes_present") or [])),
+        "plans_endpoint_only": sum(
+            1 for item in plan_items if _EXECUTION_MODE_ENDPOINT_ONLY in (item.get("execution_modes_present") or [])
+        ),
+        "plans_hybrid": sum(1 for item in plan_items if _EXECUTION_MODE_HYBRID in (item.get("execution_modes_present") or [])),
+        "plans_with_unavailable_surface": sum(
+            1 for item in plan_items if _EXECUTION_MODE_UNAVAILABLE in (item.get("execution_modes_present") or [])
+        ),
+        "parameterized_ratio": _round_metric(
+            (parameterized_check_plan_items / total_check_plan_items) if total_check_plan_items else 0.0
+        ),
+        "endpoint_level_ratio": _round_metric(
+            (endpoint_level_check_plan_items / total_check_plan_items) if total_check_plan_items else 0.0
         ),
     }
     return payload
