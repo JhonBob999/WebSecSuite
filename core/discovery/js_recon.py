@@ -99,6 +99,27 @@ def _empty_endpoint_candidate_summary() -> dict[str, int]:
     }
 
 
+def _empty_endpoint_linkage_summary() -> dict[str, int | float]:
+    return {
+        "endpoint_linkage_total": 0,
+        "endpoint_linkage_with_candidates": 0,
+        "endpoint_linkage_unique_sources": 0,
+        "endpoint_linkage_inline_sources": 0,
+        "endpoint_linkage_external_sources": 0,
+        "endpoint_linkage_internal_sources": 0,
+        "endpoint_linkage_multi_candidate_sources": 0,
+        "endpoint_linkage_api_sources": 0,
+        "endpoint_linkage_graphql_sources": 0,
+        "endpoint_linkage_auth_sources": 0,
+        "endpoint_linkage_login_sources": 0,
+        "endpoint_linkage_admin_sources": 0,
+        "endpoint_linkage_php_sources": 0,
+        "endpoint_linkage_route_sources": 0,
+        "endpoint_linkage_max_candidates_per_source": 0,
+        "endpoint_linkage_avg_candidates_per_source": 0.0,
+    }
+
+
 def _clean_endpoint_candidate_value(raw: str) -> str:
     value = str(raw or "").strip()
     if not value:
@@ -362,9 +383,10 @@ def _collect_endpoint_candidates(
     for inline_item in inline_raw_items:
         text = str(inline_item.get("text") or "")
         idx = int(inline_item.get("index") or 0)
+        inline_sha1 = str(inline_item.get("sha1") or "").strip()
         if not text.strip():
             continue
-        source_ref = source_page_url or f"inline_script_{idx}"
+        source_ref = inline_sha1 or source_page_url or f"inline_script_{idx}"
         _put(_build_endpoint_candidate("fetch(...)", "inline_js", source_ref, base_host, "fetch_call_hint", force_category="xhr_hint") if re.search(r"\bfetch\s*\(", text, re.IGNORECASE) else None)
         _put(_build_endpoint_candidate("axios(...)", "inline_js", source_ref, base_host, "axios_call_hint", force_category="xhr_hint") if re.search(r"\baxios(?:\.[a-z]+)?\s*\(", text, re.IGNORECASE) else None)
         _put(
@@ -412,11 +434,153 @@ def _collect_endpoint_candidates(
     return endpoint_candidates, summary
 
 
+def _build_endpoint_linkage(
+    *,
+    endpoint_candidates: list[dict[str, Any]],
+    external_scripts: list[dict[str, Any]],
+    inline_scripts: list[dict[str, Any]],
+    page_sources: list[dict[str, Any]],
+    base_host: str,
+) -> tuple[list[dict[str, Any]], dict[str, int | float]]:
+    source_meta: dict[tuple[str, str], dict[str, str]] = {}
+    for script in external_scripts:
+        src = str(script.get("src") or "").strip()
+        absolute_url = str(script.get("absolute_url") or "").strip()
+        source_ref = absolute_url or src
+        if not source_ref:
+            continue
+        common_meta = {
+            "source_page_url": str(script.get("source_page_url") or ""),
+            "source_page_host": str(script.get("source_page_host") or ""),
+            "source_page_path": str(script.get("source_page_path") or ""),
+        }
+        source_meta[("script_src", source_ref)] = {"source_label": src or absolute_url, **common_meta}
+        source_meta[("external_js", source_ref)] = {"source_label": absolute_url or src, **common_meta}
+    for inline in inline_scripts:
+        sha1_value = str(inline.get("sha1") or "").strip()
+        if not sha1_value:
+            continue
+        source_meta[("inline_js", sha1_value)] = {
+            "source_page_url": str(inline.get("source_page_url") or ""),
+            "source_page_host": str(inline.get("source_page_host") or ""),
+            "source_page_path": str(inline.get("source_page_path") or ""),
+            "source_label": f"inline:{sha1_value[:12]}",
+        }
+    for page in page_sources:
+        page_url = str(page.get("page_url") or "").strip()
+        if not page_url:
+            continue
+        source_meta[("other existing passive source", page_url)] = {
+            "source_page_url": page_url,
+            "source_page_host": str(page.get("page_host") or ""),
+            "source_page_path": str(page.get("page_path") or ""),
+            "source_label": page_url,
+        }
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for candidate in endpoint_candidates:
+        source_kind = str(candidate.get("source_kind") or "other existing passive source")
+        source_ref = str(candidate.get("source_ref") or "")
+        if not source_ref:
+            source_ref = str(candidate.get("source_page_url") or "")
+        grouped.setdefault((source_kind, source_ref), []).append(candidate)
+
+    linkage_items: list[dict[str, Any]] = []
+    for source_kind, source_ref in sorted(grouped.keys(), key=lambda item: (item[0], item[1])):
+        candidates = grouped.get((source_kind, source_ref), [])
+        meta = source_meta.get((source_kind, source_ref), {})
+        source_page_url = str(meta.get("source_page_url") or "")
+        source_page_host = str(meta.get("source_page_host") or "")
+        source_page_path = str(meta.get("source_page_path") or "")
+        if not source_page_url and page_sources:
+            source_page_url = str(page_sources[0].get("page_url") or "")
+            source_page_host = source_page_host or str(page_sources[0].get("page_host") or "")
+            source_page_path = source_page_path or str(page_sources[0].get("page_path") or "")
+        source_label = str(meta.get("source_label") or "") or source_ref[:120]
+
+        seen_values: set[str] = set()
+        candidate_values: list[str] = []
+        categories_present: list[str] = []
+        category_counts: dict[str, int] = {}
+        internal_hint_count = 0
+        external_hint_count = 0
+        for item in sorted(candidates, key=_candidate_sort_key):
+            normalized_value = str(item.get("normalized_value") or "")
+            candidate_value = str(item.get("value") or "")
+            if normalized_value and normalized_value not in seen_values:
+                seen_values.add(normalized_value)
+                candidate_values.append((candidate_value or normalized_value)[:180])
+            category = str(item.get("category") or "")
+            if category and category not in categories_present:
+                categories_present.append(category)
+            category_counts[category] = category_counts.get(category, 0) + 1
+            if bool(item.get("internal_hint")):
+                internal_hint_count += 1
+            if bool(item.get("external_hint")):
+                external_hint_count += 1
+
+        top_category = ""
+        if category_counts:
+            top_category = sorted(
+                category_counts.items(),
+                key=lambda kv: (-kv[1], _ENDPOINT_CATEGORY_ORDER.index(kv[0]) if kv[0] in _ENDPOINT_CATEGORY_ORDER else len(_ENDPOINT_CATEGORY_ORDER), kv[0]),
+            )[0][0]
+        linkage_key_raw = f"{source_kind}|{source_ref}|{source_page_url}"
+        linkage_key = hashlib.sha1(linkage_key_raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+        linkage_items.append(
+            {
+                "source_kind": source_kind,
+                "source_ref": source_ref,
+                "source_page_url": source_page_url,
+                "source_page_host": source_page_host,
+                "source_page_path": source_page_path,
+                "source_label": source_label,
+                "candidate_values": candidate_values,
+                "candidate_count": len(candidates),
+                "unique_candidate_count": len(candidate_values),
+                "categories_present": categories_present,
+                "internal_hint_count": internal_hint_count,
+                "external_hint_count": external_hint_count,
+                "api_like_count": category_counts.get("api", 0),
+                "graphql_like_count": category_counts.get("graphql", 0),
+                "auth_like_count": category_counts.get("auth", 0),
+                "login_like_count": category_counts.get("login", 0),
+                "admin_like_count": category_counts.get("admin", 0),
+                "php_like_count": category_counts.get("php", 0),
+                "route_like_count": category_counts.get("route", 0) + category_counts.get("relative_url", 0) + category_counts.get("absolute_url", 0),
+                "top_category": top_category,
+                "linkage_key": linkage_key,
+            }
+        )
+
+    summary = _empty_endpoint_linkage_summary()
+    summary["endpoint_linkage_total"] = len(linkage_items)
+    summary["endpoint_linkage_with_candidates"] = sum(1 for item in linkage_items if int(item.get("candidate_count") or 0) > 0)
+    summary["endpoint_linkage_unique_sources"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in linkage_items})
+    summary["endpoint_linkage_inline_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") == "inline_js")
+    summary["endpoint_linkage_external_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") in {"script_src", "external_js"})
+    summary["endpoint_linkage_internal_sources"] = sum(1 for item in linkage_items if str(item.get("source_page_host") or "").lower() == (base_host or ""))
+    summary["endpoint_linkage_multi_candidate_sources"] = sum(1 for item in linkage_items if int(item.get("unique_candidate_count") or 0) > 1)
+    summary["endpoint_linkage_api_sources"] = sum(1 for item in linkage_items if int(item.get("api_like_count") or 0) > 0)
+    summary["endpoint_linkage_graphql_sources"] = sum(1 for item in linkage_items if int(item.get("graphql_like_count") or 0) > 0)
+    summary["endpoint_linkage_auth_sources"] = sum(1 for item in linkage_items if int(item.get("auth_like_count") or 0) > 0)
+    summary["endpoint_linkage_login_sources"] = sum(1 for item in linkage_items if int(item.get("login_like_count") or 0) > 0)
+    summary["endpoint_linkage_admin_sources"] = sum(1 for item in linkage_items if int(item.get("admin_like_count") or 0) > 0)
+    summary["endpoint_linkage_php_sources"] = sum(1 for item in linkage_items if int(item.get("php_like_count") or 0) > 0)
+    summary["endpoint_linkage_route_sources"] = sum(1 for item in linkage_items if int(item.get("route_like_count") or 0) > 0)
+    summary["endpoint_linkage_max_candidates_per_source"] = max((int(item.get("unique_candidate_count") or 0) for item in linkage_items), default=0)
+    summary["endpoint_linkage_avg_candidates_per_source"] = (
+        float(sum(int(item.get("unique_candidate_count") or 0) for item in linkage_items) / len(linkage_items)) if linkage_items else 0.0
+    )
+    return linkage_items, summary
+
+
 def empty_js_recon_contract() -> dict[str, Any]:
     return {
         "external_scripts": [],
         "inline_scripts": [],
         "endpoint_candidates": [],
+        "endpoint_linkage": [],
         "page_sources": [],
         "summary": {
             "external_total": 0,
@@ -453,6 +617,7 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "avg_external_scripts_per_page": 0.0,
             "avg_inline_scripts_per_page": 0.0,
             **_empty_endpoint_candidate_summary(),
+            **_empty_endpoint_linkage_summary(),
         },
         "coverage": {
             "external_scripts_linked_ratio": 0.0,
@@ -760,7 +925,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "source_page_path": source_page_path,
             }
         )
-        inline_raw_items.append({"index": idx, "text": text})
+        inline_raw_items.append({"index": idx, "text": text, "sha1": hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()})
 
     external_total = len(external_scripts)
     external_script_urls = sorted({str(item.get("absolute_url") or "").strip() for item in external_scripts if str(item.get("absolute_url") or "").strip()})
@@ -815,6 +980,13 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         external_scripts=external_scripts,
         inline_raw_items=inline_raw_items,
     )
+    endpoint_linkage, endpoint_linkage_summary = _build_endpoint_linkage(
+        endpoint_candidates=endpoint_candidates,
+        external_scripts=external_scripts,
+        inline_scripts=inline_scripts,
+        page_sources=page_sources,
+        base_host=base_host,
+    )
     summary = {
         "external_total": external_total,
         "inline_total": len(inline_scripts),
@@ -850,6 +1022,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "avg_external_scripts_per_page": avg_external_scripts_per_page,
         "avg_inline_scripts_per_page": avg_inline_scripts_per_page,
         **endpoint_summary,
+        **endpoint_linkage_summary,
     }
     has_inventory = bool(external_scripts or inline_scripts)
     coverage = {
@@ -862,6 +1035,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "external_scripts": external_scripts,
         "inline_scripts": inline_scripts,
         "endpoint_candidates": endpoint_candidates,
+        "endpoint_linkage": endpoint_linkage,
         "page_sources": page_sources,
         "summary": summary,
         "coverage": coverage,
