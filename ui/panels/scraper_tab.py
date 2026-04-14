@@ -30,6 +30,7 @@ from ui.table_controller import TaskTableController
 from ui import export_bridge as xb
 from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
+from dialogs.results_viewer_dialog import ResultsViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
@@ -680,20 +681,7 @@ class ScraperTabController(QWidget):
                 return
 
             if col == Col.Results:
-                res_item = table.item(row, Col.Results)
-                # Если Results уже заполнен — показываем JSON (tooltip), НО НИЧЕГО не открываем
-                if res_item and (res_item.text() or res_item.toolTip()):
-                    tip = (res_item.toolTip() or "").strip()
-                    if tip:
-                        self._show_json_dialog("Results", tip)
-                    return
-                # Иначе (пусто) — фолбэк: открыть URL
-                url_item = table.item(row, Col.URL)
-                if url_item:
-                    tip = (url_item.toolTip() or url_item.text() or "").strip()
-                    full_url = tip.split("\n", 1)[0].strip()
-                    if full_url:
-                        QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
+                self.open_results_viewer_for_row(row)
                 return
 
             if col == Col.Params:
@@ -710,6 +698,17 @@ class ScraperTabController(QWidget):
                 self.log.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
             except Exception:
                 pass
+
+    def open_results_viewer_for_row(self, row: int):
+        if row < 0 or row >= self.ui.taskTable.rowCount():
+            return
+        task_id = self._task_id_by_row(row)
+        payload = {}
+        if task_id and isinstance(self.task_results, dict):
+            payload = self.task_results.get(task_id) or {}
+        if not payload:
+            payload = self._get_result_payload(row) or {}
+        ResultsViewerDialog(payload=payload, parent=self).exec()
 
     # --- утилиты ---
     def _open_path(self, path: str):
