@@ -26,6 +26,44 @@ _JS_ABSOLUTE_RE = re.compile(r"https?://[^\s'\"<>]{3,1024}", re.IGNORECASE)
 _JS_RELATIVE_RE = re.compile(r"(?<![\w:])(?:/|\.\.?/)[^\s'\"<>]{1,512}")
 _JS_FETCH_CALL_RE = re.compile(r"\bfetch\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
 _JS_AXIOS_CALL_RE = re.compile(r"\baxios(?:\.[a-z]+)?\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
+_PROTOCOL_RELATIVE_URL_RE = re.compile(r"^//(?P<host>[a-z0-9][a-z0-9.-]*|\[[0-9a-f:.]+\])(?::\d{2,5})?(?:/|$)", re.IGNORECASE)
+_HOST_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_ROUTE_EXTENSION_HINTS = (".php", ".json", ".js", ".map", ".txt", ".xml", ".graphql", ".api")
+_ROUTE_SIGNAL_HINTS = ("api", "auth", "admin", "login", "upload", "graphql", "file", "path")
+_HTML_TAG_NOISE = {
+    "a",
+    "body",
+    "button",
+    "div",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "head",
+    "header",
+    "html",
+    "img",
+    "input",
+    "li",
+    "link",
+    "meta",
+    "nav",
+    "option",
+    "p",
+    "script",
+    "section",
+    "span",
+    "style",
+    "table",
+    "tbody",
+    "td",
+    "textarea",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+}
 
 
 def _empty_endpoint_candidate_summary() -> dict[str, int]:
@@ -79,6 +117,86 @@ def _classify_endpoint_candidate(value: str, lowered: str) -> str:
     if value.startswith(("/", "./", "../")):
         return "relative_url"
     return "route"
+
+
+def _looks_like_protocol_relative_url(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate.startswith("//"):
+        return False
+    match = _PROTOCOL_RELATIVE_URL_RE.match(candidate)
+    if not match:
+        return False
+    host = (match.group("host") or "").lower().strip("[]")
+    return bool(host and ("." in host or host == "localhost" or bool(_HOST_IPV4_RE.match(host))))
+
+
+def _is_html_tag_like_fragment(value: str) -> bool:
+    candidate = str(value or "").strip().split("?", 1)[0].split("#", 1)[0]
+    if not candidate:
+        return False
+    while candidate.startswith("../"):
+        candidate = candidate[3:]
+    if candidate.startswith("./"):
+        candidate = candidate[2:]
+    candidate = candidate.lstrip("/")
+    if not candidate:
+        return False
+    first_segment = candidate.split("/", 1)[0].strip().strip(":").lower()
+    return bool(first_segment and first_segment in _HTML_TAG_NOISE)
+
+
+def _looks_like_meaningful_route(value: str, lowered: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    if _looks_like_protocol_relative_url(candidate):
+        return True
+    if "?" in candidate or "#" in candidate:
+        return True
+    path_candidate = candidate.split("?", 1)[0].split("#", 1)[0].lower()
+    if any(path_candidate.endswith(ext) for ext in _ROUTE_EXTENSION_HINTS):
+        return True
+    if any(signal in lowered for signal in _ROUTE_SIGNAL_HINTS):
+        return True
+    stripped = path_candidate
+    while stripped.startswith("../"):
+        stripped = stripped[3:]
+    if stripped.startswith("./"):
+        stripped = stripped[2:]
+    segments = [segment for segment in stripped.split("/") if segment]
+    return len(segments) >= 2
+
+
+def _looks_like_noise_relative_candidate(value: str, lowered: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return True
+    if candidate in {"//", "/*", "*/"}:
+        return True
+    if candidate.startswith(("/*", "*/")):
+        return True
+    if candidate.startswith("//") and not _looks_like_protocol_relative_url(candidate):
+        return True
+    if candidate.endswith(":") and "/" not in candidate.replace("//", "/", 1):
+        return True
+    if len(candidate) <= 2:
+        return True
+    if _is_html_tag_like_fragment(candidate):
+        return True
+    if re.fullmatch(r"(?:/|\./|\.\./)?[a-z_$][\w$-]*:?", lowered):
+        return True
+    return not _looks_like_meaningful_route(candidate, lowered)
+
+
+def _should_filter_endpoint_candidate(candidate: dict[str, Any]) -> bool:
+    category = str(candidate.get("category") or "")
+    value = str(candidate.get("value") or "")
+    lowered = str(candidate.get("normalized_value") or "")
+    if not value or not lowered:
+        return True
+    if category not in {"relative_url", "route"} and not bool(candidate.get("is_relative")):
+        return False
+    return _looks_like_noise_relative_candidate(value, lowered)
 
 
 def _candidate_sort_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
@@ -146,6 +264,8 @@ def _collect_endpoint_candidates(
     def _put(candidate: dict[str, Any] | None) -> None:
         nonlocal raw_total
         if not candidate:
+            return
+        if _should_filter_endpoint_candidate(candidate):
             return
         raw_total += 1
         key = str(candidate.get("dedupe_key") or "")
