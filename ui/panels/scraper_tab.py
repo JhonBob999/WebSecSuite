@@ -267,10 +267,10 @@ class ScraperTabController(QWidget):
         left_layout.addWidget(self.task_inspector_splitter, 1)
 
         right_panel = QWidget(splitter)
-        right_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right_panel.setMinimumWidth(320)
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(6, 2, 6, 0)
+        right_layout.setContentsMargins(6, 2, 0, 0)
         right_layout.setSpacing(6)
 
         header_row = QHBoxLayout()
