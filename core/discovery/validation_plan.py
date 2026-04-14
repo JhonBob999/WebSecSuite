@@ -1025,7 +1025,37 @@ def build_validator_handoff(
     if not isinstance(queue_items, list):
         return payload
 
+    def _extract_capability_flags(source: Mapping[str, Any] | None) -> tuple[bool | None, bool | None, bool | None]:
+        if not isinstance(source, Mapping):
+            return None, None, None
+        cookie_path_value = _clean_str(source.get("cookie_path")) or _clean_str(source.get("request_cookie_path"))
+        if cookie_path_value:
+            cookie_path_present_local: bool | None = True
+        elif "cookie_path_present" in source:
+            cookie_path_present_local = bool(source.get("cookie_path_present"))
+        else:
+            cookie_path_present_local = None
+
+        headers_raw = source.get("headers")
+        if isinstance(headers_raw, Mapping):
+            headers_present_local: bool | None = bool(headers_raw)
+        elif "headers_present" in source:
+            headers_present_local = bool(source.get("headers_present"))
+        else:
+            headers_present_local = None
+
+        timeout_raw_local = source.get("timeout")
+        if timeout_raw_local not in (None, "", []):
+            timeout_present_local: bool | None = True
+        elif "timeout_present" in source:
+            timeout_present_local = bool(source.get("timeout_present"))
+        else:
+            timeout_present_local = None
+        return cookie_path_present_local, headers_present_local, timeout_present_local
+
     dispatch_checks_by_queue: dict[str, list[Mapping[str, Any]]] = {}
+    replay_keys_by_queue: dict[str, set[str]] = {}
+    plan_capability_sources_by_queue: dict[str, list[Mapping[str, Any]]] = {}
     plan_items = validation_plan.get("all") if isinstance(validation_plan, Mapping) else None
     if isinstance(plan_items, list):
         for plan_item in plan_items:
@@ -1037,6 +1067,10 @@ def build_validator_handoff(
                 target_source=_clean_str(plan_item.get("target_source")),
                 safe_mode=bool(plan_item.get("safe_mode")),
             )
+            replay_key = _clean_str(plan_item.get("replay_key"))
+            if replay_key:
+                replay_keys_by_queue.setdefault(queue_key, set()).add(replay_key)
+            plan_capability_sources_by_queue.setdefault(queue_key, []).append(plan_item)
             for check_item in (plan_item.get("check_plan") or []):
                 if not isinstance(check_item, Mapping):
                     continue
@@ -1046,6 +1080,43 @@ def build_validator_handoff(
                 if _clean_str(validator_job.get("job_type")) != _VALIDATOR_JOB_SAFE:
                     continue
                 dispatch_checks_by_queue.setdefault(queue_key, []).append(check_item)
+
+    replay_manifest = validation_plan.get("replay_manifest") if isinstance(validation_plan, Mapping) else None
+    replay_items = replay_manifest.get("all") if isinstance(replay_manifest, Mapping) else None
+    manifest_by_replay_key: dict[str, Mapping[str, Any]] = {}
+    manifest_by_queue_key: dict[str, Mapping[str, Any]] = {}
+    manifest_by_target_key: dict[str, Mapping[str, Any]] = {}
+    if isinstance(replay_items, list):
+        for replay_item in replay_items:
+            if not isinstance(replay_item, Mapping):
+                continue
+            replay_key = _clean_str(replay_item.get("replay_key"))
+            if replay_key and replay_key not in manifest_by_replay_key:
+                manifest_by_replay_key[replay_key] = replay_item
+            replay_target_url = _clean_str(replay_item.get("target_url"))
+            replay_method = _clean_str(replay_item.get("method"))
+            replay_target_source = _clean_str(replay_item.get("target_source"))
+            if replay_target_url:
+                target_key = "|".join(
+                    [
+                        _safe_sort_value(replay_target_url),
+                        _safe_sort_value(replay_method),
+                        _safe_sort_value(replay_target_source),
+                    ]
+                )
+                if target_key not in manifest_by_target_key:
+                    manifest_by_target_key[target_key] = replay_item
+                for safe_mode_value in (False, True):
+                    replay_queue_key = _build_validator_queue_key(
+                        target_url=replay_target_url,
+                        method=replay_method,
+                        target_source=replay_target_source,
+                        safe_mode=safe_mode_value,
+                    )
+                    if replay_queue_key not in manifest_by_queue_key:
+                        manifest_by_queue_key[replay_queue_key] = replay_item
+
+    request_recipe = validation_plan.get("request_recipe") if isinstance(validation_plan, Mapping) else None
 
     handoff_items: list[dict[str, Any]] = []
     for queue_item in sorted(
@@ -1169,10 +1240,48 @@ def build_validator_handoff(
         if primary_blocker_reason not in _BLOCKER_REASON_ORDER:
             primary_blocker_reason = blocker_reasons[0] if blocker_reasons else ""
 
-        cookie_path_present = bool(_clean_str(queue_item.get("cookie_path")) or _clean_str(queue_item.get("request_cookie_path")))
-        headers_present = bool(isinstance(queue_item.get("headers"), Mapping) and bool(queue_item.get("headers")))
-        timeout_raw = queue_item.get("timeout")
-        timeout_present = bool(timeout_raw not in (None, "", []))
+        cookie_path_present, headers_present, timeout_present = _extract_capability_flags(queue_item)
+
+        manifest_match: Mapping[str, Any] | None = None
+        for replay_key in sorted(replay_keys_by_queue.get(queue_key) or []):
+            manifest_match = manifest_by_replay_key.get(replay_key)
+            if isinstance(manifest_match, Mapping):
+                break
+        if not isinstance(manifest_match, Mapping):
+            manifest_match = manifest_by_queue_key.get(queue_key)
+        if not isinstance(manifest_match, Mapping):
+            manifest_match = manifest_by_target_key.get(
+                "|".join([_safe_sort_value(target_url), _safe_sort_value(method), _safe_sort_value(target_source)])
+            )
+        if isinstance(manifest_match, Mapping):
+            m_cookie, m_headers, m_timeout = _extract_capability_flags(manifest_match)
+            if m_cookie is not None:
+                cookie_path_present = m_cookie
+            if m_headers is not None:
+                headers_present = m_headers
+            if m_timeout is not None:
+                timeout_present = m_timeout
+        else:
+            for source_item in plan_capability_sources_by_queue.get(queue_key) or []:
+                p_cookie, p_headers, p_timeout = _extract_capability_flags(source_item)
+                if cookie_path_present is None and p_cookie is not None:
+                    cookie_path_present = p_cookie
+                if headers_present is None and p_headers is not None:
+                    headers_present = p_headers
+                if timeout_present is None and p_timeout is not None:
+                    timeout_present = p_timeout
+            if isinstance(request_recipe, Mapping):
+                r_cookie, r_headers, r_timeout = _extract_capability_flags(request_recipe)
+                if cookie_path_present is None and r_cookie is not None:
+                    cookie_path_present = r_cookie
+                if headers_present is None and r_headers is not None:
+                    headers_present = r_headers
+                if timeout_present is None and r_timeout is not None:
+                    timeout_present = r_timeout
+
+        cookie_path_present = bool(cookie_path_present)
+        headers_present = bool(headers_present)
+        timeout_present = bool(timeout_present)
         replay_target_available = bool(target_url and target_url.lower() != "unknown")
         ready_for_handoff = bool(
             dispatch_job_count > 0 and dispatch_mode in {_QUEUE_DISPATCH_READY_ONLY, _QUEUE_DISPATCH_MIXED}
