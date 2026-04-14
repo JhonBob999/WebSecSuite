@@ -629,6 +629,164 @@ def _normalize_candidate_explanation(candidate: dict, final_confidence: str) -> 
     return f"Weak hint for {candidate_type} on '{normalized_target}'."
 
 
+def _candidate_signal_sort_key(signal: str) -> tuple[int, str]:
+    normalized = str(signal or "").strip().lower()
+    if normalized.startswith("parameter_category:"):
+        return 0, normalized
+    if normalized.startswith("endpoint_type:"):
+        return 1, normalized
+    if normalized.startswith("param_class:"):
+        return 2, normalized
+    if normalized.startswith("js_signal:"):
+        return 3, normalized
+    if normalized.startswith("path_only_auth"):
+        return 4, normalized
+    if normalized.startswith("source_area:"):
+        return 5, normalized
+    if normalized.startswith("priority:"):
+        return 6, normalized
+    if normalized.startswith("score:"):
+        return 7, normalized
+    if normalized.startswith("source_ref:"):
+        return 8, normalized
+    return 9, normalized
+
+
+def _normalize_candidate_matched_signals(candidate: dict) -> list[str]:
+    raw_signals = candidate.get("matched_signals")
+    normalized_signals = [str(item).strip().lower() for item in raw_signals] if isinstance(raw_signals, list) else []
+    unique_signals = sorted({token for token in normalized_signals if token}, key=_candidate_signal_sort_key)
+    if not unique_signals:
+        return []
+
+    has_context_signal = any(
+        token.startswith(("parameter_category:", "endpoint_type:", "param_class:", "js_signal:", "path_only_auth"))
+        for token in unique_signals
+    )
+    if has_context_signal:
+        unique_signals = [
+            token
+            for token in unique_signals
+            if not (token == "source_area:path" and not token.startswith(("parameter_category:", "endpoint_type:")))
+        ]
+    return unique_signals
+
+
+def _normalize_candidate_evidence_sources(candidate: dict) -> list[str]:
+    raw_evidence = candidate.get("evidence_sources")
+    base_evidence = [str(item).strip().lower() for item in raw_evidence] if isinstance(raw_evidence, list) else []
+    merged_evidence = base_evidence + list(candidate.get("matched_signals") or [])
+    normalized = sorted({str(item).strip().lower() for item in merged_evidence if str(item).strip()}, key=_candidate_signal_sort_key)
+    if not normalized:
+        return []
+
+    has_parameter_or_endpoint_context = any(
+        token.startswith(("parameter_category:", "endpoint_type:", "param_class:", "js_signal:", "path_only_auth"))
+        for token in normalized
+    )
+    if has_parameter_or_endpoint_context:
+        normalized = [token for token in normalized if token not in {"source_area:path", "source_area:query_param"}]
+
+    source_ref = str(candidate.get("source_ref") or "").strip().lower()
+    if source_ref:
+        normalized = [token for token in normalized if token != "source_ref:"]
+        source_ref_token = f"source_ref:{source_ref}"
+        if source_ref_token not in normalized:
+            normalized.append(source_ref_token)
+
+    return sorted(set(normalized), key=_candidate_signal_sort_key)
+
+
+def _select_candidate_primary_evidence(candidate: dict) -> str:
+    evidence_pool = _normalize_candidate_evidence_sources(candidate)
+    if not evidence_pool:
+        return ""
+
+    param_name = str(candidate.get("param_name") or candidate.get("param") or "").strip().lower()
+    if param_name:
+        for token in evidence_pool:
+            if token.startswith("parameter_category:"):
+                return token
+        for token in evidence_pool:
+            if token.startswith("param_class:"):
+                return token
+        source_ref_param = f"source_ref:{param_name}"
+        if source_ref_param in evidence_pool:
+            return source_ref_param
+
+    for token in evidence_pool:
+        if token.startswith("endpoint_type:"):
+            return token
+    for token in evidence_pool:
+        if token.startswith(("js_signal:", "path_only_auth", "source_area:")):
+            return token
+    for token in evidence_pool:
+        if not token.startswith("source_ref:"):
+            return token
+    return evidence_pool[0]
+
+
+def _normalize_candidate_source_ref(candidate: dict, primary_evidence: str) -> str:
+    current_ref = str(candidate.get("source_ref") or "").strip()
+    collected_refs = []
+    if current_ref:
+        collected_refs.append(current_ref)
+    for token in list(candidate.get("matched_signals") or []) + list(candidate.get("evidence_sources") or []):
+        normalized = str(token or "").strip()
+        if normalized.lower().startswith("source_ref:"):
+            payload = normalized.split(":", 1)[1].strip()
+            if payload:
+                collected_refs.append(payload)
+
+    if primary_evidence.startswith("source_ref:"):
+        primary_ref = primary_evidence.split(":", 1)[1].strip()
+        if primary_ref:
+            collected_refs.append(primary_ref)
+
+    if not collected_refs:
+        return current_ref
+    return sorted(set(collected_refs), key=lambda item: (-len(item), item))[0]
+
+
+def _build_candidate_explanation(candidate: dict, final_confidence: str, primary_evidence: str) -> str:
+    candidate_type = str(candidate.get("type") or "").strip()
+    target_url = str(candidate.get("target_url") or candidate.get("url") or "").strip() or "target"
+    prefix = "Weak hint" if final_confidence == "low" else "Meaningful indicators" if final_confidence == "medium" else "Strong indicators"
+
+    context = ""
+    param_name = str(candidate.get("param_name") or candidate.get("param") or "").strip()
+    if param_name:
+        context = f" around query parameter '{param_name}'"
+    elif primary_evidence.startswith("parameter_category:"):
+        category = primary_evidence.split(":", 1)[1].strip()
+        if category:
+            context = f" around parameter category '{category}'"
+    elif primary_evidence.startswith("endpoint_type:"):
+        endpoint_type = primary_evidence.split(":", 1)[1].strip()
+        if endpoint_type:
+            context = f" based on {endpoint_type}-like path intelligence"
+    elif primary_evidence.startswith("path_only_auth"):
+        context = " based on auth-like path intelligence"
+    elif primary_evidence.startswith("js_signal:"):
+        context = " from JavaScript recon signals"
+    elif primary_evidence.startswith("source_area:path"):
+        context = " from path-level endpoint intelligence"
+    elif primary_evidence.startswith("source_area:query_param"):
+        context = " from query-parameter intelligence"
+
+    return f"{prefix} for {candidate_type} on '{target_url}'{context}."
+
+
+def _polish_candidate_item(candidate: dict) -> dict:
+    polished = dict(candidate or {})
+    polished["matched_signals"] = _normalize_candidate_matched_signals(polished)
+    polished["evidence_sources"] = _normalize_candidate_evidence_sources(polished)
+    primary_evidence = _select_candidate_primary_evidence(polished)
+    polished["source_ref"] = _normalize_candidate_source_ref(polished, primary_evidence)
+    polished["explanation"] = _build_candidate_explanation(polished, str(polished.get("confidence") or "low"), primary_evidence)
+    return polished
+
+
 def _normalize_candidate_item(candidate: dict) -> dict:
     normalized_candidate = dict(candidate or {})
     normalized_candidate["score"] = _normalize_score(normalized_candidate.get("score"))
@@ -642,7 +800,7 @@ def _normalize_candidate_item(candidate: dict) -> dict:
         final_priority,
     )
     normalized_candidate["explanation"] = _normalize_candidate_explanation(normalized_candidate, final_confidence)
-    return normalized_candidate
+    return _polish_candidate_item(normalized_candidate)
 
 
 def generate_candidates(
