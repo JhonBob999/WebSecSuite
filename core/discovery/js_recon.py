@@ -197,6 +197,10 @@ def _classify_endpoint_candidate(value: str, normalized_value: str, path: str, h
     asset_like = _looks_like_asset_path(value, normalized_value, path, host)
     if force_category == "xhr_hint":
         signals["xhr_hint"] = True
+    if asset_like:
+        if fallback_category in {"route", "absolute_url", "relative_url"}:
+            return fallback_category
+        return "unknown"
     if not asset_like:
         if signals["graphql"]:
             return "graphql"
