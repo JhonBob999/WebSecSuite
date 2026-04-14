@@ -434,6 +434,16 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_defer_scripts": 0,
         "js_recon_integrity_scripts": 0,
         "js_recon_inline_nonempty_total": 0,
+        "js_recon_minified_external_scripts": 0,
+        "js_recon_module_external_scripts": 0,
+        "js_recon_blocking_external_scripts": 0,
+        "js_recon_library_hinted_external_scripts": 0,
+        "js_recon_version_hinted_external_scripts": 0,
+        "js_recon_external_with_query_params": 0,
+        "js_recon_inline_module_scripts": 0,
+        "js_recon_inline_json_like_scripts": 0,
+        "js_recon_inline_importmap_scripts": 0,
+        "js_recon_inline_with_close_guard": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -456,6 +466,16 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_defer_scripts": _to_int_count(summary.get("defer_scripts"), 0),
         "js_recon_integrity_scripts": _to_int_count(summary.get("integrity_scripts"), 0),
         "js_recon_inline_nonempty_total": _to_int_count(summary.get("inline_nonempty_total"), 0),
+        "js_recon_minified_external_scripts": _to_int_count(summary.get("minified_external_scripts"), 0),
+        "js_recon_module_external_scripts": _to_int_count(summary.get("module_external_scripts"), 0),
+        "js_recon_blocking_external_scripts": _to_int_count(summary.get("blocking_external_scripts"), 0),
+        "js_recon_library_hinted_external_scripts": _to_int_count(summary.get("library_hinted_external_scripts"), 0),
+        "js_recon_version_hinted_external_scripts": _to_int_count(summary.get("version_hinted_external_scripts"), 0),
+        "js_recon_external_with_query_params": _to_int_count(summary.get("external_with_query_params"), 0),
+        "js_recon_inline_module_scripts": _to_int_count(summary.get("inline_module_scripts"), 0),
+        "js_recon_inline_json_like_scripts": _to_int_count(summary.get("inline_json_like_scripts"), 0),
+        "js_recon_inline_importmap_scripts": _to_int_count(summary.get("inline_importmap_scripts"), 0),
+        "js_recon_inline_with_close_guard": _to_int_count(summary.get("inline_with_close_guard"), 0),
     }
 
 

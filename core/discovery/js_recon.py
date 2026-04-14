@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 
 def empty_js_recon_contract() -> dict[str, Any]:
@@ -20,6 +21,16 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "defer_scripts": 0,
             "integrity_scripts": 0,
             "inline_nonempty_total": 0,
+            "minified_external_scripts": 0,
+            "module_external_scripts": 0,
+            "blocking_external_scripts": 0,
+            "library_hinted_external_scripts": 0,
+            "version_hinted_external_scripts": 0,
+            "external_with_query_params": 0,
+            "inline_module_scripts": 0,
+            "inline_json_like_scripts": 0,
+            "inline_importmap_scripts": 0,
+            "inline_with_close_guard": 0,
         },
     }
 
@@ -58,13 +69,76 @@ def _build_preview(text: str, max_chars: int = 180) -> str:
     return collapsed[: max_chars - 1] + "…"
 
 
+def _derive_script_kind(type_value: str) -> str:
+    value = (type_value or "").strip().lower()
+    if not value:
+        return "classic"
+    if value == "module":
+        return "module"
+    if value == "importmap":
+        return "importmap"
+    if "json" in value:
+        return "json"
+    if value in {"text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript"}:
+        return "classic"
+    return "other"
+
+
+def _derive_load_hint(async_flag: bool, defer_flag: bool) -> str:
+    if async_flag and defer_flag:
+        return "other"
+    if async_flag:
+        return "async"
+    if defer_flag:
+        return "defer"
+    return "blocking"
+
+
+def _extract_version_hint(text: str) -> str:
+    if not text:
+        return ""
+    match = re.search(r"(\d+(?:\.\d+){1,3})", text)
+    return match.group(1) if match else ""
+
+
+def _library_and_version_hint(src: str, path: str, filename: str) -> tuple[str, str]:
+    candidate = " ".join([filename or "", path or "", src or ""]).lower()
+    patterns: list[tuple[str, str]] = [
+        ("react-dom", r"react[-_.]?dom(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("jquery", r"jquery(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("react", r"react(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("angular", r"angular(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("axios", r"axios(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("alpine", r"alpine(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("vue", r"vue(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("bootstrap", r"bootstrap(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("lodash", r"lodash(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("gsap", r"gsap(?:[-_.]?v?([\d][\w.\-]*))?"),
+        ("typed", r"typed(?:[-_.]?v?([\d][\w.\-]*))?"),
+    ]
+    for library_name, pattern in patterns:
+        match = re.search(pattern, candidate)
+        if not match:
+            continue
+        version_raw = (match.group(1) or "").strip("._-")
+        version_hint = _extract_version_hint(version_raw)
+        return library_name, version_hint
+    return "", ""
+
+
+def _contains_html_close_guard(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in ("<\\/script", "<\\\\/script", "<\\x2fscript"))
+
+
 class _ScriptSourceHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.external: list[dict[str, Any]] = []
-        self.inline_texts: list[str] = []
+        self.inline_items: list[dict[str, Any]] = []
         self._in_inline_script = False
         self._inline_chunks: list[str] = []
+        self._inline_attrs: dict[str, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if str(tag).lower() != "script":
@@ -75,9 +149,11 @@ class _ScriptSourceHTMLParser(HTMLParser):
             self.external.append({"src": src_raw, "attrs": script_attrs})
             self._in_inline_script = False
             self._inline_chunks = []
+            self._inline_attrs = {}
             return
         self._in_inline_script = True
         self._inline_chunks = []
+        self._inline_attrs = script_attrs
 
     def handle_data(self, data: str) -> None:
         if self._in_inline_script and isinstance(data, str):
@@ -87,9 +163,10 @@ class _ScriptSourceHTMLParser(HTMLParser):
         if str(tag).lower() != "script":
             return
         if self._in_inline_script:
-            self.inline_texts.append("".join(self._inline_chunks))
+            self.inline_items.append({"text": "".join(self._inline_chunks), "attrs": dict(self._inline_attrs)})
         self._in_inline_script = False
         self._inline_chunks = []
+        self._inline_attrs = {}
 
 
 def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
@@ -112,6 +189,12 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     async_total = 0
     defer_total = 0
     integrity_total = 0
+    minified_external_total = 0
+    module_external_total = 0
+    blocking_external_total = 0
+    library_hinted_total = 0
+    version_hinted_total = 0
+    external_with_query_params_total = 0
 
     for item in parser.external:
         src = str(item.get("src") or "").strip()
@@ -133,17 +216,39 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         query = parsed.query or ""
         is_internal = bool(base_host and host and host == base_host)
         flags = _script_flags(attrs)
+        type_value = (attrs.get("type") or "").strip().lower()
+        script_kind = _derive_script_kind(type_value)
+        load_hint = _derive_load_hint(flags["async"], flags["defer"])
+        filename = path.rsplit("/", 1)[-1] if path else ""
+        extension = ""
+        if filename and "." in filename and not filename.endswith("."):
+            extension = "." + filename.rsplit(".", 1)[-1].lower()
+        is_minified_hint = bool(re.search(r"\.min\.(?:js|mjs)(?:$|\?)", filename.lower() or path.lower()))
+        library_hint, version_hint = _library_and_version_hint(src, path, filename)
+        query_param_names = sorted({name for name, _ in parse_qsl(query, keep_blank_values=True) if name})
+        query_params_count = len(query_param_names)
 
         if is_internal:
             internal_total += 1
         if flags["module"]:
             module_total += 1
+            module_external_total += 1
         if flags["async"]:
             async_total += 1
         if flags["defer"]:
             defer_total += 1
         if flags["integrity_present"]:
             integrity_total += 1
+        if is_minified_hint:
+            minified_external_total += 1
+        if load_hint == "blocking":
+            blocking_external_total += 1
+        if library_hint:
+            library_hinted_total += 1
+        if version_hint:
+            version_hinted_total += 1
+        if query_params_count > 0:
+            external_with_query_params_total += 1
 
         external_scripts.append(
             {
@@ -154,23 +259,64 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "query": query,
                 "is_internal": is_internal,
                 "type_hint": "javascript",
+                "filename": filename,
+                "extension": extension,
+                "is_minified_hint": is_minified_hint,
+                "script_kind": script_kind,
+                "load_hint": load_hint,
+                "library_hint": library_hint,
+                "version_hint": version_hint,
+                "query_param_names": query_param_names,
+                "query_params_count": query_params_count,
                 "attrs": flags,
             }
         )
 
     inline_scripts: list[dict[str, Any]] = []
     inline_nonempty_total = 0
-    for idx, inline_text in enumerate(parser.inline_texts):
-        text = inline_text if isinstance(inline_text, str) else ""
+    inline_module_total = 0
+    inline_json_like_total = 0
+    inline_importmap_total = 0
+    inline_with_close_guard_total = 0
+    for idx, inline_item in enumerate(parser.inline_items):
+        text = inline_item.get("text") if isinstance(inline_item, dict) else ""
+        attrs = inline_item.get("attrs") if isinstance(inline_item, dict) and isinstance(inline_item.get("attrs"), dict) else {}
+        text = text if isinstance(text, str) else ""
         stripped = text.strip()
+        type_value = (attrs.get("type") or "").strip().lower()
+        script_kind = _derive_script_kind(type_value)
+        nonempty = bool(stripped)
+        contains_html_close_guard = _contains_html_close_guard(text)
+
         if stripped:
             inline_nonempty_total += 1
+        if script_kind == "module":
+            inline_module_total += 1
+        if script_kind == "json":
+            inline_json_like_total += 1
+        if script_kind == "importmap":
+            inline_importmap_total += 1
+        if contains_html_close_guard:
+            inline_with_close_guard_total += 1
+
+        statement_hint = "code"
+        if script_kind == "importmap":
+            statement_hint = "importmap"
+        elif script_kind == "json":
+            statement_hint = "json_like"
+        elif script_kind == "other":
+            statement_hint = "unknown"
+
         inline_scripts.append(
             {
                 "index": idx,
                 "chars": len(text),
                 "sha1": hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest(),
                 "preview": _build_preview(text),
+                "script_kind": script_kind,
+                "nonempty": nonempty,
+                "statement_hint": statement_hint,
+                "contains_html_close_guard": contains_html_close_guard,
             }
         )
 
@@ -185,6 +331,16 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "defer_scripts": defer_total,
         "integrity_scripts": integrity_total,
         "inline_nonempty_total": inline_nonempty_total,
+        "minified_external_scripts": minified_external_total,
+        "module_external_scripts": module_external_total,
+        "blocking_external_scripts": blocking_external_total,
+        "library_hinted_external_scripts": library_hinted_total,
+        "version_hinted_external_scripts": version_hinted_total,
+        "external_with_query_params": external_with_query_params_total,
+        "inline_module_scripts": inline_module_total,
+        "inline_json_like_scripts": inline_json_like_total,
+        "inline_importmap_scripts": inline_importmap_total,
+        "inline_with_close_guard": inline_with_close_guard_total,
     }
     return {
         "external_scripts": external_scripts,
