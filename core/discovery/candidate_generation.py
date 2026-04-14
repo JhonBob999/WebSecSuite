@@ -523,6 +523,128 @@ def _dedupe_merge_candidates(candidates: list[dict]) -> list[dict]:
     return list(merged_by_key.values())
 
 
+def _normalize_candidate_confidence(candidate: dict) -> str:
+    normalized_confidence = _normalize_confidence(candidate.get("confidence"))
+    normalized_score = _normalize_score(candidate.get("score"))
+    normalized_priority = _normalize_priority(candidate.get("priority"))
+    source_area = str(candidate.get("source_area") or "").strip().lower()
+    endpoint_type = str(candidate.get("endpoint_type") or "").strip().lower()
+    param_name = str(candidate.get("param_name") or candidate.get("param") or "").strip()
+    matched_signals = candidate.get("matched_signals")
+    normalized_signals = [str(token).strip().lower() for token in matched_signals] if isinstance(matched_signals, list) else []
+    reasons = candidate.get("reasons")
+    normalized_reasons = [str(token).strip().lower() for token in reasons] if isinstance(reasons, list) else []
+
+    has_path_only_guard = "path_only_auth_guard" in normalized_reasons or "path_only_auth" in normalized_signals
+    if has_path_only_guard:
+        return "low"
+
+    strong_signal_count = sum(
+        1
+        for token in normalized_signals
+        if token.startswith(("parameter_category:", "form_context", "js_context"))
+    )
+    if param_name:
+        strong_signal_count += 1
+
+    meaningful_signal_count = sum(
+        1
+        for token in normalized_signals
+        if token.startswith(("parameter_category:", "endpoint_type:", "form_context", "js_context", "priority:", "score:"))
+    )
+    if param_name:
+        meaningful_signal_count += 1
+
+    weak_surface = source_area == "path" and not param_name and endpoint_type in {"auth", "api"}
+
+    if weak_surface and meaningful_signal_count <= 2 and (normalized_score is None or normalized_score < 7):
+        return "low"
+
+    if strong_signal_count >= 2 and normalized_score is not None and normalized_score >= 8:
+        return "high"
+    if strong_signal_count >= 2 and normalized_priority == "high" and normalized_score is not None and normalized_score >= 7:
+        return "high"
+
+    if strong_signal_count >= 2:
+        return "medium"
+    if meaningful_signal_count >= 3:
+        return "medium"
+    if normalized_score is not None and normalized_score >= 6 and meaningful_signal_count >= 2:
+        return "medium"
+
+    if normalized_confidence == "high":
+        return "medium" if meaningful_signal_count >= 2 and not weak_surface else "low"
+    if normalized_confidence == "medium":
+        return "medium" if meaningful_signal_count >= 2 and not weak_surface else "low"
+    return "low"
+
+
+def _normalize_candidate_priority(candidate: dict, final_confidence: str) -> str | None:
+    normalized_score = _normalize_score(candidate.get("score"))
+    source_area = str(candidate.get("source_area") or "").strip().lower()
+    endpoint_type = str(candidate.get("endpoint_type") or "").strip().lower()
+    param_name = str(candidate.get("param_name") or candidate.get("param") or "").strip()
+    reasons = candidate.get("reasons")
+    normalized_reasons = [str(token).strip().lower() for token in reasons] if isinstance(reasons, list) else []
+    matched_signals = candidate.get("matched_signals")
+    normalized_signals = [str(token).strip().lower() for token in matched_signals] if isinstance(matched_signals, list) else []
+    has_path_only_guard = "path_only_auth_guard" in normalized_reasons or "path_only_auth" in normalized_signals
+    weak_surface = source_area == "path" and not param_name and endpoint_type in {"auth", "api"}
+
+    if has_path_only_guard or weak_surface:
+        return "low"
+
+    if final_confidence == "high" and normalized_score is not None and normalized_score >= 8:
+        return "high"
+    if final_confidence == "medium":
+        if normalized_score is None or normalized_score >= 4:
+            return "medium"
+    if final_confidence == "high":
+        return "medium"
+    return "low"
+
+
+def _normalize_candidate_reason_markers(candidate: dict, final_confidence: str, final_priority: str | None) -> list[str]:
+    reasons = candidate.get("reasons")
+    base_reasons = [str(item).strip().lower() for item in reasons] if isinstance(reasons, list) else []
+    cleaned_reasons = [
+        reason
+        for reason in base_reasons
+        if reason and not reason.startswith("derived_confidence:") and not reason.startswith("derived_priority:")
+    ]
+    cleaned_reasons.append(f"derived_confidence:{final_confidence}")
+    if final_priority:
+        cleaned_reasons.append(f"derived_priority:{final_priority}")
+    return _collect_unique_sorted(cleaned_reasons)
+
+
+def _normalize_candidate_explanation(candidate: dict, final_confidence: str) -> str:
+    candidate_type = str(candidate.get("type") or "").strip()
+    target_url = str(candidate.get("target_url") or candidate.get("url") or "").strip()
+    normalized_target = target_url or "target"
+    if final_confidence == "high":
+        return f"Strong indicators for {candidate_type} on '{normalized_target}'."
+    if final_confidence == "medium":
+        return f"Meaningful indicators for {candidate_type} on '{normalized_target}'."
+    return f"Weak hint for {candidate_type} on '{normalized_target}'."
+
+
+def _normalize_candidate_item(candidate: dict) -> dict:
+    normalized_candidate = dict(candidate or {})
+    normalized_candidate["score"] = _normalize_score(normalized_candidate.get("score"))
+    final_confidence = _normalize_candidate_confidence(normalized_candidate)
+    normalized_candidate["confidence"] = final_confidence
+    final_priority = _normalize_candidate_priority(normalized_candidate, final_confidence)
+    normalized_candidate["priority"] = final_priority
+    normalized_candidate["reasons"] = _normalize_candidate_reason_markers(
+        normalized_candidate,
+        final_confidence,
+        final_priority,
+    )
+    normalized_candidate["explanation"] = _normalize_candidate_explanation(normalized_candidate, final_confidence)
+    return normalized_candidate
+
+
 def generate_candidates(
     final_url: str,
     classified_urls_by_scope: dict | None = None,
@@ -661,6 +783,7 @@ def generate_candidates(
 
     all_candidates = [_refine_candidate_confidence(candidate) for candidate in all_candidates]
     all_candidates = _dedupe_merge_candidates(all_candidates)
+    all_candidates = [_normalize_candidate_item(candidate) for candidate in all_candidates]
     all_candidates.sort(
         key=lambda item: (
             str(item.get("type") or ""),
