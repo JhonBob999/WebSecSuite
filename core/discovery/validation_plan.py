@@ -84,6 +84,13 @@ _QUEUE_DISPATCH_MIXED = "mixed"
 _QUEUE_DISPATCH_BLOCKED_ONLY = "blocked_only"
 _QUEUE_DISPATCH_UNAVAILABLE_ONLY = "unavailable_only"
 _QUEUE_DISPATCH_EMPTY = "empty"
+_QUEUE_DISPATCH_VALID_MODES = {
+    _QUEUE_DISPATCH_READY_ONLY,
+    _QUEUE_DISPATCH_MIXED,
+    _QUEUE_DISPATCH_BLOCKED_ONLY,
+    _QUEUE_DISPATCH_UNAVAILABLE_ONLY,
+    _QUEUE_DISPATCH_EMPTY,
+}
 _VALIDATOR_JOB_TYPE_PRECEDENCE = {
     _VALIDATOR_JOB_SAFE: 1,
     _VALIDATOR_JOB_BLOCKED: 2,
@@ -478,17 +485,17 @@ def _build_queue_dispatch_contract(
         dispatch_mode = _QUEUE_DISPATCH_EMPTY
     elif dispatch_job_count > 0 and blocked_job_count == 0 and unavailable_job_count == 0:
         dispatch_mode = _QUEUE_DISPATCH_READY_ONLY
-    elif dispatch_job_count > 0 and (blocked_job_count > 0 or unavailable_job_count > 0):
-        dispatch_mode = _QUEUE_DISPATCH_MIXED
     elif dispatch_job_count == 0 and blocked_job_count > 0 and unavailable_job_count == 0:
         dispatch_mode = _QUEUE_DISPATCH_BLOCKED_ONLY
     elif dispatch_job_count == 0 and blocked_job_count == 0 and unavailable_job_count > 0:
         dispatch_mode = _QUEUE_DISPATCH_UNAVAILABLE_ONLY
-    elif dispatch_job_count == 0 and blocked_job_count > 0 and unavailable_job_count > 0:
-        dispatch_mode = _QUEUE_DISPATCH_MIXED
     else:
-        dispatch_mode = _QUEUE_DISPATCH_EMPTY
+        dispatch_mode = _QUEUE_DISPATCH_MIXED
+    if dispatch_mode not in _QUEUE_DISPATCH_VALID_MODES:
+        dispatch_mode = _QUEUE_DISPATCH_EMPTY if jobs_total == 0 else _QUEUE_DISPATCH_MIXED
 
+    fully_dispatchable = bool(jobs_total > 0 and dispatch_job_count == jobs_total)
+    dispatch_ratio = _round_metric((dispatch_job_count / jobs_total) if jobs_total else 0.0)
     primary_dispatch_job_id = dispatch_job_ids[0] if dispatch_job_ids else ""
     return {
         "dispatch_mode": dispatch_mode,
@@ -498,6 +505,9 @@ def _build_queue_dispatch_contract(
         "dispatch_job_count": dispatch_job_count,
         "blocked_job_count": blocked_job_count,
         "unavailable_job_count": unavailable_job_count,
+        "jobs_total": jobs_total,
+        "fully_dispatchable": fully_dispatchable,
+        "dispatch_ratio": dispatch_ratio,
         "primary_dispatch_job_id": primary_dispatch_job_id,
         "has_dispatchable_jobs": bool(dispatch_job_count > 0),
     }
@@ -638,16 +648,19 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         group["highest_job_priority"] = min(priorities) if priorities else 0
         group["queue_job_ids_unique"] = len(all_job_ids)
         queue_dispatch = _build_queue_dispatch_contract(dispatch_job_ids, blocked_job_ids, unavailable_job_ids)
-        jobs_total = _safe_int(group.get("jobs_total"), 0)
         dispatch_job_count = _safe_int(queue_dispatch.get("dispatch_job_count"), 0)
         group["dispatch"] = queue_dispatch
         group["dispatch_mode"] = _clean_str(queue_dispatch.get("dispatch_mode"))
         group["dispatch_job_count"] = dispatch_job_count
         group["blocked_job_count"] = _safe_int(queue_dispatch.get("blocked_job_count"), 0)
         group["unavailable_job_count"] = _safe_int(queue_dispatch.get("unavailable_job_count"), 0)
+        group["jobs_total"] = _safe_int(queue_dispatch.get("jobs_total"), 0)
+        group["jobs_ready"] = dispatch_job_count
+        group["jobs_blocked"] = _safe_int(queue_dispatch.get("blocked_job_count"), 0)
+        group["jobs_unavailable"] = _safe_int(queue_dispatch.get("unavailable_job_count"), 0)
         group["primary_dispatch_job_id"] = _clean_str(queue_dispatch.get("primary_dispatch_job_id"))
-        group["dispatch_ratio"] = _round_metric((dispatch_job_count / jobs_total) if jobs_total else 0.0)
-        group["fully_dispatchable"] = bool(jobs_total > 0 and dispatch_job_count == jobs_total)
+        group["dispatch_ratio"] = _round_metric(queue_dispatch.get("dispatch_ratio") or 0.0)
+        group["fully_dispatchable"] = bool(queue_dispatch.get("fully_dispatchable"))
         queue_items.append(group)
 
     all_job_ids_global = {
@@ -766,6 +779,113 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         "dispatch_job_ratio": _round_metric((dispatch_jobs_total / jobs_total) if jobs_total else 0.0),
     }
     return payload
+
+
+def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]:
+    case = _clean_str(case_name).lower()
+    target_url = "https://fixture.local/path"
+    base = {
+        "target_url": target_url,
+        "target_source": "synthetic_fixture",
+        "check_type": _CHECK_STATUS_DIFF,
+        "compare_mode": "status_compare",
+        "mutation_strategy": _MUTATION_STRATEGY_ENDPOINT_COMPARE,
+    }
+    if case == _QUEUE_DISPATCH_READY_ONLY:
+        return [
+            {
+                **base,
+                "job_id": "fixture-ready-1",
+                "job_type": _VALIDATOR_JOB_SAFE,
+                "execution_lane": _EXECUTION_LANE_READY_ENDPOINT,
+            }
+        ]
+    if case == _QUEUE_DISPATCH_MIXED:
+        return [
+            {
+                **base,
+                "job_id": "fixture-ready-1",
+                "job_type": _VALIDATOR_JOB_SAFE,
+                "execution_lane": _EXECUTION_LANE_READY_ENDPOINT,
+            },
+            {
+                **base,
+                "job_id": "fixture-blocked-1",
+                "job_type": _VALIDATOR_JOB_BLOCKED,
+                "execution_lane": _EXECUTION_LANE_BLOCKED_ENDPOINT,
+            },
+        ]
+    if case == _QUEUE_DISPATCH_BLOCKED_ONLY:
+        return [
+            {
+                **base,
+                "job_id": "fixture-blocked-1",
+                "job_type": _VALIDATOR_JOB_BLOCKED,
+                "execution_lane": _EXECUTION_LANE_BLOCKED_ENDPOINT,
+            }
+        ]
+    if case == _QUEUE_DISPATCH_UNAVAILABLE_ONLY:
+        return [
+            {
+                **base,
+                "job_id": "fixture-unavailable-1",
+                "job_type": _VALIDATOR_JOB_UNAVAILABLE,
+                "execution_lane": _EXECUTION_LANE_UNAVAILABLE,
+            }
+        ]
+    if case == _QUEUE_DISPATCH_EMPTY:
+        return []
+    return []
+
+
+def build_synthetic_validator_queue_case(case_name: str) -> dict[str, Any]:
+    fixture_jobs = get_validator_queue_dispatch_fixture(case_name)
+    plan_item: dict[str, Any] = {"method": "GET", "safe_mode": True, "check_plan": []}
+    for job in fixture_jobs:
+        job_type = _clean_str(job.get("job_type"))
+        validator_job = {
+            "job_id": _clean_str(job.get("job_id")),
+            "job_type": job_type,
+            "job_ready": bool(job_type == _VALIDATOR_JOB_SAFE),
+            "target_url": _clean_str(job.get("target_url")),
+            "target_source": _clean_str(job.get("target_source")),
+            "check_type": _clean_str(job.get("check_type")),
+            "compare_mode": _clean_str(job.get("compare_mode")),
+            "execution_lane": _clean_str(job.get("execution_lane")),
+            "mutation_strategy": _clean_str(job.get("mutation_strategy")),
+        }
+        plan_item["check_plan"].append({"execution_priority": 1, "validator_job": validator_job})
+    return {"all": [plan_item]}
+
+
+def _self_check_validator_queue_dispatch_cases() -> dict[str, Any]:
+    cases = [
+        _QUEUE_DISPATCH_READY_ONLY,
+        _QUEUE_DISPATCH_MIXED,
+        _QUEUE_DISPATCH_BLOCKED_ONLY,
+        _QUEUE_DISPATCH_UNAVAILABLE_ONLY,
+        _QUEUE_DISPATCH_EMPTY,
+    ]
+    out: dict[str, Any] = {}
+    for case_name in cases:
+        synthetic_plan = build_synthetic_validator_queue_case(case_name)
+        queue_payload = build_validator_queue(synthetic_plan)
+        queue_item = ((queue_payload.get("all") or [None])[0]) or {}
+        dispatch_mode = _clean_str(queue_item.get("dispatch_mode"))
+        if not dispatch_mode and case_name == _QUEUE_DISPATCH_EMPTY:
+            dispatch_mode = _QUEUE_DISPATCH_EMPTY
+        out[case_name] = {
+            "queue_total": _safe_int((queue_payload.get("summary") or {}).get("total"), 0),
+            "dispatch_mode": dispatch_mode,
+            "dispatch_job_count": _safe_int(queue_item.get("dispatch_job_count"), 0),
+            "blocked_job_count": _safe_int(queue_item.get("blocked_job_count"), 0),
+            "unavailable_job_count": _safe_int(queue_item.get("unavailable_job_count"), 0),
+            "jobs_total": _safe_int(queue_item.get("jobs_total"), 0),
+            "fully_dispatchable": bool(queue_item.get("fully_dispatchable")),
+            "dispatch_ratio": _round_metric(queue_item.get("dispatch_ratio") or 0.0),
+            "primary_dispatch_job_id": _clean_str(queue_item.get("primary_dispatch_job_id")),
+        }
+    return out
 
 
 def _build_artifact_index(finding_artifacts: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
