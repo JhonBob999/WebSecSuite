@@ -417,6 +417,112 @@ def _add_candidate(
     )
 
 
+def _candidate_confidence_rank(confidence: str | None) -> int:
+    normalized = str(confidence or "").strip().lower()
+    if normalized == "high":
+        return 3
+    if normalized == "medium":
+        return 2
+    if normalized == "low":
+        return 1
+    return 0
+
+
+def _normalize_candidate_merge_key(candidate: dict) -> tuple[str, str, str, str]:
+    candidate_type = str(candidate.get("type") or "").strip().lower()
+    target_url = str(candidate.get("target_url") or candidate.get("url") or "").strip()
+    source_area = str(candidate.get("source_area") or "").strip().lower()
+    param_name = str(candidate.get("param_name") or candidate.get("param") or "").strip().lower()
+    if not param_name:
+        return candidate_type, target_url, "", source_area
+    return candidate_type, target_url, param_name, source_area
+
+
+def _pick_more_informative_text(current_value, incoming_value) -> str:
+    current_text = str(current_value or "").strip()
+    incoming_text = str(incoming_value or "").strip()
+    if not current_text:
+        return incoming_text
+    if not incoming_text:
+        return current_text
+    if len(incoming_text) > len(current_text):
+        return incoming_text
+    return current_text
+
+
+def _collect_unique_sorted(values: list | tuple | set | None) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    normalized = {str(item).strip() for item in values if str(item).strip()}
+    return sorted(normalized)
+
+
+def _merge_candidate_items(current: dict, incoming: dict) -> dict:
+    merged = dict(current or {})
+
+    current_confidence = str(merged.get("confidence") or "").strip().lower()
+    incoming_confidence = str(incoming.get("confidence") or "").strip().lower()
+    if _candidate_confidence_rank(incoming_confidence) > _candidate_confidence_rank(current_confidence):
+        merged["confidence"] = incoming_confidence
+
+    merged["target_url"] = _pick_more_informative_text(merged.get("target_url") or merged.get("url"), incoming.get("target_url") or incoming.get("url"))
+    merged["url"] = merged["target_url"]
+    merged["param_name"] = _pick_more_informative_text(merged.get("param_name") or merged.get("param"), incoming.get("param_name") or incoming.get("param"))
+    merged["param"] = merged["param_name"] or None
+    merged["source_area"] = _pick_more_informative_text(merged.get("source_area"), incoming.get("source_area")).lower()
+    merged["endpoint_type"] = _pick_more_informative_text(merged.get("endpoint_type"), incoming.get("endpoint_type"))
+    merged["priority"] = _pick_more_informative_text(merged.get("priority"), incoming.get("priority"))
+    merged["explanation"] = _pick_more_informative_text(merged.get("explanation"), incoming.get("explanation"))
+    merged["score"] = merged.get("score")
+    if merged["score"] is None:
+        merged["score"] = incoming.get("score")
+
+    merged["matched_signals"] = _collect_unique_sorted(
+        list(merged.get("matched_signals") or []) + list(incoming.get("matched_signals") or [])
+    )
+    merged["evidence_sources"] = _collect_unique_sorted(
+        list(merged.get("evidence_sources") or []) + list(incoming.get("evidence_sources") or [])
+    )
+
+    merged_reasons = _collect_unique_sorted(list(merged.get("reasons") or []) + list(incoming.get("reasons") or []))
+    had_derived_reason = any(reason.startswith("derived_confidence:") for reason in merged_reasons)
+    merged_reasons = [reason for reason in merged_reasons if not reason.startswith("derived_confidence:")]
+    if had_derived_reason:
+        merged_reasons.append(f"derived_confidence:{str(merged.get('confidence') or '').strip().lower()}")
+    merged["reasons"] = _collect_unique_sorted(merged_reasons)
+
+    merged["source_ref"] = _pick_more_informative_text(merged.get("source_ref"), incoming.get("source_ref"))
+    return merged
+
+
+def _dedupe_merge_candidates(candidates: list[dict]) -> list[dict]:
+    if not isinstance(candidates, list) or not candidates:
+        return []
+
+    merged_by_key: dict[tuple[str, str, str, str], dict] = {}
+    sorted_candidates = sorted(
+        [candidate for candidate in candidates if isinstance(candidate, dict)],
+        key=lambda item: (
+            str(item.get("type") or ""),
+            str(item.get("target_url") or item.get("url") or ""),
+            str(item.get("param_name") or item.get("param") or ""),
+            str(item.get("endpoint_type") or ""),
+            str(item.get("source_area") or ""),
+            str(item.get("source_ref") or ""),
+        ),
+    )
+
+    for candidate in sorted_candidates:
+        merge_key = _normalize_candidate_merge_key(candidate)
+        existing = merged_by_key.get(merge_key)
+        if existing is None:
+            merged_by_key[merge_key] = dict(candidate)
+            continue
+        merged_by_key[merge_key] = _merge_candidate_items(existing, candidate)
+
+    return list(merged_by_key.values())
+
+
 def generate_candidates(
     final_url: str,
     classified_urls_by_scope: dict | None = None,
@@ -554,6 +660,7 @@ def generate_candidates(
             )
 
     all_candidates = [_refine_candidate_confidence(candidate) for candidate in all_candidates]
+    all_candidates = _dedupe_merge_candidates(all_candidates)
     all_candidates.sort(
         key=lambda item: (
             str(item.get("type") or ""),
