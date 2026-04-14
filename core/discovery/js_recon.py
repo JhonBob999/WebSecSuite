@@ -11,6 +11,7 @@ def empty_js_recon_contract() -> dict[str, Any]:
     return {
         "external_scripts": [],
         "inline_scripts": [],
+        "page_sources": [],
         "summary": {
             "external_total": 0,
             "inline_total": 0,
@@ -31,6 +32,10 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "inline_json_like_scripts": 0,
             "inline_importmap_scripts": 0,
             "inline_with_close_guard": 0,
+            "page_sources_total": 0,
+            "external_scripts_with_page_link": 0,
+            "inline_scripts_with_page_link": 0,
+            "multi_page_script_links": 0,
         },
     }
 
@@ -181,7 +186,11 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     except Exception:
         return contract
 
-    base_host = (urlparse(base_url or "").hostname or "").lower()
+    source_parsed = urlparse(base_url or "")
+    source_page_url = str(base_url or "").strip()
+    source_page_host = (source_parsed.hostname or source_parsed.netloc or "").lower()
+    source_page_path = source_parsed.path or "/"
+    base_host = source_page_host
     external_scripts: list[dict[str, Any]] = []
     seen_abs: set[str] = set()
     internal_total = 0
@@ -269,6 +278,11 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "query_param_names": query_param_names,
                 "query_params_count": query_params_count,
                 "attrs": flags,
+                "source_page_url": source_page_url,
+                "source_page_host": source_page_host,
+                "source_page_path": source_page_path,
+                "seen_on_pages": [source_page_url] if source_page_url else [],
+                "seen_on_count": 1 if source_page_url else 0,
             }
         )
 
@@ -317,10 +331,38 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "nonempty": nonempty,
                 "statement_hint": statement_hint,
                 "contains_html_close_guard": contains_html_close_guard,
+                "source_page_url": source_page_url,
+                "source_page_host": source_page_host,
+                "source_page_path": source_page_path,
             }
         )
 
     external_total = len(external_scripts)
+    external_script_urls = sorted({str(item.get("absolute_url") or "").strip() for item in external_scripts if str(item.get("absolute_url") or "").strip()})
+    inline_script_sha1: list[str] = []
+    seen_inline_sha1: set[str] = set()
+    for inline_item in inline_scripts:
+        sha1_value = str(inline_item.get("sha1") or "").strip()
+        if not sha1_value or sha1_value in seen_inline_sha1:
+            continue
+        seen_inline_sha1.add(sha1_value)
+        inline_script_sha1.append(sha1_value)
+    page_sources: list[dict[str, Any]] = [
+        {
+            "page_url": source_page_url,
+            "page_host": source_page_host,
+            "page_path": source_page_path,
+            "external_scripts_total": external_total,
+            "inline_scripts_total": len(inline_scripts),
+            "external_script_urls": external_script_urls,
+            "inline_script_sha1": inline_script_sha1,
+        }
+    ]
+    external_with_page_link_total = sum(
+        1 for item in external_scripts if str(item.get("source_page_url") or "").strip() and int(item.get("seen_on_count") or 0) > 0
+    )
+    inline_with_page_link_total = sum(1 for item in inline_scripts if str(item.get("source_page_url") or "").strip())
+    multi_page_script_links = sum(1 for item in external_scripts if int(item.get("seen_on_count") or 0) > 1)
     summary = {
         "external_total": external_total,
         "inline_total": len(inline_scripts),
@@ -341,9 +383,14 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "inline_json_like_scripts": inline_json_like_total,
         "inline_importmap_scripts": inline_importmap_total,
         "inline_with_close_guard": inline_with_close_guard_total,
+        "page_sources_total": len(page_sources),
+        "external_scripts_with_page_link": external_with_page_link_total,
+        "inline_scripts_with_page_link": inline_with_page_link_total,
+        "multi_page_script_links": multi_page_script_links,
     }
     return {
         "external_scripts": external_scripts,
         "inline_scripts": inline_scripts,
+        "page_sources": page_sources,
         "summary": summary,
     }

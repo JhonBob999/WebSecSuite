@@ -444,6 +444,10 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_inline_json_like_scripts": 0,
         "js_recon_inline_importmap_scripts": 0,
         "js_recon_inline_with_close_guard": 0,
+        "js_recon_page_sources_total": 0,
+        "js_recon_external_scripts_with_page_link": 0,
+        "js_recon_inline_scripts_with_page_link": 0,
+        "js_recon_multi_page_script_links": 0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -476,6 +480,10 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_inline_json_like_scripts": _to_int_count(summary.get("inline_json_like_scripts"), 0),
         "js_recon_inline_importmap_scripts": _to_int_count(summary.get("inline_importmap_scripts"), 0),
         "js_recon_inline_with_close_guard": _to_int_count(summary.get("inline_with_close_guard"), 0),
+        "js_recon_page_sources_total": _to_int_count(summary.get("page_sources_total"), 0),
+        "js_recon_external_scripts_with_page_link": _to_int_count(summary.get("external_scripts_with_page_link"), 0),
+        "js_recon_inline_scripts_with_page_link": _to_int_count(summary.get("inline_scripts_with_page_link"), 0),
+        "js_recon_multi_page_script_links": _to_int_count(summary.get("multi_page_script_links"), 0),
     }
 
 
