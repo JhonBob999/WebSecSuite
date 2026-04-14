@@ -36,6 +36,22 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "external_scripts_with_page_link": 0,
             "inline_scripts_with_page_link": 0,
             "multi_page_script_links": 0,
+            "unique_external_hosts": 0,
+            "unique_source_page_hosts": 0,
+            "internal_page_sources": 0,
+            "external_page_sources": 0,
+            "pages_with_inline_scripts": 0,
+            "pages_with_external_scripts": 0,
+            "max_external_scripts_on_page": 0,
+            "max_inline_scripts_on_page": 0,
+            "avg_external_scripts_per_page": 0.0,
+            "avg_inline_scripts_per_page": 0.0,
+        },
+        "coverage": {
+            "external_scripts_linked_ratio": 0.0,
+            "inline_scripts_linked_ratio": 0.0,
+            "page_sources_complete": True,
+            "linkage_mode": "single_page_passive",
         },
     }
 
@@ -363,6 +379,27 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     )
     inline_with_page_link_total = sum(1 for item in inline_scripts if str(item.get("source_page_url") or "").strip())
     multi_page_script_links = sum(1 for item in external_scripts if int(item.get("seen_on_count") or 0) > 1)
+    unique_external_hosts = len({str(item.get("host") or "").strip().lower() for item in external_scripts if str(item.get("host") or "").strip()})
+    unique_source_page_hosts = len(
+        {
+            str(item.get("page_host") or item.get("source_page_host") or "").strip().lower()
+            for item in page_sources
+            if str(item.get("page_host") or item.get("source_page_host") or "").strip()
+        }
+    )
+    internal_page_sources = sum(
+        1
+        for item in page_sources
+        if str(item.get("page_host") or item.get("source_page_host") or "").strip().lower() == (base_host or "")
+    )
+    external_page_sources = max(0, len(page_sources) - internal_page_sources)
+    pages_with_inline_scripts = sum(1 for item in page_sources if int(item.get("inline_scripts_total") or 0) > 0)
+    pages_with_external_scripts = sum(1 for item in page_sources if int(item.get("external_scripts_total") or 0) > 0)
+    max_external_scripts_on_page = max((int(item.get("external_scripts_total") or 0) for item in page_sources), default=0)
+    max_inline_scripts_on_page = max((int(item.get("inline_scripts_total") or 0) for item in page_sources), default=0)
+    page_sources_total = len(page_sources)
+    avg_external_scripts_per_page = float(external_total / page_sources_total) if page_sources_total > 0 else 0.0
+    avg_inline_scripts_per_page = float(len(inline_scripts) / page_sources_total) if page_sources_total > 0 else 0.0
     summary = {
         "external_total": external_total,
         "inline_total": len(inline_scripts),
@@ -383,14 +420,32 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "inline_json_like_scripts": inline_json_like_total,
         "inline_importmap_scripts": inline_importmap_total,
         "inline_with_close_guard": inline_with_close_guard_total,
-        "page_sources_total": len(page_sources),
+        "page_sources_total": page_sources_total,
         "external_scripts_with_page_link": external_with_page_link_total,
         "inline_scripts_with_page_link": inline_with_page_link_total,
         "multi_page_script_links": multi_page_script_links,
+        "unique_external_hosts": unique_external_hosts,
+        "unique_source_page_hosts": unique_source_page_hosts,
+        "internal_page_sources": internal_page_sources,
+        "external_page_sources": external_page_sources,
+        "pages_with_inline_scripts": pages_with_inline_scripts,
+        "pages_with_external_scripts": pages_with_external_scripts,
+        "max_external_scripts_on_page": max_external_scripts_on_page,
+        "max_inline_scripts_on_page": max_inline_scripts_on_page,
+        "avg_external_scripts_per_page": avg_external_scripts_per_page,
+        "avg_inline_scripts_per_page": avg_inline_scripts_per_page,
+    }
+    has_inventory = bool(external_scripts or inline_scripts)
+    coverage = {
+        "external_scripts_linked_ratio": float(external_with_page_link_total / external_total) if external_total > 0 else 0.0,
+        "inline_scripts_linked_ratio": float(inline_with_page_link_total / len(inline_scripts)) if len(inline_scripts) > 0 else 0.0,
+        "page_sources_complete": bool(page_sources_total > 0) if has_inventory else True,
+        "linkage_mode": "single_page_passive",
     }
     return {
         "external_scripts": external_scripts,
         "inline_scripts": inline_scripts,
         "page_sources": page_sources,
         "summary": summary,
+        "coverage": coverage,
     }

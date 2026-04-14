@@ -448,6 +448,20 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_external_scripts_with_page_link": 0,
         "js_recon_inline_scripts_with_page_link": 0,
         "js_recon_multi_page_script_links": 0,
+        "js_recon_unique_external_hosts": 0,
+        "js_recon_unique_source_page_hosts": 0,
+        "js_recon_internal_page_sources": 0,
+        "js_recon_external_page_sources": 0,
+        "js_recon_pages_with_inline_scripts": 0,
+        "js_recon_pages_with_external_scripts": 0,
+        "js_recon_max_external_scripts_on_page": 0,
+        "js_recon_max_inline_scripts_on_page": 0,
+        "js_recon_avg_external_scripts_per_page": 0.0,
+        "js_recon_avg_inline_scripts_per_page": 0.0,
+        "js_recon_external_scripts_linked_ratio": 0.0,
+        "js_recon_inline_scripts_linked_ratio": 0.0,
+        "js_recon_page_sources_complete": True,
+        "js_recon_linkage_mode": "single_page_passive",
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -457,34 +471,59 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         return defaults
 
     summary = js_recon.get("summary")
-    if not isinstance(summary, Mapping):
-        return defaults
+    coverage = js_recon.get("coverage")
+    out = dict(defaults)
 
-    return {
-        "js_recon_external_total": _to_int_count(summary.get("external_total"), 0),
-        "js_recon_inline_total": _to_int_count(summary.get("inline_total"), 0),
-        "js_recon_internal_external_scripts": _to_int_count(summary.get("internal_external_scripts"), 0),
-        "js_recon_third_party_external_scripts": _to_int_count(summary.get("third_party_external_scripts"), 0),
-        "js_recon_module_scripts": _to_int_count(summary.get("module_scripts"), 0),
-        "js_recon_async_scripts": _to_int_count(summary.get("async_scripts"), 0),
-        "js_recon_defer_scripts": _to_int_count(summary.get("defer_scripts"), 0),
-        "js_recon_integrity_scripts": _to_int_count(summary.get("integrity_scripts"), 0),
-        "js_recon_inline_nonempty_total": _to_int_count(summary.get("inline_nonempty_total"), 0),
-        "js_recon_minified_external_scripts": _to_int_count(summary.get("minified_external_scripts"), 0),
-        "js_recon_module_external_scripts": _to_int_count(summary.get("module_external_scripts"), 0),
-        "js_recon_blocking_external_scripts": _to_int_count(summary.get("blocking_external_scripts"), 0),
-        "js_recon_library_hinted_external_scripts": _to_int_count(summary.get("library_hinted_external_scripts"), 0),
-        "js_recon_version_hinted_external_scripts": _to_int_count(summary.get("version_hinted_external_scripts"), 0),
-        "js_recon_external_with_query_params": _to_int_count(summary.get("external_with_query_params"), 0),
-        "js_recon_inline_module_scripts": _to_int_count(summary.get("inline_module_scripts"), 0),
-        "js_recon_inline_json_like_scripts": _to_int_count(summary.get("inline_json_like_scripts"), 0),
-        "js_recon_inline_importmap_scripts": _to_int_count(summary.get("inline_importmap_scripts"), 0),
-        "js_recon_inline_with_close_guard": _to_int_count(summary.get("inline_with_close_guard"), 0),
-        "js_recon_page_sources_total": _to_int_count(summary.get("page_sources_total"), 0),
-        "js_recon_external_scripts_with_page_link": _to_int_count(summary.get("external_scripts_with_page_link"), 0),
-        "js_recon_inline_scripts_with_page_link": _to_int_count(summary.get("inline_scripts_with_page_link"), 0),
-        "js_recon_multi_page_script_links": _to_int_count(summary.get("multi_page_script_links"), 0),
-    }
+    if isinstance(summary, Mapping):
+        out.update(
+            {
+                "js_recon_external_total": _to_int_count(summary.get("external_total"), 0),
+                "js_recon_inline_total": _to_int_count(summary.get("inline_total"), 0),
+                "js_recon_internal_external_scripts": _to_int_count(summary.get("internal_external_scripts"), 0),
+                "js_recon_third_party_external_scripts": _to_int_count(summary.get("third_party_external_scripts"), 0),
+                "js_recon_module_scripts": _to_int_count(summary.get("module_scripts"), 0),
+                "js_recon_async_scripts": _to_int_count(summary.get("async_scripts"), 0),
+                "js_recon_defer_scripts": _to_int_count(summary.get("defer_scripts"), 0),
+                "js_recon_integrity_scripts": _to_int_count(summary.get("integrity_scripts"), 0),
+                "js_recon_inline_nonempty_total": _to_int_count(summary.get("inline_nonempty_total"), 0),
+                "js_recon_minified_external_scripts": _to_int_count(summary.get("minified_external_scripts"), 0),
+                "js_recon_module_external_scripts": _to_int_count(summary.get("module_external_scripts"), 0),
+                "js_recon_blocking_external_scripts": _to_int_count(summary.get("blocking_external_scripts"), 0),
+                "js_recon_library_hinted_external_scripts": _to_int_count(summary.get("library_hinted_external_scripts"), 0),
+                "js_recon_version_hinted_external_scripts": _to_int_count(summary.get("version_hinted_external_scripts"), 0),
+                "js_recon_external_with_query_params": _to_int_count(summary.get("external_with_query_params"), 0),
+                "js_recon_inline_module_scripts": _to_int_count(summary.get("inline_module_scripts"), 0),
+                "js_recon_inline_json_like_scripts": _to_int_count(summary.get("inline_json_like_scripts"), 0),
+                "js_recon_inline_importmap_scripts": _to_int_count(summary.get("inline_importmap_scripts"), 0),
+                "js_recon_inline_with_close_guard": _to_int_count(summary.get("inline_with_close_guard"), 0),
+                "js_recon_page_sources_total": _to_int_count(summary.get("page_sources_total"), 0),
+                "js_recon_external_scripts_with_page_link": _to_int_count(summary.get("external_scripts_with_page_link"), 0),
+                "js_recon_inline_scripts_with_page_link": _to_int_count(summary.get("inline_scripts_with_page_link"), 0),
+                "js_recon_multi_page_script_links": _to_int_count(summary.get("multi_page_script_links"), 0),
+                "js_recon_unique_external_hosts": _to_int_count(summary.get("unique_external_hosts"), 0),
+                "js_recon_unique_source_page_hosts": _to_int_count(summary.get("unique_source_page_hosts"), 0),
+                "js_recon_internal_page_sources": _to_int_count(summary.get("internal_page_sources"), 0),
+                "js_recon_external_page_sources": _to_int_count(summary.get("external_page_sources"), 0),
+                "js_recon_pages_with_inline_scripts": _to_int_count(summary.get("pages_with_inline_scripts"), 0),
+                "js_recon_pages_with_external_scripts": _to_int_count(summary.get("pages_with_external_scripts"), 0),
+                "js_recon_max_external_scripts_on_page": _to_int_count(summary.get("max_external_scripts_on_page"), 0),
+                "js_recon_max_inline_scripts_on_page": _to_int_count(summary.get("max_inline_scripts_on_page"), 0),
+                "js_recon_avg_external_scripts_per_page": float(summary.get("avg_external_scripts_per_page") or 0.0),
+                "js_recon_avg_inline_scripts_per_page": float(summary.get("avg_inline_scripts_per_page") or 0.0),
+            }
+        )
+
+    if isinstance(coverage, Mapping):
+        out.update(
+            {
+                "js_recon_external_scripts_linked_ratio": float(coverage.get("external_scripts_linked_ratio") or 0.0),
+                "js_recon_inline_scripts_linked_ratio": float(coverage.get("inline_scripts_linked_ratio") or 0.0),
+                "js_recon_page_sources_complete": bool(coverage.get("page_sources_complete")),
+                "js_recon_linkage_mode": _str_or(coverage.get("linkage_mode"), "single_page_passive") or "single_page_passive",
+            }
+        )
+
+    return out
 
 
 def derive_finding_artifact_summary_fields(result: Any) -> dict[str, Any]:
