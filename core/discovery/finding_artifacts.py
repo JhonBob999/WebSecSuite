@@ -90,6 +90,8 @@ def _build_replay_key(
     candidate_type: str,
     endpoint_type: str,
     param: Any,
+    source_area: str,
+    source_ref: str,
 ) -> str:
     return _safe_join(
         [
@@ -98,6 +100,8 @@ def _build_replay_key(
             candidate_type,
             endpoint_type,
             _to_clean_string(param),
+            _to_clean_string(source_area).lower(),
+            _to_clean_string(source_ref),
         ]
     )
 
@@ -128,11 +132,49 @@ def _build_artifact_id(
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _normalize_evidence_tokens(values: Any, prefix: str = "") -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    for value in values:
+        token = _to_clean_string(value).lower()
+        if not token:
+            continue
+        out.append(f"{prefix}{token}" if prefix else token)
+    return out
+
+
+def _build_candidate_identity_key(
+    *,
+    candidate_type: str,
+    candidate_url: str,
+    param: Any,
+    endpoint_type: str,
+    source_area: str,
+    source_ref: str,
+) -> str:
+    return _safe_join(
+        [
+            candidate_type,
+            candidate_url,
+            _to_clean_string(param),
+            endpoint_type,
+            _to_clean_string(source_area).lower(),
+            _to_clean_string(source_ref),
+        ]
+    )
+
+
 def _build_evidence_sources(
     *,
     endpoint_type: str,
     param: Any,
     reasons: Any,
+    source_area: str,
+    source_ref: str,
+    candidate_primary_evidence: str,
+    candidate_evidence_sources: Any,
+    candidate_matched_signals: Any,
     request_method: str,
     request_url: str,
     baseline_status_code: int,
@@ -144,6 +186,19 @@ def _build_evidence_sources(
     if param_value:
         candidates.append(f"candidate:param:{param_value}")
 
+    source_area_value = _to_clean_string(source_area).lower()
+    if source_area_value:
+        candidates.append(f"candidate:source_area:{source_area_value}")
+    source_ref_value = _to_clean_string(source_ref)
+    if source_ref_value:
+        candidates.append(f"candidate:source_ref:{source_ref_value}")
+
+    candidate_primary = _to_clean_string(candidate_primary_evidence).lower()
+    if candidate_primary:
+        candidates.append(f"candidate:primary_evidence:{candidate_primary}")
+
+    candidates.extend(_normalize_evidence_tokens(candidate_evidence_sources, prefix="candidate:signal:"))
+    candidates.extend(_normalize_evidence_tokens(candidate_matched_signals, prefix="candidate:matched:"))
     candidates.extend(_to_reason_sources(reasons))
 
     if request_method:
@@ -169,14 +224,19 @@ def _build_evidence_sources(
 
 def _primary_evidence_from_sources(sources: list[str]) -> str:
     priority_prefixes = (
-        "response:body_hash",
-        "response:status_code",
-        "response:content_type",
-        "request:url",
-        "request:method:",
+        "candidate:primary_evidence:",
         "candidate:param:",
         "candidate:endpoint_type:",
+        "candidate:source_area:",
+        "candidate:source_ref:",
+        "candidate:signal:",
+        "candidate:matched:",
         "reason:",
+        "request:url",
+        "request:method:",
+        "response:status_code",
+        "response:content_type",
+        "response:body_hash",
     )
     for prefix in priority_prefixes:
         for source in sources:
@@ -224,7 +284,7 @@ def build_finding_artifacts(
         if candidate_type not in _ARTIFACT_TYPES:
             continue
 
-        candidate_original_url = str(candidate.get("url") or "").strip()
+        candidate_original_url = str(candidate.get("target_url") or candidate.get("url") or "").strip()
         candidate_origin_url = (
             str(candidate.get("candidate_origin_url") or "").strip()
             or str(candidate.get("candidate_origin") or "").strip()
@@ -232,15 +292,22 @@ def build_finding_artifacts(
             or str(candidate.get("candidate-origin") or "").strip()
         )
         candidate_url = candidate_original_url or request_url or fallback_final_url
-        param = candidate.get("param", None)
+        param = candidate.get("param_name", candidate.get("param", None))
         endpoint_type = str(candidate.get("endpoint_type") or "").strip() or "unknown"
         reasons = candidate.get("reasons") if isinstance(candidate.get("reasons"), list) else []
+        source_area = _to_clean_string(candidate.get("source_area")).lower()
+        source_ref = _to_clean_string(candidate.get("source_ref"))
         confidence = _normalized_confidence(candidate.get("confidence"))
         priority = _normalized_priority(candidate.get("priority"))
         evidence_sources = _build_evidence_sources(
             endpoint_type=endpoint_type,
             param=param,
             reasons=reasons,
+            source_area=source_area,
+            source_ref=source_ref,
+            candidate_primary_evidence=_to_clean_string(candidate.get("primary_evidence")),
+            candidate_evidence_sources=candidate.get("evidence_sources"),
+            candidate_matched_signals=candidate.get("matched_signals"),
             request_method=request_method,
             request_url=request_url,
             baseline_status_code=baseline_status_code,
@@ -264,6 +331,8 @@ def build_finding_artifacts(
             candidate_type=candidate_type,
             endpoint_type=endpoint_type,
             param=param,
+            source_area=source_area,
+            source_ref=source_ref,
         )
         has_replay_recipe = bool(request_method and replay_target_url)
         artifact_id = _build_artifact_id(
@@ -276,7 +345,16 @@ def build_finding_artifacts(
             replay_target_url=replay_target_url,
         )
 
-        dedupe_key = (candidate_type, candidate_url, param, endpoint_type, baseline_body_hash)
+        candidate_identity_key = _build_candidate_identity_key(
+            candidate_type=candidate_type,
+            candidate_url=candidate_url,
+            param=param,
+            endpoint_type=endpoint_type,
+            source_area=source_area,
+            source_ref=source_ref,
+        )
+
+        dedupe_key = (candidate_identity_key, baseline_body_hash)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -285,7 +363,11 @@ def build_finding_artifacts(
             {
                 "type": candidate_type,
                 "url": candidate_url,
+                "target_url": candidate_url,
                 "param": param,
+                "param_name": param,
+                "source_area": source_area,
+                "source_ref": source_ref,
                 "endpoint_type": endpoint_type,
                 "confidence": confidence,
                 "priority": priority,
@@ -304,6 +386,7 @@ def build_finding_artifacts(
                 "has_request_context": has_request_context,
                 "has_response_context": has_response_context,
                 "artifact_id": artifact_id,
+                "candidate_identity_key": candidate_identity_key,
                 "replay_key": replay_key,
                 "replay_target_url": replay_target_url,
                 "replay_target_source": replay_target_source,
