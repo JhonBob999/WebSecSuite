@@ -49,7 +49,10 @@ class Ui_DataPreviewDialog(object):
 
         self.retranslateUi(DataPreviewDialog)
 
-        QMetaObject.connectSlotsByName(DataPreviewDialog)
+        # DataPreviewDialog uses explicit/manual signal connections in dialogs/data_preview_dialog.py.
+        # Auto-connect by objectName causes noisy warnings for legacy handler names.
+        # Keep disabled for this dialog only.
+        # QMetaObject.connectSlotsByName(DataPreviewDialog)
     # setupUi
 
     def retranslateUi(self, DataPreviewDialog):
@@ -59,4 +62,3 @@ class Ui_DataPreviewDialog(object):
         self.btnRefresh.setText(QCoreApplication.translate("DataPreviewDialog", u"Refresh", None))
         self.btnExport.setText(QCoreApplication.translate("DataPreviewDialog", u"Export", None))
     # retranslateUi
-

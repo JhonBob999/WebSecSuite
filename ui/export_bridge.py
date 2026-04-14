@@ -1509,6 +1509,16 @@ def _join_string_list(value: Any) -> str:
     return ",".join(out)
 
 
+def _ensure_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
 def _extract_candidate_counts(rec: Mapping[str, Any]) -> dict[str, int]:
     summary = rec.get("candidates_summary")
     if not isinstance(summary, Mapping):
