@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 from ui.constants import Col, TaskStatus
+from ui.task_inspector import TaskInspectorPanel
 from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
 from ui.table_controller import TaskTableController
@@ -191,6 +192,8 @@ class ScraperTabController(QWidget):
         table = self.ui.taskTable
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(self.actions.on_context_menu)
+        table.itemSelectionChanged.connect(self._on_task_selection_changed)
+        table.currentCellChanged.connect(self._on_task_current_cell_changed)
 
 
         # 5) Демонстрационные задачи (можно оставить для проверки)
@@ -200,6 +203,7 @@ class ScraperTabController(QWidget):
 
         # Остальные внутренние подключения
         self._init_ui_connections()
+        self._refresh_task_inspector_for_current()
 
     def _apply_responsive_main_layout(self) -> None:
         """Минимально перестраивает главный layout на основе существующих виджетов."""
@@ -237,7 +241,18 @@ class ScraperTabController(QWidget):
         left_layout.addLayout(actions_row)
 
         self.ui.taskTable.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_layout.addWidget(self.ui.taskTable, 1)
+        self.task_inspector_splitter = QSplitter(Qt.Horizontal, left_panel)
+        self.task_inspector_splitter.setChildrenCollapsible(True)
+        self.task_inspector_splitter.setHandleWidth(6)
+        self.ui.taskTable.setParent(self.task_inspector_splitter)
+        self.task_inspector_splitter.addWidget(self.ui.taskTable)
+
+        self.task_inspector = TaskInspectorPanel(self.task_inspector_splitter)
+        self.task_inspector_splitter.addWidget(self.task_inspector)
+        self.task_inspector_splitter.setStretchFactor(0, 4)
+        self.task_inspector_splitter.setStretchFactor(1, 2)
+        self.task_inspector_splitter.setSizes([760, 340])
+        left_layout.addWidget(self.task_inspector_splitter, 1)
 
         right_panel = QWidget(splitter)
         right_layout = QVBoxLayout(right_panel)
@@ -467,6 +482,46 @@ class ScraperTabController(QWidget):
         # Clear — очищает экран, но НЕ буфер
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
+
+    def _on_task_current_cell_changed(self, *_args):
+        self._refresh_task_inspector_for_current()
+
+    def _on_task_selection_changed(self):
+        self._refresh_task_inspector_for_current()
+
+    def _refresh_task_inspector_for_current(self):
+        if not hasattr(self, "task_inspector"):
+            return
+        table = self.ui.taskTable
+        row = table.currentRow()
+        if row < 0 or row >= table.rowCount():
+            self.task_inspector.clear("No task selected")
+            return
+
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        payload = {}
+        if task_id and isinstance(self.task_results, dict):
+            payload = self.task_results.get(task_id) or {}
+        if not payload and task is not None:
+            payload = getattr(task, "result", None) or {}
+        if not payload:
+            self.task_inspector.clear("No results available for selected task")
+            return
+
+        status_item = table.item(row, Col.Status)
+        status_text = status_item.text().strip() if status_item and status_item.text() else ""
+        task_url = getattr(task, "url", "") if task is not None else ""
+        task_method = getattr(task, "method", "") if task is not None else ""
+        params = dict(getattr(task, "params", {}) or {}) if task is not None else {}
+        cookie_path = str(params.get("cookie_file") or "")
+        self.task_inspector.update_from_payload(
+            payload,
+            status_text=status_text,
+            task_url=task_url,
+            task_method=task_method,
+            cookie_path=cookie_path,
+        )
                      
     def _on_filter_text_changed(self, text: str):
         # проксируем к новой системе поиска
@@ -2018,6 +2073,8 @@ class ScraperTabController(QWidget):
             tooltip = str(payload)
 
         self.set_results_cell(row, summary, tooltip)
+        if self.ui.taskTable.currentRow() == row:
+            self._refresh_task_inspector_for_current()
 
         
     def _records_from_rows(self, rows) -> list[dict]:
