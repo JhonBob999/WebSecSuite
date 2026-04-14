@@ -174,6 +174,10 @@ def _empty_secret_hints_summary() -> dict[str, Any]:
         "by_source_kind": {},
         "sources_with_hints": 0,
         "high_confidence_hints": 0,
+        "linkage_total": 0,
+        "linkage_sources_with_high_confidence": 0,
+        "linkage_multi_hint_sources": 0,
+        "value_kinds_present": [],
         "has_api_key_hint": False,
         "has_token_hint": False,
         "has_bearer_hint": False,
@@ -185,6 +189,31 @@ def _empty_secret_hints_summary() -> dict[str, Any]:
 
 def _empty_secret_hints_contract() -> dict[str, Any]:
     return {"all": [], "summary": _empty_secret_hints_summary()}
+
+
+def _empty_secret_hint_linkage_item(source_kind: str, source_ref: str) -> dict[str, Any]:
+    return {
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+        "source_label": "",
+        "source_page_url": "",
+        "source_page_host": "",
+        "source_page_path": "",
+        "linkage_key": "",
+        "hint_count": 0,
+        "unique_hint_count": 0,
+        "hint_types_present": [],
+        "high_confidence_count": 0,
+        "matched_keys": [],
+        "value_kinds_present": [],
+        "top_hint_type": "",
+        "has_api_key_hint": False,
+        "has_token_hint": False,
+        "has_bearer_hint": False,
+        "has_client_id_hint": False,
+        "has_secret_hint": False,
+        "has_authorization_hint": False,
+    }
 
 
 def _normalize_hint_key(raw: str) -> str:
@@ -356,7 +385,156 @@ def _build_secret_hint(
     }
 
 
-def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_items: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_secret_hint_linkage(
+    *,
+    all_items: list[dict[str, Any]],
+    external_scripts: list[dict[str, Any]],
+    inline_raw_items: list[dict[str, Any]],
+    page_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_meta: dict[tuple[str, str], dict[str, str]] = {}
+    for script in external_scripts:
+        source_ref = str(script.get("absolute_url") or script.get("src") or "").strip()
+        if not source_ref:
+            continue
+        source_meta[("external_js", source_ref)] = {
+            "source_label": str(script.get("src") or source_ref)[:160],
+            "source_page_url": str(script.get("source_page_url") or ""),
+            "source_page_host": str(script.get("source_page_host") or ""),
+            "source_page_path": str(script.get("source_page_path") or ""),
+        }
+    for item in inline_raw_items:
+        sha1_value = str(item.get("sha1") or "").strip()
+        if not sha1_value:
+            continue
+        source_meta[("inline_js", sha1_value)] = {
+            "source_label": f"inline:{sha1_value[:12]}",
+            "source_page_url": str(item.get("source_page_url") or ""),
+            "source_page_host": str(item.get("source_page_host") or ""),
+            "source_page_path": str(item.get("source_page_path") or ""),
+        }
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for hint in all_items:
+        source_kind = str(hint.get("source_kind") or "")
+        source_ref = str(hint.get("source_ref") or "")
+        grouped.setdefault((source_kind, source_ref), []).append(hint)
+
+    linkage_items: list[dict[str, Any]] = []
+    for source_kind, source_ref in sorted(grouped.keys(), key=lambda item: (item[0], item[1])):
+        hints = grouped.get((source_kind, source_ref), [])
+        item = _empty_secret_hint_linkage_item(source_kind, source_ref)
+        meta = source_meta.get((source_kind, source_ref), {})
+        source_page_url = str(meta.get("source_page_url") or "")
+        source_page_host = str(meta.get("source_page_host") or "")
+        source_page_path = str(meta.get("source_page_path") or "")
+        if not source_page_url and page_sources:
+            source_page_url = str(page_sources[0].get("page_url") or "")
+            source_page_host = source_page_host or str(page_sources[0].get("page_host") or "")
+            source_page_path = source_page_path or str(page_sources[0].get("page_path") or "")
+        source_label = str(meta.get("source_label") or "") or source_ref[:120]
+
+        type_counts: dict[str, int] = {}
+        unique_keys: set[str] = set()
+        hint_types_present: set[str] = set()
+        matched_keys: set[str] = set()
+        value_kinds_present: set[str] = set()
+        high_confidence_count = 0
+        has_authorization_hint = False
+        for hint in sorted(
+            hints,
+            key=lambda value: (
+                str(value.get("hint_type") or ""),
+                str(value.get("matched_key") or ""),
+                str(value.get("value_kind") or ""),
+                str(value.get("evidence_kind") or ""),
+                str(value.get("masked_preview") or ""),
+            ),
+        ):
+            hint_type = str(hint.get("hint_type") or "unknown")
+            matched_key = str(hint.get("matched_key") or "")
+            value_kind = str(hint.get("value_kind") or "")
+            evidence_kind = str(hint.get("evidence_kind") or "")
+            masked_preview = str(hint.get("masked_preview") or "")
+            unique_keys.add("|".join((hint_type, matched_key, value_kind, evidence_kind, masked_preview)))
+            hint_types_present.add(hint_type)
+            if matched_key:
+                matched_keys.add(matched_key)
+            if value_kind:
+                value_kinds_present.add(value_kind)
+            type_counts[hint_type] = type_counts.get(hint_type, 0) + 1
+            if str(hint.get("confidence") or "") == "high":
+                high_confidence_count += 1
+            if hint_type == "authorization" or matched_key == "authorization":
+                has_authorization_hint = True
+
+        top_hint_type = ""
+        if type_counts:
+            top_hint_type = sorted(type_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        linkage_key_raw = "|".join((source_kind, source_ref, source_page_url))
+        item.update(
+            {
+                "source_label": source_label,
+                "source_page_url": source_page_url,
+                "source_page_host": source_page_host,
+                "source_page_path": source_page_path,
+                "linkage_key": hashlib.sha1(linkage_key_raw.encode("utf-8", errors="replace")).hexdigest()[:16],
+                "hint_count": len(hints),
+                "unique_hint_count": len(unique_keys),
+                "hint_types_present": sorted(hint_types_present),
+                "high_confidence_count": high_confidence_count,
+                "matched_keys": sorted(matched_keys),
+                "value_kinds_present": sorted(value_kinds_present),
+                "top_hint_type": top_hint_type,
+                "has_api_key_hint": "api_key" in hint_types_present,
+                "has_token_hint": "token" in hint_types_present,
+                "has_bearer_hint": "bearer" in hint_types_present,
+                "has_client_id_hint": "client_id" in hint_types_present,
+                "has_secret_hint": "secret" in hint_types_present,
+                "has_authorization_hint": has_authorization_hint,
+            }
+        )
+        linkage_items.append(item)
+    return linkage_items
+
+
+def _derive_secret_hint_summary(all_items: list[dict[str, Any]], linkage_items: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = _empty_secret_hints_summary()
+    summary["total_hints"] = len(all_items)
+    summary["high_confidence_hints"] = sum(1 for item in all_items if str(item.get("confidence") or "") == "high")
+    summary["sources_with_hints"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in all_items})
+    summary["linkage_total"] = len(linkage_items)
+    summary["linkage_sources_with_high_confidence"] = sum(1 for item in linkage_items if int(item.get("high_confidence_count") or 0) > 0)
+    summary["linkage_multi_hint_sources"] = sum(1 for item in linkage_items if int(item.get("unique_hint_count") or 0) > 1)
+    by_type: dict[str, int] = {}
+    by_source_kind: dict[str, int] = {}
+    value_kinds_present: set[str] = set()
+    for item in all_items:
+        hint_type = str(item.get("hint_type") or "unknown")
+        source_kind = str(item.get("source_kind") or "unknown")
+        value_kind = str(item.get("value_kind") or "")
+        by_type[hint_type] = by_type.get(hint_type, 0) + 1
+        by_source_kind[source_kind] = by_source_kind.get(source_kind, 0) + 1
+        if value_kind:
+            value_kinds_present.add(value_kind)
+    summary["by_type"] = dict(sorted(by_type.items()))
+    summary["by_source_kind"] = dict(sorted(by_source_kind.items()))
+    summary["value_kinds_present"] = sorted(value_kinds_present)
+    summary["has_api_key_hint"] = bool(by_type.get("api_key"))
+    summary["has_token_hint"] = bool(by_type.get("token"))
+    summary["has_bearer_hint"] = bool(by_type.get("bearer"))
+    summary["has_client_id_hint"] = bool(by_type.get("client_id"))
+    summary["has_secret_hint"] = bool(by_type.get("secret"))
+    summary["has_authorization_hint"] = bool(by_type.get("authorization")) or any(
+        str(item.get("matched_key") or "") == "authorization" for item in all_items
+    )
+    return summary
+
+
+def _collect_secret_hints(
+    external_scripts: list[dict[str, Any]],
+    inline_raw_items: list[dict[str, Any]],
+    page_sources: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     dedupe: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
 
     def _put(item: dict[str, Any] | None) -> None:
@@ -496,28 +674,14 @@ def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_ite
             str(item.get("evidence_kind") or ""),
         ),
     )
-    summary = _empty_secret_hints_summary()
-    summary["total_hints"] = len(all_items)
-    summary["high_confidence_hints"] = sum(1 for item in all_items if str(item.get("confidence") or "") == "high")
-    summary["sources_with_hints"] = len(
-        {(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in all_items}
+    linkage_items = _build_secret_hint_linkage(
+        all_items=all_items,
+        external_scripts=external_scripts,
+        inline_raw_items=inline_raw_items,
+        page_sources=page_sources,
     )
-    by_type: dict[str, int] = {}
-    by_source_kind: dict[str, int] = {}
-    for item in all_items:
-        hint_type = str(item.get("hint_type") or "unknown")
-        source_kind = str(item.get("source_kind") or "unknown")
-        by_type[hint_type] = by_type.get(hint_type, 0) + 1
-        by_source_kind[source_kind] = by_source_kind.get(source_kind, 0) + 1
-    summary["by_type"] = dict(sorted(by_type.items()))
-    summary["by_source_kind"] = dict(sorted(by_source_kind.items()))
-    summary["has_api_key_hint"] = bool(by_type.get("api_key"))
-    summary["has_token_hint"] = bool(by_type.get("token"))
-    summary["has_bearer_hint"] = bool(by_type.get("bearer"))
-    summary["has_client_id_hint"] = bool(by_type.get("client_id"))
-    summary["has_secret_hint"] = bool(by_type.get("secret"))
-    summary["has_authorization_hint"] = bool(by_type.get("authorization"))
-    return {"all": all_items, "summary": summary}
+    summary = _derive_secret_hint_summary(all_items, linkage_items)
+    return {"all": all_items, "summary": summary}, linkage_items
 
 
 def _clean_endpoint_candidate_value(raw: str) -> str:
@@ -986,6 +1150,7 @@ def empty_js_recon_contract() -> dict[str, Any]:
         "endpoint_candidates": [],
         "endpoint_linkage": [],
         "secret_hints": _empty_secret_hints_contract(),
+        "secret_hint_linkage": [],
         "page_sources": [],
         "summary": {
             "external_total": 0,
@@ -1331,6 +1496,13 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
             }
         )
         inline_raw_items.append({"index": idx, "text": text, "sha1": hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()})
+        inline_raw_items[-1].update(
+            {
+                "source_page_url": source_page_url,
+                "source_page_host": source_page_host,
+                "source_page_path": source_page_path,
+            }
+        )
 
     external_total = len(external_scripts)
     external_script_urls = sorted({str(item.get("absolute_url") or "").strip() for item in external_scripts if str(item.get("absolute_url") or "").strip()})
@@ -1392,9 +1564,10 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         page_sources=page_sources,
         base_host=base_host,
     )
-    secret_hints = _collect_secret_hints(
+    secret_hints, secret_hint_linkage = _collect_secret_hints(
         external_scripts=external_scripts,
         inline_raw_items=inline_raw_items,
+        page_sources=page_sources,
     )
     summary = {
         "external_total": external_total,
@@ -1446,6 +1619,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "endpoint_candidates": endpoint_candidates,
         "endpoint_linkage": endpoint_linkage,
         "secret_hints": secret_hints,
+        "secret_hint_linkage": secret_hint_linkage,
         "page_sources": page_sources,
         "summary": summary,
         "coverage": coverage,

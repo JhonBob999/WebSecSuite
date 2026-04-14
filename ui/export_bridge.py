@@ -490,6 +490,10 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_secret_hints_sources_with_hints": 0,
         "js_recon_secret_hints_high_confidence": 0,
         "js_recon_secret_hints_types_present": "",
+        "js_recon_secret_hints_value_kinds_present": "",
+        "js_recon_secret_hints_linkage_total": 0,
+        "js_recon_secret_hints_linkage_multi_source_count": 0,
+        "js_recon_secret_hints_linkage_high_confidence_sources": 0,
         "js_recon_secret_hints_has_api_key": False,
         "js_recon_secret_hints_has_token": False,
         "js_recon_secret_hints_has_bearer": False,
@@ -599,6 +603,14 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
                     "js_recon_secret_hints_sources_with_hints": _to_int_count(secret_summary.get("sources_with_hints"), 0),
                     "js_recon_secret_hints_high_confidence": _to_int_count(secret_summary.get("high_confidence_hints"), 0),
                     "js_recon_secret_hints_types_present": _join_string_list(sorted(str(key) for key in by_type.keys())),
+                    "js_recon_secret_hints_value_kinds_present": _join_string_list(
+                        sorted(str(value_kind) for value_kind in _ensure_list(secret_summary.get("value_kinds_present")) if str(value_kind))
+                    ),
+                    "js_recon_secret_hints_linkage_total": _to_int_count(secret_summary.get("linkage_total"), 0),
+                    "js_recon_secret_hints_linkage_multi_source_count": _to_int_count(secret_summary.get("linkage_multi_hint_sources"), 0),
+                    "js_recon_secret_hints_linkage_high_confidence_sources": _to_int_count(
+                        secret_summary.get("linkage_sources_with_high_confidence"), 0
+                    ),
                     "js_recon_secret_hints_has_api_key": bool(secret_summary.get("has_api_key_hint")),
                     "js_recon_secret_hints_has_token": bool(secret_summary.get("has_token_hint")),
                     "js_recon_secret_hints_has_bearer": bool(secret_summary.get("has_bearer_hint")),
