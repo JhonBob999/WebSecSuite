@@ -8,16 +8,16 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 
 
 _ENDPOINT_CATEGORY_ORDER: tuple[str, ...] = (
-    "api",
     "graphql",
-    "auth",
+    "api",
     "login",
+    "auth",
     "admin",
     "php",
+    "xhr_hint",
+    "route",
     "absolute_url",
     "relative_url",
-    "route",
-    "xhr_hint",
     "unknown",
 )
 
@@ -30,6 +30,22 @@ _PROTOCOL_RELATIVE_URL_RE = re.compile(r"^//(?P<host>[a-z0-9][a-z0-9.-]*|\[[0-9a
 _HOST_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 _ROUTE_EXTENSION_HINTS = (".php", ".json", ".js", ".map", ".txt", ".xml", ".graphql", ".api")
 _ROUTE_SIGNAL_HINTS = ("api", "auth", "admin", "login", "upload", "graphql", "file", "path")
+_ASSET_FILE_EXTENSIONS = (".js", ".mjs", ".cjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".map", ".webp")
+_ASSET_SEGMENT_HINTS = ("assets", "asset", "static", "images", "image", "img", "fonts", "font", "vendor", "dist", "build", "chunks")
+_ASSET_UTILITY_HINTS = (
+    "googletagmanager",
+    "google-analytics",
+    "doubleclick",
+    "recaptcha",
+    "analytics",
+    "tagmanager",
+    "gtm.js",
+    "beacon",
+    "widget",
+    "chat",
+    "hotjar",
+    "mixpanel",
+)
 _HTML_TAG_NOISE = {
     "a",
     "body",
@@ -99,24 +115,85 @@ def _normalize_endpoint_candidate_value(value: str) -> str:
     return re.sub(r"\s+", "", cleaned.lower())
 
 
-def _classify_endpoint_candidate(value: str, lowered: str) -> str:
-    if "graphql" in lowered:
-        return "graphql"
-    if "/api/" in lowered or lowered.startswith("api/") or "/api?" in lowered:
-        return "api"
-    if "auth" in lowered:
-        return "auth"
-    if "login" in lowered:
-        return "login"
-    if "admin" in lowered:
-        return "admin"
-    if ".php" in lowered:
-        return "php"
+def _looks_like_asset_path(value: str, normalized_value: str, path: str, host: str = "") -> bool:
+    candidate = str(value or "").strip().lower()
+    normalized = str(normalized_value or "").strip().lower()
+    lowered_path = str(path or "").strip().lower()
+    host_value = str(host or "").strip().lower()
+    path_only = lowered_path or candidate.split("?", 1)[0].split("#", 1)[0]
+    if any(path_only.endswith(ext) for ext in _ASSET_FILE_EXTENSIONS):
+        return True
+    segments = [segment for segment in path_only.split("/") if segment]
+    if any(segment in _ASSET_SEGMENT_HINTS for segment in segments):
+        return True
+    combined = " ".join(part for part in (candidate, normalized, lowered_path, host_value) if part)
+    return any(hint in combined for hint in _ASSET_UTILITY_HINTS)
+
+
+def _collect_category_signals(value: str, normalized_value: str, path: str, host: str, evidence: str, source_kind: str) -> dict[str, bool]:
+    lowered_path = str(path or "").lower()
+    lowered_value = str(value or "").lower()
+    lowered_normalized = str(normalized_value or "").lower()
+    lowered_host = str(host or "").lower()
+    lowered_evidence = str(evidence or "").lower()
+    lowered_source_kind = str(source_kind or "").lower()
+    haystack = " ".join(
+        part
+        for part in (lowered_value, lowered_normalized, lowered_path, lowered_host, lowered_evidence, lowered_source_kind)
+        if part
+    )
+    graphql = bool(re.search(r"(^|[/_.-])graphql(?:$|[/_.?-])", lowered_path or lowered_normalized or lowered_value))
+    api = bool(re.search(r"(^|/)api(?:/|$|\?)", lowered_path or lowered_normalized or lowered_value) or "/v1/" in haystack or "/v2/" in haystack or "/v3/" in haystack)
+    login = any(token in haystack for token in ("/login", "signin", "sign-in", "logout", "log-in", "/logon", "/signout", "sign-out"))
+    auth = any(token in haystack for token in ("/auth", "register", "signup", "sign-up", "session", "reset", "password", "oauth", "token"))
+    admin = any(token in haystack for token in ("/admin", "/backend", "dashboard", "controlpanel", "cpanel", "/root"))
+    php = ".php" in (lowered_path or lowered_normalized or lowered_value)
+    xhr = any(token in haystack for token in ("fetch", "axios", "xmlhttprequest"))
+    return {
+        "graphql": graphql,
+        "api": api,
+        "login": login,
+        "auth": auth,
+        "admin": admin,
+        "php": php,
+        "xhr_hint": xhr,
+    }
+
+
+def _classify_path_category(value: str, normalized_value: str, path: str) -> str:
     if value.startswith(("http://", "https://")):
         return "absolute_url"
     if value.startswith(("/", "./", "../")):
         return "relative_url"
-    return "route"
+    if _looks_like_meaningful_route(path or value, normalized_value):
+        return "route"
+    return "unknown"
+
+
+def _classify_endpoint_candidate(value: str, normalized_value: str, path: str, host: str, evidence: str, source_kind: str, force_category: str = "") -> str:
+    signals = _collect_category_signals(value, normalized_value, path, host, evidence, source_kind)
+    fallback_category = _classify_path_category(value, normalized_value, path)
+    asset_like = _looks_like_asset_path(value, normalized_value, path, host)
+    if force_category == "xhr_hint":
+        signals["xhr_hint"] = True
+    if not asset_like:
+        if signals["graphql"]:
+            return "graphql"
+        if signals["api"]:
+            return "api"
+        if signals["login"]:
+            return "login"
+        if signals["auth"]:
+            return "auth"
+        if signals["admin"]:
+            return "admin"
+        if signals["php"]:
+            return "php"
+    if signals["xhr_hint"]:
+        return "xhr_hint"
+    if fallback_category in {"route", "absolute_url", "relative_url"}:
+        return fallback_category
+    return "unknown"
 
 
 def _looks_like_protocol_relative_url(value: str) -> bool:
@@ -183,7 +260,7 @@ def _looks_like_noise_relative_candidate(value: str, lowered: str) -> bool:
         return True
     if _is_html_tag_like_fragment(candidate):
         return True
-    if re.fullmatch(r"(?:/|\./|\.\./)?[a-z_$][\w$-]*:?", lowered):
+    if re.fullmatch(r"(?:/|\./|\.\./)?[a-z_$][\w$-]*:?", lowered) and not any(signal in lowered for signal in _ROUTE_SIGNAL_HINTS):
         return True
     return not _looks_like_meaningful_route(candidate, lowered)
 
@@ -223,12 +300,13 @@ def _build_endpoint_candidate(
     normalized_value = _normalize_endpoint_candidate_value(value)
     if not value or not normalized_value:
         return None
-    category = force_category or _classify_endpoint_candidate(value, normalized_value)
-    parsed = urlparse(value if value.startswith(("http://", "https://", "/", "./", "../")) else "")
+    parse_target = value if value.startswith(("http://", "https://", "/", "./", "../")) else ""
+    parsed = urlparse(parse_target)
     is_absolute = value.startswith(("http://", "https://"))
     is_relative = value.startswith(("/", "./", "../"))
     host = (parsed.hostname or parsed.netloc or "").lower() if parsed else ""
     path = parsed.path or ""
+    category = _classify_endpoint_candidate(value, normalized_value, path, host, evidence, source_kind, force_category=force_category)
     internal_hint = bool(base_host and host and host == base_host)
     external_hint = bool(host and base_host and host != base_host)
     dedupe_key = f"{normalized_value}|{category}"
