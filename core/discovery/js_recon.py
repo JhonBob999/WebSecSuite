@@ -80,6 +80,36 @@ _HTML_TAG_NOISE = {
     "tr",
     "ul",
 }
+_SECRET_HINT_TYPE_ALLOWLIST = {"api_key", "token", "bearer", "client_id", "secret", "authorization", "unknown"}
+_SECRET_HINT_ALIAS_TO_TYPE: dict[str, str] = {
+    "apikey": "api_key",
+    "api_key": "api_key",
+    "api-key": "api_key",
+    "access_token": "token",
+    "accesstoken": "token",
+    "auth_token": "token",
+    "authtoken": "token",
+    "token": "token",
+    "bearer": "bearer",
+    "clientid": "client_id",
+    "client_id": "client_id",
+    "client-id": "client_id",
+    "secret": "secret",
+    "clientsecret": "secret",
+    "client_secret": "secret",
+    "client-secret": "secret",
+    "authorization": "authorization",
+}
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?P<key>api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?id|client[_-]?secret|secret|authorization)\b"
+    r"\s*[:=]\s*(?P<quote>['\"])(?P<value>(?:\\.|(?!\2).){0,256})\2"
+)
+_SECRET_HEADER_BEARER_RE = re.compile(
+    r"(?i)\b(?:authorization|auth[_-]?header)\b\s*[:=]\s*(?P<quote>['\"])Bearer\s+(?P<value>[A-Za-z0-9._~+/=-]{6,512})\1"
+)
+_SECRET_STRING_HINT_RE = re.compile(
+    r"(?i)(?P<quote>['\"])\s*(?P<key>api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?id|client[_-]?secret|secret|authorization)\s*(?::|=)\s*\1"
+)
 
 
 def _empty_endpoint_candidate_summary() -> dict[str, int]:
@@ -118,6 +148,223 @@ def _empty_endpoint_linkage_summary() -> dict[str, int | float]:
         "endpoint_linkage_max_candidates_per_source": 0,
         "endpoint_linkage_avg_candidates_per_source": 0.0,
     }
+
+
+def _empty_secret_hints_summary() -> dict[str, Any]:
+    return {
+        "total_hints": 0,
+        "by_type": {},
+        "by_source_kind": {},
+        "sources_with_hints": 0,
+        "high_confidence_hints": 0,
+        "has_api_key_hint": False,
+        "has_token_hint": False,
+        "has_bearer_hint": False,
+        "has_client_id_hint": False,
+        "has_secret_hint": False,
+        "has_authorization_hint": False,
+    }
+
+
+def _empty_secret_hints_contract() -> dict[str, Any]:
+    return {"all": [], "summary": _empty_secret_hints_summary()}
+
+
+def _normalize_hint_key(raw: str) -> str:
+    key = re.sub(r"[^a-z0-9_-]+", "", str(raw or "").strip().lower()).replace("-", "_")
+    return key
+
+
+def _normalize_hint_type(matched_key: str) -> str:
+    key = _normalize_hint_key(matched_key)
+    hint_type = _SECRET_HINT_ALIAS_TO_TYPE.get(key, "unknown")
+    return hint_type if hint_type in _SECRET_HINT_TYPE_ALLOWLIST else "unknown"
+
+
+def _value_kind(value: str, hint_type: str) -> str:
+    value_clean = str(value or "").strip()
+    if not value_clean:
+        return "empty"
+    if value_clean.lower().startswith("bearer "):
+        return "bearer_like"
+    if value_clean.count(".") == 2 and all(part for part in value_clean.split(".")):
+        return "jwt_like"
+    if hint_type == "bearer":
+        return "bearer_like"
+    if re.fullmatch(r"[A-Za-z0-9._~+/=-]{10,}", value_clean):
+        return "opaque_string"
+    return "literal_string"
+
+
+def _masked_secret_preview(value: str, value_kind: str) -> str:
+    value_clean = str(value or "").strip()
+    length = len(value_clean)
+    if not value_clean or length < 4 or length > 40:
+        return ""
+    if value_kind in {"jwt_like"}:
+        return ""
+    if any(ch.isspace() for ch in value_clean):
+        return ""
+    prefix = value_clean[:4]
+    return f"{prefix}***({length})"
+
+
+def _build_secret_hint(
+    *,
+    hint_type: str,
+    source_kind: str,
+    source_ref: str,
+    matched_key: str,
+    value: str,
+    evidence_kind: str,
+    confidence: str,
+) -> dict[str, Any]:
+    normalized_type = hint_type if hint_type in _SECRET_HINT_TYPE_ALLOWLIST else "unknown"
+    normalized_key = _normalize_hint_key(matched_key)
+    kind = _value_kind(value, normalized_type)
+    masked_preview = _masked_secret_preview(value, kind)
+    linkage_seed = "|".join(
+        [
+            normalized_type,
+            source_kind,
+            source_ref,
+            normalized_key,
+            evidence_kind,
+        ]
+    )
+    return {
+        "hint_type": normalized_type,
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+        "matched_key": normalized_key,
+        "value_kind": kind,
+        "value_length": len(str(value or "").strip()),
+        "masked_preview": masked_preview,
+        "confidence": confidence,
+        "evidence_kind": evidence_kind,
+        "linkage_key": hashlib.sha1(linkage_seed.encode("utf-8", errors="replace")).hexdigest()[:16],
+    }
+
+
+def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_items: list[dict[str, Any]]) -> dict[str, Any]:
+    dedupe: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
+
+    def _put(item: dict[str, Any] | None) -> None:
+        if not isinstance(item, dict):
+            return
+        dedupe_key = (
+            str(item.get("hint_type") or ""),
+            str(item.get("source_kind") or ""),
+            str(item.get("source_ref") or ""),
+            str(item.get("matched_key") or ""),
+            str(item.get("masked_preview") or ""),
+            str(item.get("evidence_kind") or ""),
+        )
+        dedupe[dedupe_key] = item
+
+    def _scan_text(text: str, *, source_kind: str, source_ref: str) -> None:
+        if not isinstance(text, str) or not text.strip():
+            return
+        for match in _SECRET_ASSIGNMENT_RE.finditer(text):
+            key_raw = str(match.group("key") or "").strip()
+            value_raw = str(match.group("value") or "")
+            value_stripped = value_raw.strip()
+            if not value_stripped or value_stripped.lower() in {"<redacted>", "your_token", "changeme", "example"}:
+                continue
+            hint_type = _normalize_hint_type(key_raw)
+            evidence_kind = "assignment"
+            confidence = "high" if hint_type in {"api_key", "token", "client_id", "secret"} else "medium"
+            _put(
+                _build_secret_hint(
+                    hint_type=hint_type,
+                    source_kind=source_kind,
+                    source_ref=source_ref,
+                    matched_key=key_raw,
+                    value=value_stripped,
+                    evidence_kind=evidence_kind,
+                    confidence=confidence,
+                )
+            )
+        for match in _SECRET_HEADER_BEARER_RE.finditer(text):
+            value_raw = str(match.group("value") or "").strip()
+            if not value_raw:
+                continue
+            _put(
+                _build_secret_hint(
+                    hint_type="bearer",
+                    source_kind=source_kind,
+                    source_ref=source_ref,
+                    matched_key="authorization",
+                    value=value_raw,
+                    evidence_kind="header_like",
+                    confidence="high",
+                )
+            )
+        if not any(pattern.search(text) for pattern in (_SECRET_ASSIGNMENT_RE, _SECRET_HEADER_BEARER_RE)):
+            for match in _SECRET_STRING_HINT_RE.finditer(text):
+                key_raw = str(match.group("key") or "").strip()
+                hint_type = _normalize_hint_type(key_raw)
+                _put(
+                    _build_secret_hint(
+                        hint_type=hint_type,
+                        source_kind=source_kind,
+                        source_ref=source_ref,
+                        matched_key=key_raw,
+                        value="",
+                        evidence_kind="string_pattern",
+                        confidence="low",
+                    )
+                )
+
+    for idx, script in enumerate(external_scripts):
+        source_ref = str(script.get("absolute_url") or script.get("src") or f"external_js#{idx}")
+        for key in ("content", "text", "body", "script_text", "code", "js"):
+            content = script.get(key)
+            if isinstance(content, str) and content.strip():
+                _scan_text(content, source_kind="external_js", source_ref=source_ref)
+                break
+
+    for item in inline_raw_items:
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        sha1_value = str(item.get("sha1") or "").strip()
+        index_value = item.get("index")
+        source_ref = sha1_value or f"inline_js#{index_value if isinstance(index_value, int) else 'unknown'}"
+        _scan_text(text, source_kind="inline_js", source_ref=source_ref)
+
+    all_items = sorted(
+        dedupe.values(),
+        key=lambda item: (
+            str(item.get("source_kind") or ""),
+            str(item.get("source_ref") or ""),
+            str(item.get("hint_type") or ""),
+            str(item.get("matched_key") or ""),
+            str(item.get("evidence_kind") or ""),
+        ),
+    )
+    summary = _empty_secret_hints_summary()
+    summary["total_hints"] = len(all_items)
+    summary["high_confidence_hints"] = sum(1 for item in all_items if str(item.get("confidence") or "") == "high")
+    summary["sources_with_hints"] = len(
+        {(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in all_items}
+    )
+    by_type: dict[str, int] = {}
+    by_source_kind: dict[str, int] = {}
+    for item in all_items:
+        hint_type = str(item.get("hint_type") or "unknown")
+        source_kind = str(item.get("source_kind") or "unknown")
+        by_type[hint_type] = by_type.get(hint_type, 0) + 1
+        by_source_kind[source_kind] = by_source_kind.get(source_kind, 0) + 1
+    summary["by_type"] = dict(sorted(by_type.items()))
+    summary["by_source_kind"] = dict(sorted(by_source_kind.items()))
+    summary["has_api_key_hint"] = bool(by_type.get("api_key"))
+    summary["has_token_hint"] = bool(by_type.get("token"))
+    summary["has_bearer_hint"] = bool(by_type.get("bearer"))
+    summary["has_client_id_hint"] = bool(by_type.get("client_id"))
+    summary["has_secret_hint"] = bool(by_type.get("secret"))
+    summary["has_authorization_hint"] = bool(by_type.get("authorization"))
+    return {"all": all_items, "summary": summary}
 
 
 def _clean_endpoint_candidate_value(raw: str) -> str:
@@ -585,6 +832,7 @@ def empty_js_recon_contract() -> dict[str, Any]:
         "inline_scripts": [],
         "endpoint_candidates": [],
         "endpoint_linkage": [],
+        "secret_hints": _empty_secret_hints_contract(),
         "page_sources": [],
         "summary": {
             "external_total": 0,
@@ -991,6 +1239,10 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         page_sources=page_sources,
         base_host=base_host,
     )
+    secret_hints = _collect_secret_hints(
+        external_scripts=external_scripts,
+        inline_raw_items=inline_raw_items,
+    )
     summary = {
         "external_total": external_total,
         "inline_total": len(inline_scripts),
@@ -1040,6 +1292,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "inline_scripts": inline_scripts,
         "endpoint_candidates": endpoint_candidates,
         "endpoint_linkage": endpoint_linkage,
+        "secret_hints": secret_hints,
         "page_sources": page_sources,
         "summary": summary,
         "coverage": coverage,

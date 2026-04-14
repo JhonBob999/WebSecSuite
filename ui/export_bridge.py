@@ -486,6 +486,16 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
         "js_recon_endpoint_linkage_route_sources": 0,
         "js_recon_endpoint_linkage_max_candidates_per_source": 0,
         "js_recon_endpoint_linkage_avg_candidates_per_source": 0.0,
+        "js_recon_secret_hints_total": 0,
+        "js_recon_secret_hints_sources_with_hints": 0,
+        "js_recon_secret_hints_high_confidence": 0,
+        "js_recon_secret_hints_types_present": "",
+        "js_recon_secret_hints_has_api_key": False,
+        "js_recon_secret_hints_has_token": False,
+        "js_recon_secret_hints_has_bearer": False,
+        "js_recon_secret_hints_has_client_id": False,
+        "js_recon_secret_hints_has_secret": False,
+        "js_recon_secret_hints_has_authorization": False,
         "js_recon_external_scripts_linked_ratio": 0.0,
         "js_recon_inline_scripts_linked_ratio": 0.0,
         "js_recon_page_sources_complete": True,
@@ -500,6 +510,7 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
 
     summary = js_recon.get("summary")
     coverage = js_recon.get("coverage")
+    secret_hints = js_recon.get("secret_hints")
     out = dict(defaults)
 
     if isinstance(summary, Mapping):
@@ -578,6 +589,24 @@ def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
                 "js_recon_linkage_mode": _str_or(coverage.get("linkage_mode"), "single_page_passive") or "single_page_passive",
             }
         )
+    if isinstance(secret_hints, Mapping):
+        secret_summary = secret_hints.get("summary")
+        if isinstance(secret_summary, Mapping):
+            by_type = secret_summary.get("by_type") if isinstance(secret_summary.get("by_type"), Mapping) else {}
+            out.update(
+                {
+                    "js_recon_secret_hints_total": _to_int_count(secret_summary.get("total_hints"), 0),
+                    "js_recon_secret_hints_sources_with_hints": _to_int_count(secret_summary.get("sources_with_hints"), 0),
+                    "js_recon_secret_hints_high_confidence": _to_int_count(secret_summary.get("high_confidence_hints"), 0),
+                    "js_recon_secret_hints_types_present": _join_string_list(sorted(str(key) for key in by_type.keys())),
+                    "js_recon_secret_hints_has_api_key": bool(secret_summary.get("has_api_key_hint")),
+                    "js_recon_secret_hints_has_token": bool(secret_summary.get("has_token_hint")),
+                    "js_recon_secret_hints_has_bearer": bool(secret_summary.get("has_bearer_hint")),
+                    "js_recon_secret_hints_has_client_id": bool(secret_summary.get("has_client_id_hint")),
+                    "js_recon_secret_hints_has_secret": bool(secret_summary.get("has_secret_hint")),
+                    "js_recon_secret_hints_has_authorization": bool(secret_summary.get("has_authorization_hint")),
+                }
+            )
 
     return out
 
