@@ -39,6 +39,10 @@ def _stable_dedup(values: list[str]) -> list[str]:
     return out
 
 
+def _stable_unique_sorted(values: list[str]) -> list[str]:
+    return sorted({item for item in _stable_dedup(values) if item})
+
+
 def _artifact_target(artifact: Mapping[str, Any], fallback_final_url: str, discovery_base_url: str) -> tuple[str, str]:
     replay_target_url = _clean_str(artifact.get("replay_target_url"))
     replay_target_source = normalize_target_source(artifact.get("replay_target_source"))
@@ -130,14 +134,14 @@ def build_replay_groups(
 
         artifact_ids = _stable_dedup([_clean_str(item.get("artifact_id")) for item in members])
         artifact_types = _stable_dedup([_clean_str(item.get("type")) for item in members])
-        priorities_present = _stable_dedup(
+        priorities_present = _stable_unique_sorted(
             [
                 _clean_str(item.get("priority")).lower()
                 for item in members
                 if _clean_str(item.get("priority")).lower() in {"low", "medium", "high"}
             ]
         )
-        confidences_present = _stable_dedup(
+        confidences_present = _stable_unique_sorted(
             [
                 _clean_str(item.get("confidence")).lower()
                 for item in members
@@ -178,14 +182,14 @@ def build_replay_groups(
 
     payload["all"] = groups
 
-    types_present: list[str] = []
-    seen_types: set[str] = set()
-    for group in groups:
-        for artifact_type in group.get("artifact_types", []):
-            clean_type = _clean_str(artifact_type)
-            if clean_type and clean_type not in seen_types:
-                types_present.append(clean_type)
-                seen_types.add(clean_type)
+    types_present: list[str] = _stable_unique_sorted(
+        [
+            _clean_str(artifact_type)
+            for group in groups
+            for artifact_type in group.get("artifact_types", [])
+            if _clean_str(artifact_type)
+        ]
+    )
 
     unique_targets = {
         _clean_str(group.get("target_url"))

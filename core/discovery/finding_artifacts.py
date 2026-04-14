@@ -49,6 +49,12 @@ def _normalized_priority(value: Any) -> str:
     return normalized if normalized in _PRIORITY_ALLOWED else ""
 
 
+def _stable_unique_sorted(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    return sorted({str(value).strip() for value in values if str(value).strip()})
+
+
 def _to_status_code(value: Any) -> int:
     try:
         if isinstance(value, bool):
@@ -414,49 +420,46 @@ def build_finding_artifacts(
             payload["by_type"][artifact_type].append(artifact)
         payload["all"].append(artifact)
 
+    final_all = list(payload["all"])
     summary_by_type = {artifact_type: len(payload["by_type"][artifact_type]) for artifact_type in _ARTIFACT_TYPES}
     max_confidence = ""
     for confidence in ("high", "medium", "low"):
-        if any(item.get("confidence") == confidence for item in payload["all"]):
+        if any(item.get("confidence") == confidence for item in final_all):
             max_confidence = confidence
             break
     max_priority = ""
     for priority in ("high", "medium", "low"):
-        if any(item.get("priority") == priority for item in payload["all"]):
+        if any(item.get("priority") == priority for item in final_all):
             max_priority = priority
             break
-    priorities_present: list[str] = []
-    for priority in ("low", "medium", "high"):
-        if any(item.get("priority") == priority for item in payload["all"]):
-            priorities_present.append(priority)
-    types_present: list[str] = [
-        artifact_type for artifact_type in _ARTIFACT_TYPES if summary_by_type.get(artifact_type, 0) > 0
-    ]
-
     payload["summary"] = {
-        "total": len(payload["all"]),
+        "total": len(final_all),
         "by_type": summary_by_type,
         "max_confidence": max_confidence,
         "max_priority": max_priority,
-        "with_baseline_hash": sum(1 for item in payload["all"] if str(item.get("baseline_body_hash") or "").strip()),
-        "with_request_context": sum(1 for item in payload["all"] if bool(item.get("has_request_context"))),
-        "with_response_context": sum(1 for item in payload["all"] if bool(item.get("has_response_context"))),
-        "with_primary_evidence": sum(1 for item in payload["all"] if str(item.get("primary_evidence") or "").strip()),
-        "confirmed_total": sum(1 for item in payload["all"] if item.get("confirmed") is True),
-        "types_present": types_present,
-        "priorities_present": priorities_present,
-        "replay_ready_total": sum(1 for item in payload["all"] if bool(item.get("has_replay_recipe"))),
+        "with_baseline_hash": sum(1 for item in final_all if str(item.get("baseline_body_hash") or "").strip()),
+        "with_request_context": sum(1 for item in final_all if bool(item.get("has_request_context"))),
+        "with_response_context": sum(1 for item in final_all if bool(item.get("has_response_context"))),
+        "with_primary_evidence": sum(1 for item in final_all if str(item.get("primary_evidence") or "").strip()),
+        "confirmed_total": sum(1 for item in final_all if item.get("confirmed") is True),
+        "types_present": _stable_unique_sorted(
+            [artifact_type for artifact_type in _ARTIFACT_TYPES if summary_by_type.get(artifact_type, 0) > 0]
+        ),
+        "priorities_present": _stable_unique_sorted(
+            [item.get("priority") for item in final_all if _normalized_priority(item.get("priority"))]
+        ),
+        "replay_ready_total": sum(1 for item in final_all if bool(item.get("has_replay_recipe"))),
         "unique_replay_keys": len(
             {
                 str(item.get("replay_key") or "").strip()
-                for item in payload["all"]
+                for item in final_all
                 if str(item.get("replay_key") or "").strip()
             }
         ),
         "unique_artifact_ids": len(
             {
                 str(item.get("artifact_id") or "").strip()
-                for item in payload["all"]
+                for item in final_all
                 if str(item.get("artifact_id") or "").strip()
             }
         ),

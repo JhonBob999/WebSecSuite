@@ -457,6 +457,10 @@ def _collect_unique_sorted(values: list | tuple | set | None) -> list[str]:
     return sorted(normalized)
 
 
+def _stable_unique_sorted(values: list | tuple | set | None) -> list[str]:
+    return _collect_unique_sorted(values)
+
+
 def _merge_candidate_items(current: dict, incoming: dict) -> dict:
     merged = dict(current or {})
 
@@ -803,6 +807,31 @@ def _normalize_candidate_item(candidate: dict) -> dict:
     return _polish_candidate_item(normalized_candidate)
 
 
+def _finalize_candidates_summary(all_candidates: list[dict], by_type: dict[str, list[dict]]) -> dict:
+    safe_all = [item for item in all_candidates if isinstance(item, dict)]
+    safe_by_type = {
+        "xss_candidate": list(by_type.get("xss_candidate") or []),
+        "sqli_candidate": list(by_type.get("sqli_candidate") or []),
+        "lfi_candidate": list(by_type.get("lfi_candidate") or []),
+        "ssrf_candidate": list(by_type.get("ssrf_candidate") or []),
+    }
+    counts_by_type = {candidate_type: len(safe_by_type[candidate_type]) for candidate_type in sorted(safe_by_type)}
+    max_confidence = ""
+    for level in _CONFIDENCE_LEVELS[::-1]:
+        if any(str(candidate.get("confidence") or "").strip().lower() == level for candidate in safe_all):
+            max_confidence = level
+            break
+    return {
+        "total": len(safe_all),
+        "by_type": counts_by_type,
+        "types_breakdown": dict(counts_by_type),
+        "max_confidence": max_confidence,
+        "types_present": _stable_unique_sorted(
+            [candidate_type for candidate_type in sorted(safe_by_type) if safe_by_type[candidate_type]]
+        ),
+    }
+
+
 def generate_candidates(
     final_url: str,
     classified_urls_by_scope: dict | None = None,
@@ -965,32 +994,10 @@ def generate_candidates(
         if candidate_type in by_type:
             by_type[candidate_type].append(candidate)
 
-    max_confidence = ""
-    for level in _CONFIDENCE_LEVELS[::-1]:
-        if any(str(candidate.get("confidence") or "").strip().lower() == level for candidate in all_candidates):
-            max_confidence = level
-            break
-
-    types_present = [candidate_type for candidate_type in sorted(by_type.keys()) if by_type[candidate_type]]
+    summary = _finalize_candidates_summary(all_candidates, by_type)
 
     return {
         "all": all_candidates,
         "by_type": by_type,
-        "summary": {
-            "total": len(all_candidates),
-            "by_type": {
-                "xss_candidate": len(by_type["xss_candidate"]),
-                "sqli_candidate": len(by_type["sqli_candidate"]),
-                "lfi_candidate": len(by_type["lfi_candidate"]),
-                "ssrf_candidate": len(by_type["ssrf_candidate"]),
-            },
-            "types_breakdown": {
-                "xss_candidate": len(by_type["xss_candidate"]),
-                "sqli_candidate": len(by_type["sqli_candidate"]),
-                "lfi_candidate": len(by_type["lfi_candidate"]),
-                "ssrf_candidate": len(by_type["ssrf_candidate"]),
-            },
-            "max_confidence": max_confidence,
-            "types_present": types_present,
-        },
+        "summary": summary,
     }

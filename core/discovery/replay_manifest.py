@@ -40,6 +40,12 @@ def _stable_dedup_str_list(value: Any) -> list[str]:
     return out
 
 
+def _stable_unique_sorted(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    return sorted({str(item).strip() for item in values if str(item).strip()})
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if isinstance(value, bool):
@@ -109,7 +115,7 @@ def build_replay_manifest(
         method = _clean_str(raw_group.get("request_method")) or recipe_method or ""
 
         artifact_ids = _stable_dedup_str_list(raw_group.get("artifact_ids"))
-        artifact_types = _stable_dedup_str_list(raw_group.get("artifact_types"))
+        artifact_types = _stable_unique_sorted(_stable_dedup_str_list(raw_group.get("artifact_types")))
         ready_for_validation = bool(method and target_url and bool(raw_group.get("has_replay_recipe")))
 
         manifest_items.append(
@@ -147,14 +153,14 @@ def build_replay_manifest(
         if _clean_str(item.get("target_url"))
     }
 
-    types_present: list[str] = []
-    seen_types: set[str] = set()
-    for item in manifest_items:
-        for artifact_type in item.get("artifact_types", []):
-            clean_type = _clean_str(artifact_type)
-            if clean_type and clean_type not in seen_types:
-                types_present.append(clean_type)
-                seen_types.add(clean_type)
+    types_present = _stable_unique_sorted(
+        [
+            _clean_str(artifact_type)
+            for item in manifest_items
+            for artifact_type in item.get("artifact_types", [])
+            if _clean_str(artifact_type)
+        ]
+    )
 
     payload["all"] = manifest_items
     payload["summary"] = {
