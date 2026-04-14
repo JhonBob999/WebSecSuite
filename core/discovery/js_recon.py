@@ -110,6 +110,23 @@ _SECRET_HEADER_BEARER_RE = re.compile(
 _SECRET_STRING_HINT_RE = re.compile(
     r"(?i)(?P<quote>['\"])\s*(?P<key>api[_-]?key|access[_-]?token|auth[_-]?token|token|client[_-]?id|client[_-]?secret|secret|authorization)\s*(?::|=)\s*\1"
 )
+_SECRET_EVIDENCE_KIND_ALLOWLIST = {"assignment", "object_property", "header_like", "string_pattern"}
+_PLACEHOLDER_SECRET_VALUES = {
+    "",
+    "{}",
+    "[]",
+    "xxx",
+    "test",
+    "null",
+    "none",
+    "undefined",
+    "example",
+    "token_here",
+    "your_api_key",
+    "your_token",
+    "<redacted>",
+    "changeme",
+}
 
 
 def _empty_endpoint_candidate_summary() -> dict[str, int]:
@@ -181,7 +198,18 @@ def _normalize_hint_type(matched_key: str) -> str:
     return hint_type if hint_type in _SECRET_HINT_TYPE_ALLOWLIST else "unknown"
 
 
-def _value_kind(value: str, hint_type: str) -> str:
+def _is_placeholder_like(value: str) -> bool:
+    value_clean = str(value or "").strip().strip("'\"").strip().lower()
+    if value_clean in _PLACEHOLDER_SECRET_VALUES:
+        return True
+    if re.fullmatch(r"(?:x|X|\*){3,}", value_clean):
+        return True
+    if value_clean.startswith("your_") or value_clean.endswith("_here"):
+        return True
+    return False
+
+
+def _classify_secret_value_kind(value: str, hint_type: str) -> str:
     value_clean = str(value or "").strip()
     if not value_clean:
         return "empty"
@@ -189,6 +217,11 @@ def _value_kind(value: str, hint_type: str) -> str:
         return "bearer_like"
     if value_clean.count(".") == 2 and all(part for part in value_clean.split(".")):
         return "jwt_like"
+    value_flat = value_clean.replace("-", "").lower()
+    if re.fullmatch(r"[a-f0-9]{16,}", value_flat):
+        return "hex_like"
+    if re.fullmatch(r"[A-Za-z0-9+/=_-]{16,}", value_clean) and len(value_clean) % 4 == 0:
+        return "base64_like"
     if hint_type == "bearer":
         return "bearer_like"
     if re.fullmatch(r"[A-Za-z0-9._~+/=-]{10,}", value_clean):
@@ -196,17 +229,93 @@ def _value_kind(value: str, hint_type: str) -> str:
     return "literal_string"
 
 
-def _masked_secret_preview(value: str, value_kind: str) -> str:
+def _mask_secret_preview(value: str, value_kind: str) -> str:
     value_clean = str(value or "").strip()
     length = len(value_clean)
-    if not value_clean or length < 4 or length > 40:
+    if not value_clean:
         return ""
-    if value_kind in {"jwt_like"}:
+    if value_kind == "empty":
+        return ""
+    if value_kind == "jwt_like":
+        return f"jwt(len={length})"
+    if value_kind == "bearer_like":
+        return f"bearer(len={length})"
+    if value_kind in {"base64_like", "hex_like", "opaque_string"}:
+        if length < 8:
+            return ""
+        if length > 12:
+            return f"opaque(len={length})"
+        return f"{value_clean[:3]}***"
+    if length > 40:
+        return f"opaque(len={length})"
+    if length < 4:
         return ""
     if any(ch.isspace() for ch in value_clean):
         return ""
-    prefix = value_clean[:4]
-    return f"{prefix}***({length})"
+    if length <= 6:
+        return f"{value_clean[:2]}***"
+    if length <= 12:
+        return f"{value_clean[:3]}***"
+    return f"{value_clean[:3]}*** (len={length})"
+
+
+def _should_keep_secret_hint(
+    *,
+    hint_type: str,
+    matched_key: str,
+    value: str,
+    value_kind: str,
+    evidence_kind: str,
+    confidence: str,
+) -> bool:
+    normalized_key = _normalize_hint_key(matched_key)
+    if evidence_kind not in _SECRET_EVIDENCE_KIND_ALLOWLIST:
+        return False
+    if hint_type not in _SECRET_HINT_TYPE_ALLOWLIST:
+        return False
+    if evidence_kind == "string_pattern":
+        return hint_type in {"api_key", "token", "authorization", "secret", "bearer"}
+    if value_kind == "empty":
+        return False
+    value_clean = str(value or "").strip()
+    if _is_placeholder_like(value_clean):
+        return False
+    if len(value_clean) < 4 and value_kind != "bearer_like":
+        return False
+    if hint_type == "unknown" and confidence == "low":
+        return False
+    if normalized_key in {"label", "title", "name", "description", "help"}:
+        return False
+    return True
+
+
+def _is_comment_line(text: str, index: int) -> bool:
+    line_start = text.rfind("\n", 0, max(index, 0)) + 1
+    line_end = text.find("\n", max(index, 0))
+    if line_end == -1:
+        line_end = len(text)
+    line = text[line_start:line_end].lstrip()
+    return line.startswith("//") or line.startswith("/*") or line.startswith("*")
+
+
+def _guess_evidence_kind(text: str, key_start: int) -> str:
+    left_ctx = text[max(0, key_start - 48):key_start]
+    if "{" in left_ctx or "," in left_ctx:
+        return "object_property"
+    return "assignment"
+
+
+def _safe_confidence(*, hint_type: str, evidence_kind: str, value_kind: str, value: str) -> str:
+    value_clean = str(value or "").strip()
+    if evidence_kind == "header_like" and value_kind in {"bearer_like", "jwt_like"}:
+        return "high"
+    if evidence_kind in {"assignment", "object_property"} and hint_type in {"api_key", "token", "client_id", "secret", "authorization"}:
+        if len(value_clean) >= 8 and value_kind != "empty" and not _is_placeholder_like(value_clean):
+            return "high"
+        return "medium"
+    if evidence_kind == "string_pattern":
+        return "low"
+    return "medium"
 
 
 def _build_secret_hint(
@@ -221,15 +330,16 @@ def _build_secret_hint(
 ) -> dict[str, Any]:
     normalized_type = hint_type if hint_type in _SECRET_HINT_TYPE_ALLOWLIST else "unknown"
     normalized_key = _normalize_hint_key(matched_key)
-    kind = _value_kind(value, normalized_type)
-    masked_preview = _masked_secret_preview(value, kind)
+    normalized_evidence_kind = evidence_kind if evidence_kind in _SECRET_EVIDENCE_KIND_ALLOWLIST else "string_pattern"
+    kind = _classify_secret_value_kind(value, normalized_type)
+    masked_preview = _mask_secret_preview(value, kind)
     linkage_seed = "|".join(
         [
             normalized_type,
             source_kind,
             source_ref,
             normalized_key,
-            evidence_kind,
+            normalized_evidence_kind,
         ]
     )
     return {
@@ -241,7 +351,7 @@ def _build_secret_hint(
         "value_length": len(str(value or "").strip()),
         "masked_preview": masked_preview,
         "confidence": confidence,
-        "evidence_kind": evidence_kind,
+        "evidence_kind": normalized_evidence_kind,
         "linkage_key": hashlib.sha1(linkage_seed.encode("utf-8", errors="replace")).hexdigest()[:16],
     }
 
@@ -266,14 +376,29 @@ def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_ite
         if not isinstance(text, str) or not text.strip():
             return
         for match in _SECRET_ASSIGNMENT_RE.finditer(text):
+            if _is_comment_line(text, match.start()):
+                continue
             key_raw = str(match.group("key") or "").strip()
             value_raw = str(match.group("value") or "")
             value_stripped = value_raw.strip()
-            if not value_stripped or value_stripped.lower() in {"<redacted>", "your_token", "changeme", "example"}:
-                continue
             hint_type = _normalize_hint_type(key_raw)
-            evidence_kind = "assignment"
-            confidence = "high" if hint_type in {"api_key", "token", "client_id", "secret"} else "medium"
+            evidence_kind = _guess_evidence_kind(text, match.start("key"))
+            value_kind = _classify_secret_value_kind(value_stripped, hint_type)
+            confidence = _safe_confidence(
+                hint_type=hint_type,
+                evidence_kind=evidence_kind,
+                value_kind=value_kind,
+                value=value_stripped,
+            )
+            if not _should_keep_secret_hint(
+                hint_type=hint_type,
+                matched_key=key_raw,
+                value=value_stripped,
+                value_kind=value_kind,
+                evidence_kind=evidence_kind,
+                confidence=confidence,
+            ):
+                continue
             _put(
                 _build_secret_hint(
                     hint_type=hint_type,
@@ -286,8 +411,25 @@ def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_ite
                 )
             )
         for match in _SECRET_HEADER_BEARER_RE.finditer(text):
+            if _is_comment_line(text, match.start()):
+                continue
             value_raw = str(match.group("value") or "").strip()
-            if not value_raw:
+            value_full = f"Bearer {value_raw}" if value_raw else ""
+            value_kind = _classify_secret_value_kind(value_full, "bearer")
+            confidence = _safe_confidence(
+                hint_type="bearer",
+                evidence_kind="header_like",
+                value_kind=value_kind,
+                value=value_full,
+            )
+            if not _should_keep_secret_hint(
+                hint_type="bearer",
+                matched_key="authorization",
+                value=value_full,
+                value_kind=value_kind,
+                evidence_kind="header_like",
+                confidence=confidence,
+            ):
                 continue
             _put(
                 _build_secret_hint(
@@ -295,15 +437,26 @@ def _collect_secret_hints(external_scripts: list[dict[str, Any]], inline_raw_ite
                     source_kind=source_kind,
                     source_ref=source_ref,
                     matched_key="authorization",
-                    value=value_raw,
+                    value=value_full,
                     evidence_kind="header_like",
-                    confidence="high",
+                    confidence=confidence,
                 )
             )
         if not any(pattern.search(text) for pattern in (_SECRET_ASSIGNMENT_RE, _SECRET_HEADER_BEARER_RE)):
             for match in _SECRET_STRING_HINT_RE.finditer(text):
+                if _is_comment_line(text, match.start()):
+                    continue
                 key_raw = str(match.group("key") or "").strip()
                 hint_type = _normalize_hint_type(key_raw)
+                if not _should_keep_secret_hint(
+                    hint_type=hint_type,
+                    matched_key=key_raw,
+                    value="",
+                    value_kind="empty",
+                    evidence_kind="string_pattern",
+                    confidence="low",
+                ):
+                    continue
                 _put(
                     _build_secret_hint(
                         hint_type=hint_type,
