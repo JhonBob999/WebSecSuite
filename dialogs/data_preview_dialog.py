@@ -3,8 +3,18 @@ from __future__ import annotations
 import json, os
 from copy import deepcopy
 from ui import export_bridge as xb
-from typing import Callable, Iterable
-from PySide6.QtWidgets import QDialog, QTableWidgetItem, QFileDialog, QMessageBox
+from typing import Callable
+from PySide6.QtWidgets import (
+    QDialog,
+    QTableWidgetItem,
+    QFileDialog,
+    QMessageBox,
+    QHBoxLayout,
+    QVBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QHeaderView,
+)
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
@@ -19,6 +29,9 @@ class DataPreviewDialog(QDialog):
         super().__init__(parent)
         self.ui = Ui_DataPreviewDialog()
         self.ui.setupUi(self)
+        self.setWindowTitle("Data Preview - Task Results")
+        self._setup_layout()
+        self._configure_table()
         
           
 
@@ -34,6 +47,40 @@ class DataPreviewDialog(QDialog):
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.lineSearch.textChanged.connect(self.on_filter_changed)
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
+        self._update_info_label()
+
+    def _setup_layout(self):
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
+        top_row.addWidget(self.ui.btnLoadAll)
+        top_row.addWidget(self.ui.btnLoadSelected)
+        top_row.addWidget(self.ui.btnRefresh)
+        top_row.addSpacing(12)
+
+        self.lblSearch = QLabel("Search:", self)
+        self.lblSearch.setObjectName("lblSearch")
+        top_row.addWidget(self.lblSearch)
+        top_row.addWidget(self.ui.lineSearch, 1)
+
+        self.lblInfo = QLabel("Rows: 0 | Visible: 0", self)
+        self.lblInfo.setObjectName("lblInfo")
+        self.lblInfo.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        top_row.addWidget(self.lblInfo)
+        top_row.addStretch(1)
+        top_row.addWidget(self.ui.btnExport)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+        root.addLayout(top_row)
+        root.addWidget(self.ui.tablePreview, 1)
+
+    def _configure_table(self):
+        header = self.ui.tablePreview.horizontalHeader()
+        self.ui.tablePreview.verticalHeader().setVisible(False)
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(56)
 
     # ---- публичный API ----
     def set_records(self, records: list[dict]):
@@ -64,6 +111,7 @@ class DataPreviewDialog(QDialog):
         if not records:
             t.setUpdatesEnabled(True)
             t.setSortingEnabled(True)
+            self._update_info_label()
             return
 
         # 3) Стабильный порядок колонок: preferred -> остальные
@@ -96,10 +144,41 @@ class DataPreviewDialog(QDialog):
 
                 t.setItem(row, col, item)
 
-        t.resizeColumnsToContents()
+        self._apply_column_resize_policy(keys_order)
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
+        self._update_info_label()
+
+    def _apply_column_resize_policy(self, columns: list[str]):
+        t = self.ui.tablePreview
+        header = t.horizontalHeader()
+
+        wide_stretch = {"url", "final_url", "title"}
+        tight_cols = {"status_code", "redirects", "request_ms", "content_len"}
+        fixed_width = {"task_id": 170}
+
+        for idx, col in enumerate(columns):
+            if col in wide_stretch:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Stretch)
+            elif col in tight_cols:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
+            elif col in fixed_width:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+                t.setColumnWidth(idx, fixed_width[col])
+            else:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+                t.resizeColumnToContents(idx)
+
+    def _update_info_label(self):
+        table = self.ui.tablePreview
+        total = table.rowCount()
+        visible = 0
+        for row in range(total):
+            if not table.isRowHidden(row):
+                visible += 1
+        if hasattr(self, "lblInfo"):
+            self.lblInfo.setText(f"Rows: {total} | Visible: {visible}")
 
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):
@@ -261,6 +340,7 @@ class DataPreviewDialog(QDialog):
                         visible = True; break
             tbl.setRowHidden(row, not visible)
         tbl.setUpdatesEnabled(True)
+        self._update_info_label()
 
     # ---- dbl-click ----
     @Slot(int, int)
