@@ -8,7 +8,21 @@ from copy import deepcopy
 import os, json, httpx, subprocess, re
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QAction
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QDialog, QFileDialog, QInputDialog, QMessageBox, QTextEdit, QMenu
+from PySide6.QtWidgets import (
+    QWidget,
+    QTableWidgetItem,
+    QDialog,
+    QFileDialog,
+    QInputDialog,
+    QMessageBox,
+    QTextEdit,
+    QMenu,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSplitter,
+    QSizePolicy,
+    QHeaderView,
+)
 from ui.constants import Col, TaskStatus
 from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
@@ -81,6 +95,7 @@ class ScraperTabController(QWidget):
         # 1) Поднимаем UI
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
+        self._apply_responsive_main_layout()
 
         # Подключение настроек таблиц
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
@@ -94,6 +109,7 @@ class ScraperTabController(QWidget):
         self.table_ctl.apply_common_view_settings()
         self.table_ctl.setup_resize_policies()
         self.table_ctl.restore_column_widths()
+        self._configure_task_table_columns()
         
         
 
@@ -183,6 +199,102 @@ class ScraperTabController(QWidget):
 
         # Остальные внутренние подключения
         self._init_ui_connections()
+
+    def _apply_responsive_main_layout(self) -> None:
+        """Минимально перестраивает главный layout на основе существующих виджетов."""
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(8)
+
+        splitter = QSplitter(Qt.Horizontal, self)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
+
+        left_panel = QWidget(splitter)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self.ui.lbl_tasks)
+
+        actions_row = QHBoxLayout()
+        actions_row.setContentsMargins(0, 0, 0, 0)
+        actions_row.setSpacing(6)
+        # Логический порядок действий (Data Preview рядом с Export).
+        for btn in (
+            self.ui.btnAddTask,
+            self.ui.btnDelete,
+            self.ui.btnStart,
+            self.ui.btnPause,
+            self.ui.btnResume,
+            self.ui.btnStop,
+            self.ui.btnExport,
+            self.ui.btnDataPreview,
+        ):
+            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            actions_row.addWidget(btn)
+        actions_row.addStretch(1)
+        left_layout.addLayout(actions_row)
+
+        self.ui.taskTable.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        left_layout.addWidget(self.ui.taskTable, 1)
+
+        right_panel = QWidget(splitter)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        header_row.addWidget(self.ui.lbl_search)
+        header_row.addStretch(1)
+        header_row.addWidget(self.ui.btnClearLog)
+        right_layout.addLayout(header_row)
+
+        find_row = QHBoxLayout()
+        find_row.setContentsMargins(0, 0, 0, 0)
+        find_row.setSpacing(6)
+        find_row.addWidget(self.ui.lineEditLogFilter, 1)
+        find_row.addWidget(self.ui.btnFindPrev)
+        find_row.addWidget(self.ui.btnFindNext)
+        find_row.addWidget(self.ui.lblMatches)
+        find_row.addWidget(self.ui.lblFindHits)
+        find_row.addWidget(self.ui.cbFindCase)
+        find_row.addWidget(self.ui.cbFindRegex)
+        find_row.addWidget(self.ui.cbFindWhole)
+        find_row.addWidget(self.ui.btnExportMatches)
+        right_layout.addLayout(find_row)
+
+        right_layout.addWidget(self.ui.lbl_logs)
+        self.ui.logOutput.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_layout.addWidget(self.ui.logOutput, 1)
+
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([980, 640])
+        self.main_splitter = splitter
+
+        root_layout.addWidget(splitter, 1)
+
+    def _configure_task_table_columns(self) -> None:
+        """Консервативная адаптивная стратегия ширин колонок Tasks."""
+        table = self.ui.taskTable
+        header = table.horizontalHeader()
+
+        # Базово оставляем ручную регулировку, но делаем URL/Results эластичными.
+        for col in (Col.Status, Col.Code, Col.Time, Col.Cookies, Col.Params):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        header.setSectionResizeMode(Col.URL, QHeaderView.Stretch)
+        header.setSectionResizeMode(Col.Results, QHeaderView.Stretch)
+
+        table.setColumnWidth(Col.Status, 110)
+        table.setColumnWidth(Col.Code, 70)
+        table.setColumnWidth(Col.Time, 90)
+        table.setColumnWidth(Col.Cookies, 90)
+        table.setColumnWidth(Col.Params, 130)
+        table.setColumnWidth(Col.Results, 300)
         
         
     def iter_all_task_ids(self):
