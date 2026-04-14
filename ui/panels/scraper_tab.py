@@ -240,7 +240,7 @@ class ScraperTabController(QWidget):
 
         right_panel = QWidget(splitter)
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(10, 2, 4, 0)
         right_layout.setSpacing(6)
 
         header_row = QHBoxLayout()
