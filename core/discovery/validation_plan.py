@@ -96,6 +96,38 @@ _VALIDATOR_JOB_TYPE_PRECEDENCE = {
     _VALIDATOR_JOB_BLOCKED: 2,
     _VALIDATOR_JOB_UNAVAILABLE: 3,
 }
+_BLOCKER_REASON_MISSING_BODY_PREVIEW = "missing_body_preview"
+_BLOCKER_REASON_MISSING_STATUS_CODE = "missing_status_code"
+_BLOCKER_REASON_MISSING_BODY_HASH = "missing_body_hash"
+_BLOCKER_REASON_MISSING_CONTENT_TYPE = "missing_content_type"
+_BLOCKER_REASON_UNAVAILABLE_SURFACE = "unavailable_surface"
+_BLOCKER_REASON_NO_PARAM_TARGETS = "no_param_targets"
+_BLOCKER_REASON_BLOCKED_UNKNOWN = "blocked_unknown"
+_BLOCKER_REASON_UNAVAILABLE_UNKNOWN = "unavailable_unknown"
+_BLOCKER_REASON_ORDER = (
+    _BLOCKER_REASON_MISSING_BODY_PREVIEW,
+    _BLOCKER_REASON_MISSING_STATUS_CODE,
+    _BLOCKER_REASON_MISSING_BODY_HASH,
+    _BLOCKER_REASON_MISSING_CONTENT_TYPE,
+    _BLOCKER_REASON_UNAVAILABLE_SURFACE,
+    _BLOCKER_REASON_NO_PARAM_TARGETS,
+    _BLOCKER_REASON_BLOCKED_UNKNOWN,
+    _BLOCKER_REASON_UNAVAILABLE_UNKNOWN,
+)
+_BASELINE_BLOCKER_REASONS = {
+    _BLOCKER_REASON_MISSING_BODY_PREVIEW,
+    _BLOCKER_REASON_MISSING_STATUS_CODE,
+    _BLOCKER_REASON_MISSING_BODY_HASH,
+    _BLOCKER_REASON_MISSING_CONTENT_TYPE,
+}
+_BLOCKED_SIDE_REASONS = _BASELINE_BLOCKER_REASONS | {
+    _BLOCKER_REASON_NO_PARAM_TARGETS,
+    _BLOCKER_REASON_BLOCKED_UNKNOWN,
+}
+_UNAVAILABLE_SIDE_REASONS = {
+    _BLOCKER_REASON_UNAVAILABLE_SURFACE,
+    _BLOCKER_REASON_UNAVAILABLE_UNKNOWN,
+}
 
 
 def _empty_contract() -> dict[str, Any]:
@@ -289,6 +321,21 @@ def _empty_validator_queue_contract() -> dict[str, Any]:
             "avg_unavailable_jobs_per_queue": 0.0,
             "fully_dispatchable_ratio": 0.0,
             "dispatch_job_ratio": 0.0,
+            "queues_with_blocker_reasons": 0,
+            "blocker_reasons_present": [],
+            "primary_blocker_reasons_present": [],
+            "missing_body_preview_queues": 0,
+            "missing_status_code_queues": 0,
+            "missing_body_hash_queues": 0,
+            "missing_content_type_queues": 0,
+            "unavailable_surface_queues": 0,
+            "no_param_target_queues": 0,
+            "blocked_unknown_queues": 0,
+            "unavailable_unknown_queues": 0,
+            "queues_with_baseline_blockers": 0,
+            "queues_with_surface_blockers": 0,
+            "queues_with_param_target_blockers": 0,
+            "avg_blocker_reasons_per_queue": 0.0,
         },
     }
 
@@ -513,6 +560,72 @@ def _build_queue_dispatch_contract(
     }
 
 
+def _build_queue_blocker_diagnostics(
+    *,
+    check_items: list[Mapping[str, Any]],
+    blocked_job_count: int,
+    unavailable_job_count: int,
+) -> dict[str, Any]:
+    reason_counts: dict[str, int] = {}
+
+    def _inc(reason: str) -> None:
+        clean_reason = _clean_str(reason)
+        if clean_reason not in _BLOCKER_REASON_ORDER:
+            return
+        reason_counts[clean_reason] = int(reason_counts.get(clean_reason, 0)) + 1
+
+    for check_item in check_items:
+        if not isinstance(check_item, Mapping):
+            continue
+        validator_job = check_item.get("validator_job") or {}
+        if not isinstance(validator_job, Mapping):
+            continue
+        job_type = _clean_str(validator_job.get("job_type"))
+        if job_type not in {_VALIDATOR_JOB_BLOCKED, _VALIDATOR_JOB_UNAVAILABLE}:
+            continue
+        missing_fields = {
+            _clean_str(field_name)
+            for field_name in ((check_item.get("baseline_inputs") or {}).get("missing_fields") or [])
+            if _clean_str(field_name) in _BASELINE_FIELD_ORDER
+        }
+        if "body_preview" in missing_fields:
+            _inc(_BLOCKER_REASON_MISSING_BODY_PREVIEW)
+        if "status_code" in missing_fields:
+            _inc(_BLOCKER_REASON_MISSING_STATUS_CODE)
+        if "body_hash" in missing_fields:
+            _inc(_BLOCKER_REASON_MISSING_BODY_HASH)
+        if "content_type" in missing_fields:
+            _inc(_BLOCKER_REASON_MISSING_CONTENT_TYPE)
+        execution_mode = _clean_str((check_item.get("execution_surface") or {}).get("mode"))
+        if execution_mode == _EXECUTION_MODE_UNAVAILABLE:
+            _inc(_BLOCKER_REASON_UNAVAILABLE_SURFACE)
+        requires_param_target = bool(check_item.get("requires_param_target"))
+        effective_target_count = _safe_int(check_item.get("effective_target_count"), 0)
+        if requires_param_target and effective_target_count <= 0:
+            _inc(_BLOCKER_REASON_NO_PARAM_TARGETS)
+
+    if blocked_job_count > 0 and not any(reason_counts.get(reason, 0) > 0 for reason in _BLOCKED_SIDE_REASONS):
+        _inc(_BLOCKER_REASON_BLOCKED_UNKNOWN)
+    if unavailable_job_count > 0 and not any(
+        reason_counts.get(reason, 0) > 0 for reason in _UNAVAILABLE_SIDE_REASONS
+    ):
+        _inc(_BLOCKER_REASON_UNAVAILABLE_UNKNOWN)
+
+    blocker_reasons = [reason for reason in _BLOCKER_REASON_ORDER if _safe_int(reason_counts.get(reason), 0) > 0]
+    blocked_reasons_present = [reason for reason in blocker_reasons if reason in _BLOCKED_SIDE_REASONS]
+    unavailable_reasons_present = [reason for reason in blocker_reasons if reason in _UNAVAILABLE_SIDE_REASONS]
+    primary_blocker_reason = blocker_reasons[0] if blocker_reasons else ""
+    filtered_counts = {reason: int(reason_counts[reason]) for reason in blocker_reasons}
+    return {
+        "blocker_reasons": blocker_reasons,
+        "blocker_reason_counts": filtered_counts,
+        "primary_blocker_reason": primary_blocker_reason,
+        "has_blocker_reasons": bool(blocker_reasons),
+        "blocked_reasons_present": blocked_reasons_present,
+        "unavailable_reasons_present": unavailable_reasons_present,
+    }
+
+
 def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> dict[str, Any]:
     payload = _empty_validator_queue_contract()
     if not isinstance(validation_plan, Mapping):
@@ -575,6 +688,7 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
                     "_mutation_strategies": set(),
                     "_execution_lanes": set(),
                     "_priorities": [],
+                    "_check_items": [],
                 },
             )
             job_id = _clean_str(validator_job.get("job_id"))
@@ -616,6 +730,7 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
                 group["_execution_lanes"].add(execution_lane)
             if execution_priority > 0:
                 group["_priorities"].append(execution_priority)
+            group["_check_items"].append(check_item)
 
     queue_items: list[dict[str, Any]] = []
     for queue_key in sorted(grouped.keys()):
@@ -631,6 +746,7 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         mutation_strategies = sorted(group.pop("_mutation_strategies"))
         execution_lanes = sorted(group.pop("_execution_lanes"))
         priorities = group.pop("_priorities")
+        check_items = list(group.pop("_check_items"))
         primary_job_id = ""
         if ready_job_ids:
             primary_job_id = ready_job_ids[0]
@@ -649,18 +765,30 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         group["queue_job_ids_unique"] = len(all_job_ids)
         queue_dispatch = _build_queue_dispatch_contract(dispatch_job_ids, blocked_job_ids, unavailable_job_ids)
         dispatch_job_count = _safe_int(queue_dispatch.get("dispatch_job_count"), 0)
+        blocked_job_count = _safe_int(queue_dispatch.get("blocked_job_count"), 0)
+        unavailable_job_count = _safe_int(queue_dispatch.get("unavailable_job_count"), 0)
+        dispatch_diagnostics = _build_queue_blocker_diagnostics(
+            check_items=check_items,
+            blocked_job_count=blocked_job_count,
+            unavailable_job_count=unavailable_job_count,
+        )
         group["dispatch"] = queue_dispatch
+        group["dispatch_diagnostics"] = dispatch_diagnostics
         group["dispatch_mode"] = _clean_str(queue_dispatch.get("dispatch_mode"))
         group["dispatch_job_count"] = dispatch_job_count
-        group["blocked_job_count"] = _safe_int(queue_dispatch.get("blocked_job_count"), 0)
-        group["unavailable_job_count"] = _safe_int(queue_dispatch.get("unavailable_job_count"), 0)
+        group["blocked_job_count"] = blocked_job_count
+        group["unavailable_job_count"] = unavailable_job_count
         group["jobs_total"] = _safe_int(queue_dispatch.get("jobs_total"), 0)
         group["jobs_ready"] = dispatch_job_count
-        group["jobs_blocked"] = _safe_int(queue_dispatch.get("blocked_job_count"), 0)
-        group["jobs_unavailable"] = _safe_int(queue_dispatch.get("unavailable_job_count"), 0)
+        group["jobs_blocked"] = blocked_job_count
+        group["jobs_unavailable"] = unavailable_job_count
         group["primary_dispatch_job_id"] = _clean_str(queue_dispatch.get("primary_dispatch_job_id"))
         group["dispatch_ratio"] = _round_metric(queue_dispatch.get("dispatch_ratio") or 0.0)
         group["fully_dispatchable"] = bool(queue_dispatch.get("fully_dispatchable"))
+        group["blocker_reasons"] = list(dispatch_diagnostics.get("blocker_reasons") or [])
+        group["primary_blocker_reason"] = _clean_str(dispatch_diagnostics.get("primary_blocker_reason"))
+        group["blocker_reasons_count"] = len(group["blocker_reasons"])
+        group["has_blocker_reasons"] = bool(dispatch_diagnostics.get("has_blocker_reasons"))
         queue_items.append(group)
 
     all_job_ids_global = {
@@ -735,6 +863,53 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         {_clean_str(item.get("dispatch_mode")) for item in queue_items if _clean_str(item.get("dispatch_mode"))}
     )
     unique_targets = len({_clean_str(item.get("target_url")) for item in queue_items if _clean_str(item.get("target_url"))})
+    blocker_reasons_present = sorted(
+        {
+            _clean_str(reason)
+            for item in queue_items
+            for reason in (item.get("blocker_reasons") or [])
+            if _clean_str(reason) in _BLOCKER_REASON_ORDER
+        },
+        key=lambda reason: _BLOCKER_REASON_ORDER.index(reason),
+    )
+    primary_blocker_reasons_present = sorted(
+        {
+            _clean_str(item.get("primary_blocker_reason"))
+            for item in queue_items
+            if _clean_str(item.get("primary_blocker_reason")) in _BLOCKER_REASON_ORDER
+        },
+        key=lambda reason: _BLOCKER_REASON_ORDER.index(reason),
+    )
+    queues_with_blocker_reasons = sum(1 for item in queue_items if bool(item.get("has_blocker_reasons")))
+    missing_body_preview_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_MISSING_BODY_PREVIEW in (item.get("blocker_reasons") or [])
+    )
+    missing_status_code_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_MISSING_STATUS_CODE in (item.get("blocker_reasons") or [])
+    )
+    missing_body_hash_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_MISSING_BODY_HASH in (item.get("blocker_reasons") or [])
+    )
+    missing_content_type_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_MISSING_CONTENT_TYPE in (item.get("blocker_reasons") or [])
+    )
+    unavailable_surface_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_UNAVAILABLE_SURFACE in (item.get("blocker_reasons") or [])
+    )
+    no_param_target_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_NO_PARAM_TARGETS in (item.get("blocker_reasons") or [])
+    )
+    blocked_unknown_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_BLOCKED_UNKNOWN in (item.get("blocker_reasons") or [])
+    )
+    unavailable_unknown_queues = sum(
+        1 for item in queue_items if _BLOCKER_REASON_UNAVAILABLE_UNKNOWN in (item.get("blocker_reasons") or [])
+    )
+    queues_with_baseline_blockers = sum(
+        1 for item in queue_items if any(reason in _BASELINE_BLOCKER_REASONS for reason in (item.get("blocker_reasons") or []))
+    )
+    queues_with_surface_blockers = unavailable_surface_queues
+    queues_with_param_target_blockers = no_param_target_queues
 
     payload["all"] = queue_items
     payload["summary"] = {
@@ -777,6 +952,28 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
         "avg_unavailable_jobs_per_queue": _round_metric((unavailable_jobs_total / total) if total else 0.0),
         "fully_dispatchable_ratio": _round_metric((fully_dispatchable_queues / total) if total else 0.0),
         "dispatch_job_ratio": _round_metric((dispatch_jobs_total / jobs_total) if jobs_total else 0.0),
+        "queues_with_blocker_reasons": queues_with_blocker_reasons,
+        "blocker_reasons_present": blocker_reasons_present,
+        "primary_blocker_reasons_present": primary_blocker_reasons_present,
+        "missing_body_preview_queues": missing_body_preview_queues,
+        "missing_status_code_queues": missing_status_code_queues,
+        "missing_body_hash_queues": missing_body_hash_queues,
+        "missing_content_type_queues": missing_content_type_queues,
+        "unavailable_surface_queues": unavailable_surface_queues,
+        "no_param_target_queues": no_param_target_queues,
+        "blocked_unknown_queues": blocked_unknown_queues,
+        "unavailable_unknown_queues": unavailable_unknown_queues,
+        "queues_with_baseline_blockers": queues_with_baseline_blockers,
+        "queues_with_surface_blockers": queues_with_surface_blockers,
+        "queues_with_param_target_blockers": queues_with_param_target_blockers,
+        "avg_blocker_reasons_per_queue": _round_metric(
+            (
+                sum(_safe_int(item.get("blocker_reasons_count"), 0) for item in queue_items)
+                / total
+            )
+            if total
+            else 0.0
+        ),
     }
     return payload
 
@@ -790,6 +987,10 @@ def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]
         "check_type": _CHECK_STATUS_DIFF,
         "compare_mode": "status_compare",
         "mutation_strategy": _MUTATION_STRATEGY_ENDPOINT_COMPARE,
+        "requires_param_target": False,
+        "effective_target_count": 1,
+        "baseline_missing_fields": [],
+        "execution_mode": _EXECUTION_MODE_ENDPOINT_ONLY,
     }
     if case == _QUEUE_DISPATCH_READY_ONLY:
         return [
@@ -813,6 +1014,7 @@ def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]
                 "job_id": "fixture-blocked-1",
                 "job_type": _VALIDATOR_JOB_BLOCKED,
                 "execution_lane": _EXECUTION_LANE_BLOCKED_ENDPOINT,
+                "baseline_missing_fields": ["body_preview"],
             },
         ]
     if case == _QUEUE_DISPATCH_BLOCKED_ONLY:
@@ -822,6 +1024,7 @@ def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]
                 "job_id": "fixture-blocked-1",
                 "job_type": _VALIDATOR_JOB_BLOCKED,
                 "execution_lane": _EXECUTION_LANE_BLOCKED_ENDPOINT,
+                "baseline_missing_fields": ["body_preview"],
             }
         ]
     if case == _QUEUE_DISPATCH_UNAVAILABLE_ONLY:
@@ -831,7 +1034,26 @@ def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]
                 "job_id": "fixture-unavailable-1",
                 "job_type": _VALIDATOR_JOB_UNAVAILABLE,
                 "execution_lane": _EXECUTION_LANE_UNAVAILABLE,
+                "execution_mode": _EXECUTION_MODE_UNAVAILABLE,
             }
+        ]
+    if case == "mixed_param_target":
+        return [
+            {
+                **base,
+                "job_id": "fixture-ready-1",
+                "job_type": _VALIDATOR_JOB_SAFE,
+                "execution_lane": _EXECUTION_LANE_READY_ENDPOINT,
+            },
+            {
+                **base,
+                "job_id": "fixture-blocked-param-1",
+                "job_type": _VALIDATOR_JOB_BLOCKED,
+                "execution_lane": _EXECUTION_LANE_BLOCKED_PARAM,
+                "requires_param_target": True,
+                "effective_target_count": 0,
+                "execution_mode": _EXECUTION_MODE_PARAM_ONLY,
+            },
         ]
     if case == _QUEUE_DISPATCH_EMPTY:
         return []
@@ -854,7 +1076,16 @@ def build_synthetic_validator_queue_case(case_name: str) -> dict[str, Any]:
             "execution_lane": _clean_str(job.get("execution_lane")),
             "mutation_strategy": _clean_str(job.get("mutation_strategy")),
         }
-        plan_item["check_plan"].append({"execution_priority": 1, "validator_job": validator_job})
+        plan_item["check_plan"].append(
+            {
+                "execution_priority": 1,
+                "requires_param_target": bool(job.get("requires_param_target")),
+                "effective_target_count": _safe_int(job.get("effective_target_count"), 0),
+                "baseline_inputs": {"missing_fields": list(job.get("baseline_missing_fields") or [])},
+                "execution_surface": {"mode": _clean_str(job.get("execution_mode"))},
+                "validator_job": validator_job,
+            }
+        )
     return {"all": [plan_item]}
 
 
@@ -884,6 +1115,28 @@ def _self_check_validator_queue_dispatch_cases() -> dict[str, Any]:
             "fully_dispatchable": bool(queue_item.get("fully_dispatchable")),
             "dispatch_ratio": _round_metric(queue_item.get("dispatch_ratio") or 0.0),
             "primary_dispatch_job_id": _clean_str(queue_item.get("primary_dispatch_job_id")),
+        }
+    return out
+
+
+def _self_check_validator_queue_blocker_diagnostics_cases() -> dict[str, Any]:
+    cases = [
+        _QUEUE_DISPATCH_READY_ONLY,
+        _QUEUE_DISPATCH_BLOCKED_ONLY,
+        _QUEUE_DISPATCH_UNAVAILABLE_ONLY,
+        "mixed_param_target",
+        _QUEUE_DISPATCH_EMPTY,
+    ]
+    out: dict[str, Any] = {}
+    for case_name in cases:
+        synthetic_plan = build_synthetic_validator_queue_case(case_name)
+        queue_payload = build_validator_queue(synthetic_plan)
+        queue_item = ((queue_payload.get("all") or [None])[0]) or {}
+        out[case_name] = {
+            "dispatch_mode": _clean_str(queue_item.get("dispatch_mode")) or _QUEUE_DISPATCH_EMPTY,
+            "blocker_reasons": list(queue_item.get("blocker_reasons") or []),
+            "primary_blocker_reason": _clean_str(queue_item.get("primary_blocker_reason")),
+            "has_blocker_reasons": bool(queue_item.get("has_blocker_reasons")),
         }
     return out
 

@@ -234,6 +234,21 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "validator_queue_avg_unavailable_jobs_per_queue",
     "validator_queue_fully_dispatchable_ratio",
     "validator_queue_dispatch_job_ratio",
+    "validator_queue_queues_with_blocker_reasons",
+    "validator_queue_blocker_reasons_present",
+    "validator_queue_primary_blocker_reasons_present",
+    "validator_queue_missing_body_preview_queues",
+    "validator_queue_missing_status_code_queues",
+    "validator_queue_missing_body_hash_queues",
+    "validator_queue_missing_content_type_queues",
+    "validator_queue_unavailable_surface_queues",
+    "validator_queue_no_param_target_queues",
+    "validator_queue_blocked_unknown_queues",
+    "validator_queue_unavailable_unknown_queues",
+    "validator_queue_queues_with_baseline_blockers",
+    "validator_queue_queues_with_surface_blockers",
+    "validator_queue_queues_with_param_target_blockers",
+    "validator_queue_avg_blocker_reasons_per_queue",
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
@@ -973,6 +988,21 @@ def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
         "validator_queue_avg_unavailable_jobs_per_queue": 0.0,
         "validator_queue_fully_dispatchable_ratio": 0.0,
         "validator_queue_dispatch_job_ratio": 0.0,
+        "validator_queue_queues_with_blocker_reasons": 0,
+        "validator_queue_blocker_reasons_present": "",
+        "validator_queue_primary_blocker_reasons_present": "",
+        "validator_queue_missing_body_preview_queues": 0,
+        "validator_queue_missing_status_code_queues": 0,
+        "validator_queue_missing_body_hash_queues": 0,
+        "validator_queue_missing_content_type_queues": 0,
+        "validator_queue_unavailable_surface_queues": 0,
+        "validator_queue_no_param_target_queues": 0,
+        "validator_queue_blocked_unknown_queues": 0,
+        "validator_queue_unavailable_unknown_queues": 0,
+        "validator_queue_queues_with_baseline_blockers": 0,
+        "validator_queue_queues_with_surface_blockers": 0,
+        "validator_queue_queues_with_param_target_blockers": 0,
+        "validator_queue_avg_blocker_reasons_per_queue": 0.0,
     }
     if not isinstance(result, Mapping):
         return defaults
@@ -1024,6 +1054,27 @@ def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
         ),
         "validator_queue_fully_dispatchable_ratio": float(summary.get("fully_dispatchable_ratio") or 0.0),
         "validator_queue_dispatch_job_ratio": float(summary.get("dispatch_job_ratio") or 0.0),
+        "validator_queue_queues_with_blocker_reasons": _to_int_count(summary.get("queues_with_blocker_reasons"), 0),
+        "validator_queue_blocker_reasons_present": _join_string_list(summary.get("blocker_reasons_present")),
+        "validator_queue_primary_blocker_reasons_present": _join_string_list(
+            summary.get("primary_blocker_reasons_present")
+        ),
+        "validator_queue_missing_body_preview_queues": _to_int_count(summary.get("missing_body_preview_queues"), 0),
+        "validator_queue_missing_status_code_queues": _to_int_count(summary.get("missing_status_code_queues"), 0),
+        "validator_queue_missing_body_hash_queues": _to_int_count(summary.get("missing_body_hash_queues"), 0),
+        "validator_queue_missing_content_type_queues": _to_int_count(summary.get("missing_content_type_queues"), 0),
+        "validator_queue_unavailable_surface_queues": _to_int_count(summary.get("unavailable_surface_queues"), 0),
+        "validator_queue_no_param_target_queues": _to_int_count(summary.get("no_param_target_queues"), 0),
+        "validator_queue_blocked_unknown_queues": _to_int_count(summary.get("blocked_unknown_queues"), 0),
+        "validator_queue_unavailable_unknown_queues": _to_int_count(summary.get("unavailable_unknown_queues"), 0),
+        "validator_queue_queues_with_baseline_blockers": _to_int_count(
+            summary.get("queues_with_baseline_blockers"), 0
+        ),
+        "validator_queue_queues_with_surface_blockers": _to_int_count(summary.get("queues_with_surface_blockers"), 0),
+        "validator_queue_queues_with_param_target_blockers": _to_int_count(
+            summary.get("queues_with_param_target_blockers"), 0
+        ),
+        "validator_queue_avg_blocker_reasons_per_queue": float(summary.get("avg_blocker_reasons_per_queue") or 0.0),
     }
 
 
