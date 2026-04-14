@@ -7,10 +7,218 @@ from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlparse
 
 
+_ENDPOINT_CATEGORY_ORDER: tuple[str, ...] = (
+    "api",
+    "graphql",
+    "auth",
+    "login",
+    "admin",
+    "php",
+    "absolute_url",
+    "relative_url",
+    "route",
+    "xhr_hint",
+    "unknown",
+)
+
+_JS_ROUTE_QUOTED_RE = re.compile(r"(['\"])((?:https?://|/|\.\.?/)[^'\"\n]{1,512})\1")
+_JS_ABSOLUTE_RE = re.compile(r"https?://[^\s'\"<>]{3,1024}", re.IGNORECASE)
+_JS_RELATIVE_RE = re.compile(r"(?<![\w:])(?:/|\.\.?/)[^\s'\"<>]{1,512}")
+_JS_FETCH_CALL_RE = re.compile(r"\bfetch\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
+_JS_AXIOS_CALL_RE = re.compile(r"\baxios(?:\.[a-z]+)?\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
+
+
+def _empty_endpoint_candidate_summary() -> dict[str, int]:
+    return {
+        "endpoint_candidates_total": 0,
+        "endpoint_candidates_unique": 0,
+        "endpoint_candidates_api_like": 0,
+        "endpoint_candidates_graphql_like": 0,
+        "endpoint_candidates_auth_like": 0,
+        "endpoint_candidates_login_like": 0,
+        "endpoint_candidates_admin_like": 0,
+        "endpoint_candidates_php_like": 0,
+        "endpoint_candidates_absolute": 0,
+        "endpoint_candidates_relative": 0,
+        "endpoint_candidates_internal_hint": 0,
+        "endpoint_candidates_external_hint": 0,
+    }
+
+
+def _clean_endpoint_candidate_value(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    value = value.strip("'`\" ")
+    value = value.strip("()[]{}")
+    value = value.strip("\"'`,;")
+    value = value.strip()
+    return value
+
+
+def _normalize_endpoint_candidate_value(value: str) -> str:
+    cleaned = _clean_endpoint_candidate_value(value)
+    return re.sub(r"\s+", "", cleaned.lower())
+
+
+def _classify_endpoint_candidate(value: str, lowered: str) -> str:
+    if "graphql" in lowered:
+        return "graphql"
+    if "/api/" in lowered or lowered.startswith("api/") or "/api?" in lowered:
+        return "api"
+    if "auth" in lowered:
+        return "auth"
+    if "login" in lowered:
+        return "login"
+    if "admin" in lowered:
+        return "admin"
+    if ".php" in lowered:
+        return "php"
+    if value.startswith(("http://", "https://")):
+        return "absolute_url"
+    if value.startswith(("/", "./", "../")):
+        return "relative_url"
+    return "route"
+
+
+def _candidate_sort_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    category = str(item.get("category") or "unknown")
+    category_order = _ENDPOINT_CATEGORY_ORDER.index(category) if category in _ENDPOINT_CATEGORY_ORDER else len(_ENDPOINT_CATEGORY_ORDER)
+    return (
+        f"{category_order:02d}",
+        str(item.get("normalized_value") or ""),
+        str(item.get("source_kind") or ""),
+        str(item.get("source_ref") or ""),
+        str(item.get("evidence") or ""),
+    )
+
+
+def _build_endpoint_candidate(
+    raw_value: str,
+    source_kind: str,
+    source_ref: str,
+    base_host: str,
+    evidence: str,
+    force_category: str = "",
+) -> dict[str, Any] | None:
+    value = _clean_endpoint_candidate_value(raw_value)
+    normalized_value = _normalize_endpoint_candidate_value(value)
+    if not value or not normalized_value:
+        return None
+    category = force_category or _classify_endpoint_candidate(value, normalized_value)
+    parsed = urlparse(value if value.startswith(("http://", "https://", "/", "./", "../")) else "")
+    is_absolute = value.startswith(("http://", "https://"))
+    is_relative = value.startswith(("/", "./", "../"))
+    host = (parsed.hostname or parsed.netloc or "").lower() if parsed else ""
+    path = parsed.path or ""
+    internal_hint = bool(base_host and host and host == base_host)
+    external_hint = bool(host and base_host and host != base_host)
+    dedupe_key = f"{normalized_value}|{category}"
+    confidence = "medium" if category in {"api", "graphql", "auth", "login", "admin", "php", "absolute_url", "relative_url", "xhr_hint"} else "low"
+    return {
+        "value": value,
+        "normalized_value": normalized_value,
+        "source_kind": str(source_kind or "other existing passive source"),
+        "source_ref": str(source_ref or ""),
+        "category": category,
+        "is_absolute": is_absolute,
+        "is_relative": is_relative,
+        "host": host,
+        "path": path,
+        "internal_hint": internal_hint,
+        "external_hint": external_hint,
+        "evidence": str(evidence or "passive_js_pattern"),
+        "confidence": confidence,
+        "dedupe_key": dedupe_key,
+    }
+
+
+def _collect_endpoint_candidates(
+    *,
+    base_host: str,
+    source_page_url: str,
+    external_scripts: list[dict[str, Any]],
+    inline_raw_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    candidates_by_key: dict[str, dict[str, Any]] = {}
+    raw_total = 0
+
+    def _put(candidate: dict[str, Any] | None) -> None:
+        nonlocal raw_total
+        if not candidate:
+            return
+        raw_total += 1
+        key = str(candidate.get("dedupe_key") or "")
+        if not key or key in candidates_by_key:
+            return
+        candidates_by_key[key] = candidate
+
+    for item in external_scripts:
+        src = str(item.get("src") or "")
+        absolute_url = str(item.get("absolute_url") or "")
+        source_ref = absolute_url or src
+        _put(_build_endpoint_candidate(src, "script_src", source_ref, base_host, "script_src"))
+        if absolute_url and absolute_url != src:
+            _put(_build_endpoint_candidate(absolute_url, "external_js", source_ref, base_host, "external_js_absolute"))
+
+    for inline_item in inline_raw_items:
+        text = str(inline_item.get("text") or "")
+        idx = int(inline_item.get("index") or 0)
+        if not text.strip():
+            continue
+        source_ref = source_page_url or f"inline_script_{idx}"
+        _put(_build_endpoint_candidate("fetch(...)", "inline_js", source_ref, base_host, "fetch_call_hint", force_category="xhr_hint") if re.search(r"\bfetch\s*\(", text, re.IGNORECASE) else None)
+        _put(_build_endpoint_candidate("axios(...)", "inline_js", source_ref, base_host, "axios_call_hint", force_category="xhr_hint") if re.search(r"\baxios(?:\.[a-z]+)?\s*\(", text, re.IGNORECASE) else None)
+        _put(
+            _build_endpoint_candidate("XMLHttpRequest", "inline_js", source_ref, base_host, "xmlhttprequest_hint", force_category="xhr_hint")
+            if re.search(r"\bXMLHttpRequest\b", text)
+            else None
+        )
+        for match in _JS_FETCH_CALL_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "fetch_argument"))
+        for match in _JS_AXIOS_CALL_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "axios_argument"))
+        for match in _JS_ABSOLUTE_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(0), "inline_js", source_ref, base_host, "absolute_url_literal", force_category="absolute_url"))
+        for match in _JS_RELATIVE_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(0), "inline_js", source_ref, base_host, "relative_path_literal", force_category="relative_url"))
+        for match in _JS_ROUTE_QUOTED_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "quoted_route_literal"))
+
+    endpoint_candidates = sorted(candidates_by_key.values(), key=_candidate_sort_key)
+    summary = _empty_endpoint_candidate_summary()
+    summary["endpoint_candidates_total"] = raw_total
+    summary["endpoint_candidates_unique"] = len(endpoint_candidates)
+    for item in endpoint_candidates:
+        category = str(item.get("category") or "")
+        if category == "api":
+            summary["endpoint_candidates_api_like"] += 1
+        if category == "graphql":
+            summary["endpoint_candidates_graphql_like"] += 1
+        if category == "auth":
+            summary["endpoint_candidates_auth_like"] += 1
+        if category == "login":
+            summary["endpoint_candidates_login_like"] += 1
+        if category == "admin":
+            summary["endpoint_candidates_admin_like"] += 1
+        if category == "php":
+            summary["endpoint_candidates_php_like"] += 1
+        if bool(item.get("is_absolute")):
+            summary["endpoint_candidates_absolute"] += 1
+        if bool(item.get("is_relative")):
+            summary["endpoint_candidates_relative"] += 1
+        if bool(item.get("internal_hint")):
+            summary["endpoint_candidates_internal_hint"] += 1
+        if bool(item.get("external_hint")):
+            summary["endpoint_candidates_external_hint"] += 1
+    return endpoint_candidates, summary
+
+
 def empty_js_recon_contract() -> dict[str, Any]:
     return {
         "external_scripts": [],
         "inline_scripts": [],
+        "endpoint_candidates": [],
         "page_sources": [],
         "summary": {
             "external_total": 0,
@@ -46,6 +254,7 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "max_inline_scripts_on_page": 0,
             "avg_external_scripts_per_page": 0.0,
             "avg_inline_scripts_per_page": 0.0,
+            **_empty_endpoint_candidate_summary(),
         },
         "coverage": {
             "external_scripts_linked_ratio": 0.0,
@@ -303,6 +512,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         )
 
     inline_scripts: list[dict[str, Any]] = []
+    inline_raw_items: list[dict[str, Any]] = []
     inline_nonempty_total = 0
     inline_module_total = 0
     inline_json_like_total = 0
@@ -352,6 +562,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "source_page_path": source_page_path,
             }
         )
+        inline_raw_items.append({"index": idx, "text": text})
 
     external_total = len(external_scripts)
     external_script_urls = sorted({str(item.get("absolute_url") or "").strip() for item in external_scripts if str(item.get("absolute_url") or "").strip()})
@@ -400,6 +611,12 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     page_sources_total = len(page_sources)
     avg_external_scripts_per_page = float(external_total / page_sources_total) if page_sources_total > 0 else 0.0
     avg_inline_scripts_per_page = float(len(inline_scripts) / page_sources_total) if page_sources_total > 0 else 0.0
+    endpoint_candidates, endpoint_summary = _collect_endpoint_candidates(
+        base_host=base_host,
+        source_page_url=source_page_url,
+        external_scripts=external_scripts,
+        inline_raw_items=inline_raw_items,
+    )
     summary = {
         "external_total": external_total,
         "inline_total": len(inline_scripts),
@@ -434,6 +651,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "max_inline_scripts_on_page": max_inline_scripts_on_page,
         "avg_external_scripts_per_page": avg_external_scripts_per_page,
         "avg_inline_scripts_per_page": avg_inline_scripts_per_page,
+        **endpoint_summary,
     }
     has_inventory = bool(external_scripts or inline_scripts)
     coverage = {
@@ -445,6 +663,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     return {
         "external_scripts": external_scripts,
         "inline_scripts": inline_scripts,
+        "endpoint_candidates": endpoint_candidates,
         "page_sources": page_sources,
         "summary": summary,
         "coverage": coverage,
