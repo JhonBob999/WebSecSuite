@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 _ALLOWED_TYPES = {
     "xss_candidate",
@@ -46,7 +46,9 @@ _ASSET_EXTENSIONS = (
     ".webp",
     ".pdf",
     ".zip",
+    ".webmanifest",
 )
+_STATIC_ASSET_FILENAMES = {"favicon", "site.webmanifest", "manifest.json", "robots.txt", "sitemap.xml"}
 
 _CATEGORY_TO_CANDIDATE_TYPE = {
     "id": "sqli_candidate",
@@ -129,6 +131,55 @@ def _is_asset_like_url(url: str | None) -> bool:
     return any(path.endswith(ext) for ext in _ASSET_EXTENSIONS)
 
 
+def _is_static_upload_asset_path(url: str | None) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+        path = (parsed.path or "").lower()
+    except Exception:
+        path = raw.lower().split("?", 1)[0].split("#", 1)[0]
+    if "/upload" not in path:
+        return False
+    if _is_asset_like_url(raw):
+        return True
+    last_segment = path.rsplit("/", 1)[-1].strip()
+    return last_segment in _STATIC_ASSET_FILENAMES
+
+
+def _has_endpoint_input_surface(endpoint_record: dict, endpoint_url: str) -> bool:
+    if not isinstance(endpoint_record, dict):
+        return False
+
+    try:
+        parsed = urlparse(endpoint_url)
+        if any(name and not _is_tracking_param(name) for name, _ in parse_qsl(parsed.query or "", keep_blank_values=True)):
+            return True
+    except Exception:
+        pass
+
+    param_name = str(endpoint_record.get("param_name") or endpoint_record.get("param") or "").strip()
+    if param_name:
+        return True
+
+    for count_key in ("query_params_count", "input_count", "form_count", "js_param_count"):
+        count_value = endpoint_record.get(count_key)
+        if isinstance(count_value, int) and count_value > 0:
+            return True
+
+    for bool_key in ("has_query_params", "has_forms", "has_inputs", "has_js_context"):
+        if endpoint_record.get(bool_key) is True:
+            return True
+
+    for list_key in ("query_params", "params", "param_names", "forms", "inputs", "js_endpoints", "js_params"):
+        list_value = endpoint_record.get(list_key)
+        if isinstance(list_value, (list, tuple, set)) and len(list_value) > 0:
+            return True
+
+    return False
+
+
 def _has_meaningful_target_context(url: str, endpoint_type: str | None, param_name: str | None) -> bool:
     normalized_endpoint_type = str(endpoint_type or "").strip().lower()
     if normalized_endpoint_type in _IGNORED_ENDPOINT_TYPES:
@@ -186,6 +237,9 @@ def _refine_candidate_confidence(candidate: dict) -> dict:
     normalized_score = _normalize_score(refined_candidate.get("score"))
     reasons = refined_candidate.get("reasons")
     normalized_reasons = list(reasons) if isinstance(reasons, list) else []
+    normalized_reasons = [
+        reason for reason in normalized_reasons if not str(reason).strip().lower().startswith("derived_confidence:")
+    ]
 
     confidence_level_index = _CONFIDENCE_LEVELS.index(confidence)
     boost = 0
@@ -247,7 +301,7 @@ def _refine_candidate_confidence(candidate: dict) -> dict:
                 normalized_reasons.append(score_reason)
 
     if normalized_signals:
-        derivation_reason = f"derived_confidence:{derived_confidence}"
+        derivation_reason = f"derived_confidence:{refined_confidence}"
         if derivation_reason not in normalized_reasons:
             normalized_reasons.append(derivation_reason)
 
@@ -448,6 +502,7 @@ def generate_candidates(
         endpoint_type = str(endpoint_record.get("endpoint_type") or "").strip().lower()
         if not endpoint_type or endpoint_type in _IGNORED_ENDPOINT_TYPES:
             continue
+        has_input_surface = _has_endpoint_input_surface(endpoint_record, endpoint_url)
 
         candidate_types = _ENDPOINT_TYPE_TO_CANDIDATE_TYPES.get(endpoint_type, [])
         if not candidate_types:
@@ -472,6 +527,14 @@ def generate_candidates(
             matched_signals.append(f"priority:{priority}")
         if endpoint_record.get("score") is not None:
             matched_signals.append(f"score:{endpoint_record.get('score')}")
+
+        if endpoint_type == "auth" and not has_input_surface:
+            candidate_types = ["sqli_candidate"]
+            effective_confidence = "low"
+            reasons.append("path_only_auth_guard")
+            matched_signals.append("path_only_auth")
+        if endpoint_type == "upload" and not has_input_surface and _is_static_upload_asset_path(endpoint_url):
+            continue
 
         for candidate_type in candidate_types:
             _add_candidate(
