@@ -8,6 +8,7 @@ import httpx
 from core.cookies.storage import load_cookiejar
 from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
+from core.discovery.js_recon import collect_js_sources, empty_js_recon_contract
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
 from core.discovery.validation_plan import build_validation_plan, build_validator_handoff, build_validator_queue
@@ -66,6 +67,10 @@ def _empty_validator_queue() -> dict:
 
 def _empty_validator_handoff() -> dict:
     return build_validator_handoff(validator_queue=None, validation_plan=None)
+
+
+def _empty_js_recon() -> dict:
+    return empty_js_recon_contract()
 
 
 def _headers_with_ua(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -129,6 +134,7 @@ def run(task_ctx: dict) -> dict:
                 "urls": {},
                 "query_params": {},
                 "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
@@ -146,6 +152,7 @@ def run(task_ctx: dict) -> dict:
                 "urls": {},
                 "query_params": {},
                 "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
@@ -160,6 +167,7 @@ def run(task_ctx: dict) -> dict:
                 "urls": {},
                 "query_params": {},
                 "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
                 "finding_artifacts": _empty_finding_artifacts(),
                 "replay_groups": _empty_replay_groups(),
                 "replay_manifest": _empty_replay_manifest(),
@@ -185,6 +193,7 @@ def run(task_ctx: dict) -> dict:
     }
     result["forms"] = forms_pack.get("forms", [])
     result["forms_summary"] = forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0})
+    result["js_recon"] = collect_js_sources(html or "", base_url)
 
     final_url = (
         base_url

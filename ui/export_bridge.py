@@ -261,6 +261,7 @@ PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
     "headers",
     "timings",
     "parameter_intelligence",
+    "js_recon",
     "request_recipe",
     "response_snapshot",
     "replay_groups",
@@ -361,6 +362,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record.update(derive_validator_handoff_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
+    record.update(derive_js_recon_summary_fields(result))
 
     return record
 
@@ -418,6 +420,42 @@ def derive_response_snapshot_summary_fields(result: Any) -> dict[str, Any]:
         "response_content_length": _to_int_count(content_length, None),
         "response_body_hash": _str_or(snapshot.get("body_hash"), ""),
         "response_has_body_preview": has_body_preview,
+    }
+
+
+def derive_js_recon_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "js_recon_external_total": 0,
+        "js_recon_inline_total": 0,
+        "js_recon_internal_external_scripts": 0,
+        "js_recon_third_party_external_scripts": 0,
+        "js_recon_module_scripts": 0,
+        "js_recon_async_scripts": 0,
+        "js_recon_defer_scripts": 0,
+        "js_recon_integrity_scripts": 0,
+        "js_recon_inline_nonempty_total": 0,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+
+    js_recon = result.get("js_recon")
+    if not isinstance(js_recon, Mapping):
+        return defaults
+
+    summary = js_recon.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+
+    return {
+        "js_recon_external_total": _to_int_count(summary.get("external_total"), 0),
+        "js_recon_inline_total": _to_int_count(summary.get("inline_total"), 0),
+        "js_recon_internal_external_scripts": _to_int_count(summary.get("internal_external_scripts"), 0),
+        "js_recon_third_party_external_scripts": _to_int_count(summary.get("third_party_external_scripts"), 0),
+        "js_recon_module_scripts": _to_int_count(summary.get("module_scripts"), 0),
+        "js_recon_async_scripts": _to_int_count(summary.get("async_scripts"), 0),
+        "js_recon_defer_scripts": _to_int_count(summary.get("defer_scripts"), 0),
+        "js_recon_integrity_scripts": _to_int_count(summary.get("integrity_scripts"), 0),
+        "js_recon_inline_nonempty_total": _to_int_count(summary.get("inline_nonempty_total"), 0),
     }
 
 
@@ -1442,6 +1480,7 @@ def _tabular_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "_raw_result",
         "candidates",
         "candidates_summary",
+        "js_recon",
         "replay_groups",
         "replay_manifest",
         "validation_plan",
@@ -1485,6 +1524,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
         row.update(derive_validator_handoff_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
+        row.update(derive_js_recon_summary_fields(rec))
 
         for hidden_key in PREVIEW_HIDDEN_RAW_FIELDS:
             row.pop(hidden_key, None)

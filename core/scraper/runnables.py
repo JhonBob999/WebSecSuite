@@ -18,6 +18,7 @@ from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.discovery.endpoint_classifier import classify_endpoint_type
 from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
+from core.discovery.js_recon import collect_js_sources, empty_js_recon_contract
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
 from core.discovery.validation_plan import build_validation_plan, build_validator_handoff, build_validator_queue
@@ -420,6 +421,7 @@ class ScraperRunnable(QRunnable):
                 "redirect_chain": redirect_chain,
                 "forms": forms_pack.get("forms", []),
                 "forms_summary": forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0}),
+                "js_recon": collect_js_sources(resp.text or "", str(resp.url)),
                 "fingerprint": fingerprint,
                 "parameter_intelligence": param_intel,
                 "parameter_intelligence_summary": param_intel_summary,
@@ -536,6 +538,7 @@ class ScraperRunnable(QRunnable):
         except httpx.HTTPError as e:
             self.task.result = {
                 "error": f"httpx error: {e}",
+                "js_recon": empty_js_recon_contract(),
                 "request_recipe": self._build_request_recipe(
                     request_url=url,
                     method=method,
@@ -590,6 +593,7 @@ class ScraperRunnable(QRunnable):
         except Exception as e:
             self.task.result = {
                 "error": f"Unhandled error: {e}",
+                "js_recon": empty_js_recon_contract(),
                 "request_recipe": self._build_request_recipe(
                     request_url=url,
                     method=method,
