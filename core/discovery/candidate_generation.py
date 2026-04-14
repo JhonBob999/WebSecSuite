@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 _ALLOWED_TYPES = {
     "xss_candidate",
     "sqli_candidate",
@@ -9,6 +11,42 @@ _ALLOWED_TYPES = {
 _ALLOWED_CONFIDENCE = {"low", "medium", "high"}
 _ALLOWED_PRIORITY = {"low", "medium", "high"}
 _CONFIDENCE_LEVELS = ("low", "medium", "high")
+_TRACKING_PARAM_PREFIXES = (
+    "utm_",
+    "ga_",
+    "pk_",
+)
+_TRACKING_PARAM_NAMES = {
+    "fbclid",
+    "gclid",
+    "dclid",
+    "msclkid",
+    "mc_eid",
+    "mc_cid",
+    "ref",
+    "ref_src",
+    "source",
+}
+_ASSET_EXTENSIONS = (
+    ".css",
+    ".js",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".map",
+    ".mp4",
+    ".mp3",
+    ".webp",
+    ".pdf",
+    ".zip",
+)
 
 _CATEGORY_TO_CANDIDATE_TYPE = {
     "id": "sqli_candidate",
@@ -57,9 +95,58 @@ _IGNORED_ENDPOINT_TYPES = {"asset", "unknown"}
 
 
 def _normalize_confidence(confidence: str | None) -> str:
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        numeric = float(confidence)
+        if numeric >= 0.9:
+            return "high"
+        if numeric >= 0.65:
+            return "medium"
+        return "low"
     normalized = str(confidence or "").strip().lower()
     if normalized in _ALLOWED_CONFIDENCE:
         return normalized
+    return "low"
+
+
+def _is_tracking_param(param_name: str | None) -> bool:
+    normalized = str(param_name or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in _TRACKING_PARAM_NAMES:
+        return True
+    return any(normalized.startswith(prefix) for prefix in _TRACKING_PARAM_PREFIXES)
+
+
+def _is_asset_like_url(url: str | None) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+        path = (parsed.path or "").lower()
+    except Exception:
+        path = raw.lower().split("?", 1)[0].split("#", 1)[0]
+    return any(path.endswith(ext) for ext in _ASSET_EXTENSIONS)
+
+
+def _has_meaningful_target_context(url: str, endpoint_type: str | None, param_name: str | None) -> bool:
+    normalized_endpoint_type = str(endpoint_type or "").strip().lower()
+    if normalized_endpoint_type in _IGNORED_ENDPOINT_TYPES:
+        return False
+    if _is_asset_like_url(url):
+        return False
+    if str(param_name or "").strip():
+        return True
+    return normalized_endpoint_type in {"admin", "auth", "api", "upload"}
+
+
+def _confidence_from_signal_weights(strong_signals: int, medium_signals: int, weak_signals: int) -> str:
+    if strong_signals >= 2 or (strong_signals >= 1 and medium_signals >= 2):
+        return "high"
+    if strong_signals >= 1 or medium_signals >= 2:
+        return "medium"
+    if medium_signals == 1 and weak_signals >= 1:
+        return "medium"
     return "low"
 
 
@@ -121,8 +208,25 @@ def _refine_candidate_confidence(candidate: dict) -> dict:
         used_priority = True
         used_score = True
 
-    boost = min(boost, 2)
+    matched_signals = refined_candidate.get("matched_signals")
+    normalized_signals = [str(item).strip().lower() for item in matched_signals] if isinstance(matched_signals, list) else []
+    strong_signals = sum(
+        1
+        for token in normalized_signals
+        if token.startswith(("parameter_category:", "endpoint_type:", "form_context", "js_context"))
+    )
+    medium_signals = sum(
+        1
+        for token in normalized_signals
+        if token.startswith(("source_area:", "priority:", "score:"))
+    )
+    weak_signals = sum(1 for token in normalized_signals if token)
+    derived_confidence = _confidence_from_signal_weights(strong_signals, medium_signals, weak_signals)
+    derived_index = _CONFIDENCE_LEVELS.index(derived_confidence)
+
+    boost = min(boost, 1)
     refined_index = min(confidence_level_index + boost, len(_CONFIDENCE_LEVELS) - 1)
+    refined_index = min(refined_index, derived_index) if normalized_signals else refined_index
     refined_confidence = _CONFIDENCE_LEVELS[refined_index]
 
     refined_candidate["confidence"] = refined_confidence
@@ -141,6 +245,11 @@ def _refine_candidate_confidence(candidate: dict) -> dict:
             score_reason = f"score:{normalized_score}"
             if score_reason not in normalized_reasons:
                 normalized_reasons.append(score_reason)
+
+    if normalized_signals:
+        derivation_reason = f"derived_confidence:{derived_confidence}"
+        if derivation_reason not in normalized_reasons:
+            normalized_reasons.append(derivation_reason)
 
     refined_candidate["reasons"] = normalized_reasons
     return refined_candidate
@@ -197,6 +306,10 @@ def _add_candidate(
     endpoint_type=None,
     score=None,
     priority=None,
+    source_area="",
+    source_ref="",
+    matched_signals=None,
+    explanation="",
 ):
     """Add candidate with strict contract, including strict deduplication key.
 
@@ -211,14 +324,20 @@ def _add_candidate(
 
     normalized_reasons = reasons if isinstance(reasons, list) else []
     normalized_confidence = _normalize_confidence(confidence)
+    normalized_source_area = str(source_area or "").strip().lower()
+    normalized_source_ref = str(source_ref or "").strip()
+    normalized_signals = [str(signal).strip() for signal in matched_signals] if isinstance(matched_signals, list) else []
+    normalized_explanation = str(explanation or "").strip()
 
-    dedupe_key = (candidate_type, normalized_url, param, endpoint_type)
+    dedupe_key = (candidate_type, normalized_url, param, endpoint_type, normalized_source_area, normalized_source_ref)
     for existing in candidates:
         existing_key = (
             existing.get("type"),
             existing.get("url"),
             existing.get("param"),
             existing.get("endpoint_type"),
+            existing.get("source_area"),
+            existing.get("source_ref"),
         )
         if existing_key == dedupe_key:
             return
@@ -227,12 +346,19 @@ def _add_candidate(
         {
             "type": candidate_type,
             "url": normalized_url,
+            "target_url": normalized_url,
             "param": param,
+            "param_name": param,
             "confidence": normalized_confidence,
             "reasons": normalized_reasons,
             "endpoint_type": endpoint_type,
             "score": score,
             "priority": priority,
+            "source_area": normalized_source_area,
+            "source_ref": normalized_source_ref,
+            "matched_signals": normalized_signals,
+            "evidence_sources": list(normalized_signals),
+            "explanation": normalized_explanation,
         }
     )
 
@@ -260,6 +386,8 @@ def generate_candidates(
         if not isinstance(param_name, str) or not param_name.strip():
             continue
         param_name = param_name.strip()
+        if _is_tracking_param(param_name):
+            continue
 
         normalized_category = _normalize_category(param_entry.get("category"))
         if not normalized_category:
@@ -272,10 +400,24 @@ def generate_candidates(
         candidate_url = param_entry.get("url")
         if not isinstance(candidate_url, str) or not candidate_url.strip():
             candidate_url = final_url
+        if not _has_meaningful_target_context(candidate_url, param_entry.get("endpoint_type"), param_name):
+            continue
 
         endpoint_type = param_entry.get("endpoint_type")
         score = param_entry.get("score")
         priority = param_entry.get("priority")
+
+        matched_signals = [
+            f"source_area:query_param",
+            f"parameter_category:{normalized_category}",
+            f"source_ref:{param_name}",
+        ]
+        if endpoint_type:
+            matched_signals.append(f"endpoint_type:{endpoint_type}")
+        if priority:
+            matched_signals.append(f"priority:{priority}")
+        if score is not None:
+            matched_signals.append(f"score:{score}")
 
         _add_candidate(
             candidates=all_candidates,
@@ -290,11 +432,17 @@ def generate_candidates(
             endpoint_type=endpoint_type,
             score=score,
             priority=priority,
+            source_area="query_param",
+            source_ref=param_name,
+            matched_signals=matched_signals,
+            explanation=f"Parameter '{param_name}' matched category '{normalized_category}' for {candidate_type}.",
         )
 
     for endpoint_record in endpoint_records:
         endpoint_url = endpoint_record.get("url")
         if not isinstance(endpoint_url, str) or not endpoint_url.strip():
+            continue
+        if _is_asset_like_url(endpoint_url):
             continue
 
         endpoint_type = str(endpoint_record.get("endpoint_type") or "").strip().lower()
@@ -312,9 +460,18 @@ def generate_candidates(
             "endpoint_intelligence",
             f"endpoint_type:{endpoint_type}",
         ]
+        matched_signals = [
+            "source_area:path",
+            f"endpoint_type:{endpoint_type}",
+            f"source_ref:{endpoint_url}",
+        ]
         if str(priority or "").strip().lower() == "high" and base_confidence == "low":
             effective_confidence = "medium"
             reasons.append(f"priority:{priority}")
+        if priority:
+            matched_signals.append(f"priority:{priority}")
+        if endpoint_record.get("score") is not None:
+            matched_signals.append(f"score:{endpoint_record.get('score')}")
 
         for candidate_type in candidate_types:
             _add_candidate(
@@ -327,9 +484,23 @@ def generate_candidates(
                 endpoint_type=endpoint_type,
                 score=endpoint_record.get("score"),
                 priority=priority,
+                source_area="path",
+                source_ref=endpoint_url,
+                matched_signals=matched_signals,
+                explanation=f"Endpoint '{endpoint_url}' classified as '{endpoint_type}' suggests {candidate_type}.",
             )
 
     all_candidates = [_refine_candidate_confidence(candidate) for candidate in all_candidates]
+    all_candidates.sort(
+        key=lambda item: (
+            str(item.get("type") or ""),
+            str(item.get("url") or ""),
+            str(item.get("param") or ""),
+            str(item.get("endpoint_type") or ""),
+            str(item.get("source_area") or ""),
+            str(item.get("source_ref") or ""),
+        )
+    )
 
     by_type = {
         "xss_candidate": [],
@@ -343,6 +514,14 @@ def generate_candidates(
         if candidate_type in by_type:
             by_type[candidate_type].append(candidate)
 
+    max_confidence = ""
+    for level in _CONFIDENCE_LEVELS[::-1]:
+        if any(str(candidate.get("confidence") or "").strip().lower() == level for candidate in all_candidates):
+            max_confidence = level
+            break
+
+    types_present = [candidate_type for candidate_type in sorted(by_type.keys()) if by_type[candidate_type]]
+
     return {
         "all": all_candidates,
         "by_type": by_type,
@@ -354,5 +533,13 @@ def generate_candidates(
                 "lfi_candidate": len(by_type["lfi_candidate"]),
                 "ssrf_candidate": len(by_type["ssrf_candidate"]),
             },
+            "types_breakdown": {
+                "xss_candidate": len(by_type["xss_candidate"]),
+                "sqli_candidate": len(by_type["sqli_candidate"]),
+                "lfi_candidate": len(by_type["lfi_candidate"]),
+                "ssrf_candidate": len(by_type["ssrf_candidate"]),
+            },
+            "max_confidence": max_confidence,
+            "types_present": types_present,
         },
     }
