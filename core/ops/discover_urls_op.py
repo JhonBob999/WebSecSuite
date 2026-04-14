@@ -10,7 +10,7 @@ from core.discovery.candidate_generation import generate_candidates
 from core.discovery.finding_artifacts import build_finding_artifacts
 from core.discovery.replay_manifest import build_replay_manifest
 from core.discovery.replay_groups import build_replay_groups
-from core.discovery.validation_plan import build_validation_plan, build_validator_queue
+from core.discovery.validation_plan import build_validation_plan, build_validator_handoff, build_validator_queue
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
 
@@ -62,6 +62,10 @@ def _empty_validation_plan() -> dict:
 
 def _empty_validator_queue() -> dict:
     return build_validator_queue(validation_plan=None)
+
+
+def _empty_validator_handoff() -> dict:
+    return build_validator_handoff(validator_queue=None, validation_plan=None)
 
 
 def _headers_with_ua(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -130,6 +134,7 @@ def run(task_ctx: dict) -> dict:
                 "replay_manifest": _empty_replay_manifest(),
                 "validation_plan": _empty_validation_plan(),
                 "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
             }
         try:
             html, final_url, headers = _fetch_html(base_url, params)
@@ -146,6 +151,7 @@ def run(task_ctx: dict) -> dict:
                 "replay_manifest": _empty_replay_manifest(),
                 "validation_plan": _empty_validation_plan(),
                 "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
             }
         except Exception as e:  # pragma: no cover - defensive fallback
             return {
@@ -159,6 +165,7 @@ def run(task_ctx: dict) -> dict:
                 "replay_manifest": _empty_replay_manifest(),
                 "validation_plan": _empty_validation_plan(),
                 "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
             }
     else:
         res_ctx = ctx.get("result")
@@ -259,4 +266,8 @@ def run(task_ctx: dict) -> dict:
         discovery=result.get("discovery"),
     )
     result["validator_queue"] = build_validator_queue(result.get("validation_plan"))
+    result["validator_handoff"] = build_validator_handoff(
+        result.get("validator_queue"),
+        result.get("validation_plan"),
+    )
     return result

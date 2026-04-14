@@ -340,6 +340,44 @@ def _empty_validator_queue_contract() -> dict[str, Any]:
     }
 
 
+def _empty_validator_handoff_contract() -> dict[str, Any]:
+    return {
+        "all": [],
+        "summary": {
+            "total": 0,
+            "ready_total": 0,
+            "not_ready_total": 0,
+            "mixed_total": 0,
+            "ready_only_total": 0,
+            "blocked_only_total": 0,
+            "unavailable_only_total": 0,
+            "empty_total": 0,
+            "dispatch_jobs_total": 0,
+            "blocked_jobs_total": 0,
+            "unavailable_jobs_total": 0,
+            "unique_targets": 0,
+            "target_sources_present": [],
+            "methods_present": [],
+            "validator_job_types_present": [],
+            "check_types_present": [],
+            "compare_modes_present": [],
+            "mutation_strategies_present": [],
+            "execution_lanes_present": [],
+            "handoff_with_blockers": 0,
+            "handoff_with_baseline_requirements": 0,
+            "handoff_baseline_ready_total": 0,
+            "handoff_with_cookie_path": 0,
+            "handoff_with_headers": 0,
+            "handoff_with_timeout": 0,
+            "handoff_with_replay_target": 0,
+            "primary_blocker_reasons_present": [],
+            "avg_dispatch_jobs_per_handoff": 0.0,
+            "ready_ratio": 0.0,
+            "baseline_ready_ratio": 0.0,
+        },
+    }
+
+
 def _clean_str(value: Any) -> str:
     if value is None:
         return ""
@@ -978,6 +1016,334 @@ def build_validator_queue(validation_plan: Mapping[str, Any] | None = None) -> d
     return payload
 
 
+def build_validator_handoff(
+    validator_queue: Mapping[str, Any] | None = None,
+    validation_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = _empty_validator_handoff_contract()
+    queue_items = validator_queue.get("all") if isinstance(validator_queue, Mapping) else None
+    if not isinstance(queue_items, list):
+        return payload
+
+    dispatch_checks_by_queue: dict[str, list[Mapping[str, Any]]] = {}
+    plan_items = validation_plan.get("all") if isinstance(validation_plan, Mapping) else None
+    if isinstance(plan_items, list):
+        for plan_item in plan_items:
+            if not isinstance(plan_item, Mapping):
+                continue
+            queue_key = _build_validator_queue_key(
+                target_url=_clean_str(plan_item.get("target_url")),
+                method=_clean_str(plan_item.get("method")),
+                target_source=_clean_str(plan_item.get("target_source")),
+                safe_mode=bool(plan_item.get("safe_mode")),
+            )
+            for check_item in (plan_item.get("check_plan") or []):
+                if not isinstance(check_item, Mapping):
+                    continue
+                validator_job = check_item.get("validator_job") or {}
+                if not isinstance(validator_job, Mapping):
+                    continue
+                if _clean_str(validator_job.get("job_type")) != _VALIDATOR_JOB_SAFE:
+                    continue
+                dispatch_checks_by_queue.setdefault(queue_key, []).append(check_item)
+
+    handoff_items: list[dict[str, Any]] = []
+    for queue_item in sorted(
+        (item for item in queue_items if isinstance(item, Mapping)),
+        key=lambda item: _safe_sort_value(item.get("queue_key")),
+    ):
+        queue_key = _clean_str(queue_item.get("queue_key"))
+        target_url = _clean_str(queue_item.get("target_url"))
+        method = _clean_str(queue_item.get("method"))
+        target_source = _clean_str(queue_item.get("target_source"))
+        safe_mode = bool(queue_item.get("safe_mode"))
+        dispatch_mode = _clean_str(queue_item.get("dispatch_mode"))
+        if dispatch_mode not in _QUEUE_DISPATCH_VALID_MODES:
+            dispatch_mode = _QUEUE_DISPATCH_EMPTY
+
+        dispatch_contract = queue_item.get("dispatch") or {}
+        dispatch_job_ids = sorted(
+            {
+                _clean_str(job_id)
+                for job_id in (dispatch_contract.get("dispatch_job_ids") or queue_item.get("dispatch_job_ids") or [])
+                if _clean_str(job_id)
+            }
+        )
+        blocked_job_ids = sorted(
+            {
+                _clean_str(job_id)
+                for job_id in (dispatch_contract.get("blocked_job_ids") or queue_item.get("blocked_job_ids") or [])
+                if _clean_str(job_id)
+            }
+        )
+        unavailable_job_ids = sorted(
+            {
+                _clean_str(job_id)
+                for job_id in (
+                    dispatch_contract.get("unavailable_job_ids")
+                    or queue_item.get("unavailable_job_ids")
+                    or []
+                )
+                if _clean_str(job_id)
+            }
+        )
+        dispatch_job_count = len(dispatch_job_ids)
+        blocked_job_count = len(blocked_job_ids)
+        unavailable_job_count = len(unavailable_job_ids)
+
+        dispatch_checks = dispatch_checks_by_queue.get(queue_key) or []
+        dispatch_validator_job_types = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("job_type"))
+                for check_item in dispatch_checks
+                if _clean_str((check_item.get("validator_job") or {}).get("job_type"))
+            }
+        )
+        dispatch_check_types = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("check_type")) or _clean_str(check_item.get("check_type"))
+                for check_item in dispatch_checks
+                if _clean_str((check_item.get("validator_job") or {}).get("check_type")) or _clean_str(check_item.get("check_type"))
+            }
+        )
+        dispatch_compare_modes = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("compare_mode"))
+                or _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+                for check_item in dispatch_checks
+                if _clean_str((check_item.get("validator_job") or {}).get("compare_mode"))
+                or _clean_str((check_item.get("comparison") or {}).get("compare_mode"))
+            }
+        )
+        dispatch_mutation_strategies = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("mutation_strategy"))
+                or _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+                for check_item in dispatch_checks
+                if _clean_str((check_item.get("validator_job") or {}).get("mutation_strategy"))
+                or _clean_str((check_item.get("mutation_binding") or {}).get("strategy"))
+            }
+        )
+        dispatch_execution_lanes = sorted(
+            {
+                _clean_str((check_item.get("validator_job") or {}).get("execution_lane"))
+                or _clean_str(check_item.get("execution_lane"))
+                for check_item in dispatch_checks
+                if _clean_str((check_item.get("validator_job") or {}).get("execution_lane"))
+                or _clean_str(check_item.get("execution_lane"))
+            }
+        )
+        if not dispatch_validator_job_types:
+            dispatch_validator_job_types = sorted(
+                {_clean_str(value) for value in (queue_item.get("validator_job_types") or []) if _clean_str(value)}
+            )
+        if not dispatch_check_types:
+            dispatch_check_types = sorted({_clean_str(value) for value in (queue_item.get("check_types") or []) if _clean_str(value)})
+        if not dispatch_compare_modes:
+            dispatch_compare_modes = sorted(
+                {_clean_str(value) for value in (queue_item.get("compare_modes") or []) if _clean_str(value)}
+            )
+        if not dispatch_mutation_strategies:
+            dispatch_mutation_strategies = sorted(
+                {_clean_str(value) for value in (queue_item.get("mutation_strategies") or []) if _clean_str(value)}
+            )
+        if not dispatch_execution_lanes:
+            dispatch_execution_lanes = sorted(
+                {_clean_str(value) for value in (queue_item.get("execution_lanes") or []) if _clean_str(value)}
+            )
+
+        requires_baseline = any(bool(check_item.get("baseline_required")) for check_item in dispatch_checks)
+        baseline_ready = bool(
+            dispatch_checks
+            and all(bool((check_item.get("baseline_inputs") or {}).get("all_required_available")) for check_item in dispatch_checks)
+        )
+        blocker_reasons = sorted(
+            {
+                _clean_str(reason)
+                for reason in (queue_item.get("blocker_reasons") or [])
+                if _clean_str(reason) in _BLOCKER_REASON_ORDER
+            },
+            key=lambda reason: _BLOCKER_REASON_ORDER.index(reason),
+        )
+        primary_blocker_reason = _clean_str(queue_item.get("primary_blocker_reason"))
+        if primary_blocker_reason not in _BLOCKER_REASON_ORDER:
+            primary_blocker_reason = blocker_reasons[0] if blocker_reasons else ""
+
+        cookie_path_present = bool(_clean_str(queue_item.get("cookie_path")) or _clean_str(queue_item.get("request_cookie_path")))
+        headers_present = bool(isinstance(queue_item.get("headers"), Mapping) and bool(queue_item.get("headers")))
+        timeout_raw = queue_item.get("timeout")
+        timeout_present = bool(timeout_raw not in (None, "", []))
+        replay_target_available = bool(target_url and target_url.lower() != "unknown")
+        ready_for_handoff = bool(
+            dispatch_job_count > 0 and dispatch_mode in {_QUEUE_DISPATCH_READY_ONLY, _QUEUE_DISPATCH_MIXED}
+        )
+        primary_dispatch_job_id = _clean_str(queue_item.get("primary_dispatch_job_id")) or (
+            dispatch_job_ids[0] if dispatch_job_ids else ""
+        )
+        handoff_key = "|".join(
+            [
+                _safe_sort_value(queue_key),
+                _safe_sort_value(primary_dispatch_job_id),
+                _safe_sort_value(target_url),
+            ]
+        )
+        handoff_package = {
+            "target_url": target_url,
+            "method": method,
+            "target_source": target_source,
+            "dispatch_job_ids": dispatch_job_ids,
+            "safe_mode": bool(safe_mode),
+            "headers_present": headers_present,
+            "cookie_path_present": cookie_path_present,
+            "timeout_present": timeout_present,
+            "baseline_ready": baseline_ready,
+            "requires_baseline": requires_baseline,
+            "execution_lanes": dispatch_execution_lanes,
+            "check_types": dispatch_check_types,
+            "compare_modes": dispatch_compare_modes,
+            "mutation_strategies": dispatch_mutation_strategies,
+        }
+        handoff_items.append(
+            {
+                "handoff_key": handoff_key,
+                "queue_key": queue_key,
+                "target_url": target_url,
+                "method": method,
+                "target_source": target_source,
+                "dispatch_mode": dispatch_mode,
+                "safe_mode": bool(safe_mode),
+                "ready_for_handoff": ready_for_handoff,
+                "dispatch_job_ids": dispatch_job_ids,
+                "blocked_job_ids": blocked_job_ids,
+                "unavailable_job_ids": unavailable_job_ids,
+                "dispatch_job_count": dispatch_job_count,
+                "blocked_job_count": blocked_job_count,
+                "unavailable_job_count": unavailable_job_count,
+                "primary_dispatch_job_id": primary_dispatch_job_id,
+                "primary_blocker_reason": primary_blocker_reason,
+                "blocker_reasons": blocker_reasons,
+                "validator_job_types": dispatch_validator_job_types,
+                "check_types": dispatch_check_types,
+                "compare_modes": dispatch_compare_modes,
+                "mutation_strategies": dispatch_mutation_strategies,
+                "execution_lanes": dispatch_execution_lanes,
+                "requires_baseline": requires_baseline,
+                "baseline_ready": baseline_ready,
+                "cookie_path_present": cookie_path_present,
+                "headers_present": headers_present,
+                "timeout_present": timeout_present,
+                "replay_target_available": replay_target_available,
+                "handoff_package": handoff_package,
+            }
+        )
+
+    total = len(handoff_items)
+    ready_total = sum(1 for item in handoff_items if bool(item.get("ready_for_handoff")))
+    dispatch_jobs_total = sum(_safe_int(item.get("dispatch_job_count"), 0) for item in handoff_items)
+    blocked_jobs_total = sum(_safe_int(item.get("blocked_job_count"), 0) for item in handoff_items)
+    unavailable_jobs_total = sum(_safe_int(item.get("unavailable_job_count"), 0) for item in handoff_items)
+    methods_present = sorted({_clean_str(item.get("method")) for item in handoff_items if _clean_str(item.get("method"))})
+    target_sources_present = sorted(
+        {_clean_str(item.get("target_source")) for item in handoff_items if _clean_str(item.get("target_source"))}
+    )
+    validator_job_types_present = sorted(
+        {
+            _clean_str(value)
+            for item in handoff_items
+            for value in (item.get("validator_job_types") or [])
+            if _clean_str(value)
+        }
+    )
+    check_types_present = sorted(
+        {
+            _clean_str(value)
+            for item in handoff_items
+            for value in (item.get("check_types") or [])
+            if _clean_str(value)
+        }
+    )
+    compare_modes_present = sorted(
+        {
+            _clean_str(value)
+            for item in handoff_items
+            for value in (item.get("compare_modes") or [])
+            if _clean_str(value)
+        }
+    )
+    mutation_strategies_present = sorted(
+        {
+            _clean_str(value)
+            for item in handoff_items
+            for value in (item.get("mutation_strategies") or [])
+            if _clean_str(value)
+        }
+    )
+    execution_lanes_present = sorted(
+        {
+            _clean_str(value)
+            for item in handoff_items
+            for value in (item.get("execution_lanes") or [])
+            if _clean_str(value)
+        }
+    )
+
+    primary_blocker_reasons_present = sorted(
+        {
+            _clean_str(item.get("primary_blocker_reason"))
+            for item in handoff_items
+            if _clean_str(item.get("primary_blocker_reason")) in _BLOCKER_REASON_ORDER
+        },
+        key=lambda reason: _BLOCKER_REASON_ORDER.index(reason),
+    )
+    payload["all"] = handoff_items
+    payload["summary"] = {
+        "total": total,
+        "ready_total": ready_total,
+        "not_ready_total": max(total - ready_total, 0),
+        "mixed_total": sum(1 for item in handoff_items if _clean_str(item.get("dispatch_mode")) == _QUEUE_DISPATCH_MIXED),
+        "ready_only_total": sum(
+            1 for item in handoff_items if _clean_str(item.get("dispatch_mode")) == _QUEUE_DISPATCH_READY_ONLY
+        ),
+        "blocked_only_total": sum(
+            1 for item in handoff_items if _clean_str(item.get("dispatch_mode")) == _QUEUE_DISPATCH_BLOCKED_ONLY
+        ),
+        "unavailable_only_total": sum(
+            1 for item in handoff_items if _clean_str(item.get("dispatch_mode")) == _QUEUE_DISPATCH_UNAVAILABLE_ONLY
+        ),
+        "empty_total": sum(1 for item in handoff_items if _clean_str(item.get("dispatch_mode")) == _QUEUE_DISPATCH_EMPTY),
+        "dispatch_jobs_total": dispatch_jobs_total,
+        "blocked_jobs_total": blocked_jobs_total,
+        "unavailable_jobs_total": unavailable_jobs_total,
+        "unique_targets": len({_clean_str(item.get("target_url")) for item in handoff_items if _clean_str(item.get("target_url"))}),
+        "target_sources_present": target_sources_present,
+        "methods_present": methods_present,
+        "validator_job_types_present": validator_job_types_present,
+        "check_types_present": check_types_present,
+        "compare_modes_present": compare_modes_present,
+        "mutation_strategies_present": mutation_strategies_present,
+        "execution_lanes_present": execution_lanes_present,
+        "handoff_with_blockers": sum(1 for item in handoff_items if bool(item.get("blocker_reasons"))),
+        "handoff_with_baseline_requirements": sum(1 for item in handoff_items if bool(item.get("requires_baseline"))),
+        "handoff_baseline_ready_total": sum(1 for item in handoff_items if bool(item.get("baseline_ready"))),
+        "handoff_with_cookie_path": sum(1 for item in handoff_items if bool(item.get("cookie_path_present"))),
+        "handoff_with_headers": sum(1 for item in handoff_items if bool(item.get("headers_present"))),
+        "handoff_with_timeout": sum(1 for item in handoff_items if bool(item.get("timeout_present"))),
+        "handoff_with_replay_target": sum(1 for item in handoff_items if bool(item.get("replay_target_available"))),
+        "primary_blocker_reasons_present": primary_blocker_reasons_present,
+        "avg_dispatch_jobs_per_handoff": _round_metric((dispatch_jobs_total / total) if total else 0.0),
+        "ready_ratio": _round_metric((ready_total / total) if total else 0.0),
+        "baseline_ready_ratio": _round_metric(
+            (
+                sum(1 for item in handoff_items if bool(item.get("baseline_ready")))
+                / total
+            )
+            if total
+            else 0.0
+        ),
+    }
+    return payload
+
+
 def get_validator_queue_dispatch_fixture(case_name: str) -> list[dict[str, Any]]:
     case = _clean_str(case_name).lower()
     target_url = "https://fixture.local/path"
@@ -1137,6 +1503,36 @@ def _self_check_validator_queue_blocker_diagnostics_cases() -> dict[str, Any]:
             "blocker_reasons": list(queue_item.get("blocker_reasons") or []),
             "primary_blocker_reason": _clean_str(queue_item.get("primary_blocker_reason")),
             "has_blocker_reasons": bool(queue_item.get("has_blocker_reasons")),
+        }
+    return out
+
+
+def _self_check_validator_handoff_cases() -> dict[str, Any]:
+    cases = [
+        _QUEUE_DISPATCH_READY_ONLY,
+        _QUEUE_DISPATCH_BLOCKED_ONLY,
+        _QUEUE_DISPATCH_UNAVAILABLE_ONLY,
+        "mixed_param_target",
+        _QUEUE_DISPATCH_EMPTY,
+    ]
+    out: dict[str, Any] = {}
+    for case_name in cases:
+        synthetic_plan = build_synthetic_validator_queue_case(case_name)
+        queue_payload = build_validator_queue(synthetic_plan)
+        handoff_payload = build_validator_handoff(queue_payload, synthetic_plan)
+        handoff_item = ((handoff_payload.get("all") or [None])[0]) or {}
+        summary = handoff_payload.get("summary") or {}
+        out[case_name] = {
+            "total": _safe_int(summary.get("total"), 0),
+            "ready_total": _safe_int(summary.get("ready_total"), 0),
+            "dispatch_mode": _clean_str(handoff_item.get("dispatch_mode")) or _QUEUE_DISPATCH_EMPTY,
+            "ready_for_handoff": bool(handoff_item.get("ready_for_handoff")),
+            "dispatch_job_count": _safe_int(handoff_item.get("dispatch_job_count"), 0),
+            "blocked_job_count": _safe_int(handoff_item.get("blocked_job_count"), 0),
+            "unavailable_job_count": _safe_int(handoff_item.get("unavailable_job_count"), 0),
+            "blocker_reasons": list(handoff_item.get("blocker_reasons") or []),
+            "ready_ratio": _round_metric(summary.get("ready_ratio") or 0.0),
+            "avg_dispatch_jobs_per_handoff": _round_metric(summary.get("avg_dispatch_jobs_per_handoff") or 0.0),
         }
     return out
 

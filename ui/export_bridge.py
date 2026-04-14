@@ -358,6 +358,7 @@ def task_to_record(task_or_payload: Any) -> dict[str, Any]:
     record.update(derive_replay_manifest_summary_fields(result))
     record.update(derive_validation_plan_summary_fields(result))
     record.update(derive_validator_queue_summary_fields(result))
+    record.update(derive_validator_handoff_summary_fields(result))
     record.update(derive_request_recipe_summary_fields(result))
     record.update(derive_response_snapshot_summary_fields(result))
 
@@ -1078,6 +1079,87 @@ def derive_validator_queue_summary_fields(result: Any) -> dict[str, Any]:
     }
 
 
+def derive_validator_handoff_summary_fields(result: Any) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "validator_handoff_total": 0,
+        "validator_handoff_ready_total": 0,
+        "validator_handoff_not_ready_total": 0,
+        "validator_handoff_mixed_total": 0,
+        "validator_handoff_ready_only_total": 0,
+        "validator_handoff_blocked_only_total": 0,
+        "validator_handoff_unavailable_only_total": 0,
+        "validator_handoff_empty_total": 0,
+        "validator_handoff_dispatch_jobs_total": 0,
+        "validator_handoff_blocked_jobs_total": 0,
+        "validator_handoff_unavailable_jobs_total": 0,
+        "validator_handoff_unique_targets": 0,
+        "validator_handoff_target_sources_present": "",
+        "validator_handoff_methods_present": "",
+        "validator_handoff_validator_job_types_present": "",
+        "validator_handoff_check_types_present": "",
+        "validator_handoff_compare_modes_present": "",
+        "validator_handoff_mutation_strategies_present": "",
+        "validator_handoff_execution_lanes_present": "",
+        "validator_handoff_handoff_with_blockers": 0,
+        "validator_handoff_handoff_with_baseline_requirements": 0,
+        "validator_handoff_handoff_baseline_ready_total": 0,
+        "validator_handoff_handoff_with_cookie_path": 0,
+        "validator_handoff_handoff_with_headers": 0,
+        "validator_handoff_handoff_with_timeout": 0,
+        "validator_handoff_handoff_with_replay_target": 0,
+        "validator_handoff_primary_blocker_reasons_present": "",
+        "validator_handoff_avg_dispatch_jobs_per_handoff": 0.0,
+        "validator_handoff_ready_ratio": 0.0,
+        "validator_handoff_baseline_ready_ratio": 0.0,
+    }
+    if not isinstance(result, Mapping):
+        return defaults
+    validator_handoff = result.get("validator_handoff")
+    if not isinstance(validator_handoff, Mapping):
+        return defaults
+    summary = validator_handoff.get("summary")
+    if not isinstance(summary, Mapping):
+        return defaults
+    return {
+        "validator_handoff_total": _to_int_count(summary.get("total"), 0),
+        "validator_handoff_ready_total": _to_int_count(summary.get("ready_total"), 0),
+        "validator_handoff_not_ready_total": _to_int_count(summary.get("not_ready_total"), 0),
+        "validator_handoff_mixed_total": _to_int_count(summary.get("mixed_total"), 0),
+        "validator_handoff_ready_only_total": _to_int_count(summary.get("ready_only_total"), 0),
+        "validator_handoff_blocked_only_total": _to_int_count(summary.get("blocked_only_total"), 0),
+        "validator_handoff_unavailable_only_total": _to_int_count(summary.get("unavailable_only_total"), 0),
+        "validator_handoff_empty_total": _to_int_count(summary.get("empty_total"), 0),
+        "validator_handoff_dispatch_jobs_total": _to_int_count(summary.get("dispatch_jobs_total"), 0),
+        "validator_handoff_blocked_jobs_total": _to_int_count(summary.get("blocked_jobs_total"), 0),
+        "validator_handoff_unavailable_jobs_total": _to_int_count(summary.get("unavailable_jobs_total"), 0),
+        "validator_handoff_unique_targets": _to_int_count(summary.get("unique_targets"), 0),
+        "validator_handoff_target_sources_present": _join_string_list(summary.get("target_sources_present")),
+        "validator_handoff_methods_present": _join_string_list(summary.get("methods_present")),
+        "validator_handoff_validator_job_types_present": _join_string_list(summary.get("validator_job_types_present")),
+        "validator_handoff_check_types_present": _join_string_list(summary.get("check_types_present")),
+        "validator_handoff_compare_modes_present": _join_string_list(summary.get("compare_modes_present")),
+        "validator_handoff_mutation_strategies_present": _join_string_list(summary.get("mutation_strategies_present")),
+        "validator_handoff_execution_lanes_present": _join_string_list(summary.get("execution_lanes_present")),
+        "validator_handoff_handoff_with_blockers": _to_int_count(summary.get("handoff_with_blockers"), 0),
+        "validator_handoff_handoff_with_baseline_requirements": _to_int_count(
+            summary.get("handoff_with_baseline_requirements"), 0
+        ),
+        "validator_handoff_handoff_baseline_ready_total": _to_int_count(
+            summary.get("handoff_baseline_ready_total"), 0
+        ),
+        "validator_handoff_handoff_with_cookie_path": _to_int_count(summary.get("handoff_with_cookie_path"), 0),
+        "validator_handoff_handoff_with_headers": _to_int_count(summary.get("handoff_with_headers"), 0),
+        "validator_handoff_handoff_with_timeout": _to_int_count(summary.get("handoff_with_timeout"), 0),
+        "validator_handoff_handoff_with_replay_target": _to_int_count(summary.get("handoff_with_replay_target"), 0),
+        "validator_handoff_primary_blocker_reasons_present": _join_string_list(
+            summary.get("primary_blocker_reasons_present")
+        ),
+        "validator_handoff_avg_dispatch_jobs_per_handoff": float(summary.get("avg_dispatch_jobs_per_handoff") or 0.0),
+        "validator_handoff_ready_ratio": float(summary.get("ready_ratio") or 0.0),
+        "validator_handoff_baseline_ready_ratio": float(summary.get("baseline_ready_ratio") or 0.0),
+    }
+
+
 def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") -> str:
     """
     Единая точка экспорта. Поддержка форматов: csv/json/xlsx
@@ -1400,6 +1482,7 @@ def normalize_preview_rows(records: Iterable[Mapping[str, Any]]) -> list[dict[st
         row.update(derive_replay_manifest_summary_fields(rec))
         row.update(derive_validation_plan_summary_fields(rec))
         row.update(derive_validator_queue_summary_fields(rec))
+        row.update(derive_validator_handoff_summary_fields(rec))
         row.update(derive_request_recipe_summary_fields(rec))
         row.update(derive_response_snapshot_summary_fields(rec))
 
