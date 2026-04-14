@@ -1848,6 +1848,8 @@ def build_validation_plan(
     del candidates
 
     payload = _empty_contract()
+    payload["replay_manifest"] = replay_manifest if isinstance(replay_manifest, Mapping) else {}
+    payload["request_recipe"] = request_recipe if isinstance(request_recipe, Mapping) else {}
     manifest_items = replay_manifest.get("all") if isinstance(replay_manifest, Mapping) else None
     if not isinstance(manifest_items, list):
         return payload
