@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -224,13 +225,29 @@ class ResultsViewerDialog(QDialog):
         self.viewer.setTextCursor(cursor)
         self.viewer.centerCursor()
 
-        selection = QPlainTextEdit.ExtraSelection()
-        selection.cursor = cursor
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#F8D66D"))
-        fmt.setForeground(QColor("#000000"))
-        selection.format = fmt
-        self.viewer.setExtraSelections([selection])
+        current_selection = QTextEdit.ExtraSelection()
+        current_selection.cursor = cursor
+        current_fmt = QTextCharFormat()
+        current_fmt.setBackground(QColor("#F4D35E"))
+        current_fmt.setForeground(QColor("#111111"))
+        current_selection.format = current_fmt
+
+        selections = [current_selection]
+        for pos in self._search_matches:
+            if pos == start:
+                continue
+            secondary_cursor = self.viewer.textCursor()
+            secondary_cursor.setPosition(pos)
+            secondary_cursor.setPosition(pos + len(query), QTextCursor.KeepAnchor)
+            secondary_selection = QTextEdit.ExtraSelection()
+            secondary_selection.cursor = secondary_cursor
+            secondary_fmt = QTextCharFormat()
+            secondary_fmt.setBackground(QColor("#B58E00"))
+            secondary_fmt.setForeground(QColor("#F5F5F5"))
+            secondary_selection.format = secondary_fmt
+            selections.append(secondary_selection)
+
+        self.viewer.setExtraSelections(selections)
         self._update_search_counter()
 
     def _update_search_counter(self):
