@@ -13,6 +13,7 @@ _ENDPOINT_CATEGORY_ORDER: tuple[str, ...] = (
     "login",
     "auth",
     "admin",
+    "upload",
     "php",
     "xhr_hint",
     "route",
@@ -26,11 +27,19 @@ _JS_ABSOLUTE_RE = re.compile(r"https?://[^\s'\"<>]{3,1024}", re.IGNORECASE)
 _JS_RELATIVE_RE = re.compile(r"(?<![\w:])(?:/|\.\.?/)[^\s'\"<>]{1,512}")
 _JS_FETCH_CALL_RE = re.compile(r"\bfetch\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
 _JS_AXIOS_CALL_RE = re.compile(r"\baxios(?:\.[a-z]+)?\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
+_JS_XHR_OPEN_RE = re.compile(
+    r"\b(?:xhr|xmlhttprequest\s*\(\s*\)?)\s*\.\s*open\s*\(\s*(['\"])(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)?\1\s*,\s*(['\"])([^'\"\n]{1,512})\2",
+    re.IGNORECASE,
+)
+_JS_QUOTED_ENDPOINT_HINT_RE = re.compile(
+    r"(['\"])((?:[a-z0-9_.-]+/){1,6}[a-z0-9_.-]{1,64}(?:\?[^'\"\n]{1,128})?)\1",
+    re.IGNORECASE,
+)
 _PROTOCOL_RELATIVE_URL_RE = re.compile(r"^//(?P<host>[a-z0-9][a-z0-9.-]*|\[[0-9a-f:.]+\])(?::\d{2,5})?(?:/|$)", re.IGNORECASE)
 _HOST_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 _ROUTE_EXTENSION_HINTS = (".php", ".json", ".js", ".map", ".txt", ".xml", ".graphql", ".api")
 _ROUTE_SIGNAL_HINTS = ("api", "auth", "admin", "login", "upload", "graphql", "file", "path")
-_ASSET_FILE_EXTENSIONS = (".js", ".mjs", ".cjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".map", ".webp")
+_ASSET_FILE_EXTENSIONS = (".js", ".mjs", ".cjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".map", ".webp", ".webmanifest")
 _ASSET_SEGMENT_HINTS = ("assets", "asset", "static", "images", "image", "img", "fonts", "font", "vendor", "dist", "build", "chunks")
 _ASSET_UTILITY_HINTS = (
     "googletagmanager",
@@ -732,6 +741,7 @@ def _collect_category_signals(value: str, normalized_value: str, path: str, host
     login = any(token in haystack for token in ("/login", "signin", "sign-in", "logout", "log-in", "/logon", "/signout", "sign-out"))
     auth = any(token in haystack for token in ("/auth", "register", "signup", "sign-up", "session", "reset", "password", "oauth", "token"))
     admin = any(token in haystack for token in ("/admin", "/backend", "dashboard", "controlpanel", "cpanel", "/root"))
+    upload = any(token in haystack for token in ("/upload", "upload", "multipart", "formdata", "file/upload", "attachment"))
     php = ".php" in (lowered_path or lowered_normalized or lowered_value)
     xhr = any(token in haystack for token in ("fetch", "axios", "xmlhttprequest"))
     return {
@@ -740,9 +750,55 @@ def _collect_category_signals(value: str, normalized_value: str, path: str, host
         "login": login,
         "auth": auth,
         "admin": admin,
+        "upload": upload,
         "php": php,
         "xhr_hint": xhr,
     }
+
+
+def _normalize_endpoint_category(category: str, is_absolute: bool, is_relative: bool) -> str:
+    normalized = str(category or "").strip().lower()
+    if normalized in {"graphql", "api", "auth", "admin", "upload", "absolute_url", "relative_url", "route", "unknown"}:
+        return normalized
+    if normalized in {"login"}:
+        return "auth"
+    if is_absolute:
+        return "absolute_url"
+    if is_relative:
+        return "relative_url"
+    return "unknown"
+
+
+def _derive_transport_hint(evidence: str, source_kind: str) -> str:
+    token = f"{str(evidence or '').lower()} {str(source_kind or '').lower()}"
+    if "fetch" in token:
+        return "fetch"
+    if "axios" in token:
+        return "axios"
+    if "xhr" in token or "xmlhttprequest" in token:
+        return "xhr"
+    if "literal" in token:
+        return "string_literal"
+    return "unknown"
+
+
+def _derive_endpoint_confidence(endpoint_category: str, signals: dict[str, bool], transport_hint: str, evidence: str) -> str:
+    if endpoint_category in {"graphql", "api", "auth", "admin", "upload"} and transport_hint in {"fetch", "axios", "xhr"}:
+        return "high"
+    if endpoint_category in {"graphql", "api", "auth", "admin", "upload"}:
+        return "medium"
+    if endpoint_category in {"absolute_url", "relative_url", "route"} and transport_hint in {"fetch", "axios", "xhr"}:
+        return "medium"
+    if "quoted_route_literal" in str(evidence or "").lower() and not any(signals.get(k) for k in ("api", "graphql", "auth", "admin", "upload")):
+        return "low"
+    return "low"
+
+
+def _build_endpoint_reason(endpoint_category: str, transport_hint: str, evidence: str) -> str:
+    category = endpoint_category or "unknown"
+    hint = transport_hint or "unknown"
+    ev = str(evidence or "passive_js_pattern")
+    return f"{hint}:{category}:{ev}"
 
 
 def _classify_path_category(value: str, normalized_value: str, path: str) -> str:
@@ -776,6 +832,8 @@ def _classify_endpoint_candidate(value: str, normalized_value: str, path: str, h
             return "auth"
         if signals["admin"]:
             return "admin"
+        if signals["upload"]:
+            return "upload"
         if signals["php"]:
             return "php"
     if signals["xhr_hint"]:
@@ -896,23 +954,38 @@ def _build_endpoint_candidate(
     host = (parsed.hostname or parsed.netloc or "").lower() if parsed else ""
     path = parsed.path or ""
     category = _classify_endpoint_candidate(value, normalized_value, path, host, evidence, source_kind, force_category=force_category)
+    signals = _collect_category_signals(value, normalized_value, path, host, evidence, source_kind)
+    endpoint_category = _normalize_endpoint_category(category, is_absolute=is_absolute, is_relative=is_relative)
+    transport_hint = _derive_transport_hint(evidence, source_kind)
     internal_hint = bool(base_host and host and host == base_host)
     external_hint = bool(host and base_host and host != base_host)
     dedupe_key = f"{normalized_value}|{category}"
-    confidence = "medium" if category in {"api", "graphql", "auth", "login", "admin", "php", "absolute_url", "relative_url", "xhr_hint"} else "low"
+    confidence = _derive_endpoint_confidence(endpoint_category, signals, transport_hint, evidence)
+    matched_signals = sorted(signal for signal in ("api", "graphql", "auth", "login", "admin", "upload", "php") if signals.get(signal))
+    evidence_sources = sorted({str(source_kind or ""), str(evidence or "passive_js_pattern")})
     return {
         "value": value,
         "normalized_value": normalized_value,
         "source_kind": str(source_kind or "other existing passive source"),
         "source_ref": str(source_ref or ""),
         "category": category,
+        "endpoint_category": endpoint_category,
+        "transport_hint": transport_hint,
         "is_absolute": is_absolute,
         "is_relative": is_relative,
         "host": host,
         "path": path,
         "internal_hint": internal_hint,
         "external_hint": external_hint,
+        "api_like": bool(signals.get("api")),
+        "auth_like": bool(signals.get("auth") or signals.get("login")),
+        "admin_like": bool(signals.get("admin")),
+        "upload_like": bool(signals.get("upload")),
+        "graphql_like": bool(signals.get("graphql")),
+        "matched_signals": matched_signals,
         "evidence": str(evidence or "passive_js_pattern"),
+        "evidence_sources": evidence_sources,
+        "reason": _build_endpoint_reason(endpoint_category, transport_hint, evidence),
         "confidence": confidence,
         "dedupe_key": dedupe_key,
     }
@@ -955,23 +1028,20 @@ def _collect_endpoint_candidates(
         if not text.strip():
             continue
         source_ref = inline_sha1 or source_page_url or f"inline_script_{idx}"
-        _put(_build_endpoint_candidate("fetch(...)", "inline_js", source_ref, base_host, "fetch_call_hint", force_category="xhr_hint") if re.search(r"\bfetch\s*\(", text, re.IGNORECASE) else None)
-        _put(_build_endpoint_candidate("axios(...)", "inline_js", source_ref, base_host, "axios_call_hint", force_category="xhr_hint") if re.search(r"\baxios(?:\.[a-z]+)?\s*\(", text, re.IGNORECASE) else None)
-        _put(
-            _build_endpoint_candidate("XMLHttpRequest", "inline_js", source_ref, base_host, "xmlhttprequest_hint", force_category="xhr_hint")
-            if re.search(r"\bXMLHttpRequest\b", text)
-            else None
-        )
         for match in _JS_FETCH_CALL_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "fetch_argument"))
         for match in _JS_AXIOS_CALL_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "axios_argument"))
+        for match in _JS_XHR_OPEN_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(3), "inline_js", source_ref, base_host, "xhr_open_argument"))
         for match in _JS_ABSOLUTE_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(0), "inline_js", source_ref, base_host, "absolute_url_literal", force_category="absolute_url"))
         for match in _JS_RELATIVE_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(0), "inline_js", source_ref, base_host, "relative_path_literal", force_category="relative_url"))
         for match in _JS_ROUTE_QUOTED_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "quoted_route_literal"))
+        for match in _JS_QUOTED_ENDPOINT_HINT_RE.finditer(text):
+            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "quoted_endpoint_hint"))
 
     endpoint_candidates = sorted(candidates_by_key.values(), key=_candidate_sort_key)
     summary = _empty_endpoint_candidate_summary()
