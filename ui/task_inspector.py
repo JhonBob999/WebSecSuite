@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from PySide6.QtCore import Qt
+import json
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
@@ -14,6 +17,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from dialogs.inspector_detail_dialog import InspectorDetailDialog
+
+
+class InspectorValueLabel(QLabel):
+    double_clicked = Signal()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        self.double_clicked.emit()
+        super().mouseDoubleClickEvent(event)
 
 
 class TaskInspectorPanel(QWidget):
@@ -23,7 +35,8 @@ class TaskInspectorPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._fields: dict[str, QLabel] = {}
+        self._fields: dict[str, InspectorValueLabel] = {}
+        self._detail_payloads: dict[str, dict[str, str]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -125,10 +138,11 @@ class TaskInspectorPanel(QWidget):
         form.setVerticalSpacing(6)
 
         for key, label_text in fields:
-            value = QLabel(self.DASH, box)
+            value = InspectorValueLabel(self.DASH, box)
             value.setTextInteractionFlags(Qt.TextSelectableByMouse)
             value.setWordWrap(True)
             value.setStyleSheet("color: #d6dbe0;")
+            value.double_clicked.connect(lambda _checked=False, field_key=key: self._open_detail_for_field(field_key))
             form.addRow(label_text + ":", value)
             self._fields[key] = value
 
@@ -161,8 +175,11 @@ class TaskInspectorPanel(QWidget):
     def clear(self, message: str = "No task selected") -> None:
         self.empty_label.setText(message)
         self.empty_label.show()
+        self._detail_payloads.clear()
         for label in self._fields.values():
             label.setText(self.DASH)
+            label.setStyleSheet("color: #d6dbe0;")
+            label.setCursor(QCursor(Qt.IBeamCursor))
 
     def update_from_payload(
         self,
@@ -179,6 +196,7 @@ class TaskInspectorPanel(QWidget):
             return
 
         self.empty_label.hide()
+        self._detail_payloads.clear()
 
         timings = self._as_map(data.get("timings"))
         discovery = self._as_map(data.get("discovery"))
@@ -330,6 +348,46 @@ class TaskInspectorPanel(QWidget):
         self._set("cand_max_conf", self._first_non_empty(candidates_summary.get("max_confidence"), default=self.DASH))
         self._set("cand_types", types_present_text)
 
+        self._set_detail("nav_redirects", "Redirect chain", data.get("redirect_chain"))
+        self._set_detail(
+            "nav_cookies",
+            "Cookie details",
+            {
+                "cookie_path": request_recipe.get("cookie_path") or cookie_path,
+                "request_recipe_cookies": request_recipe.get("cookies"),
+                "cookies": data.get("cookies"),
+                "set_cookie": headers.get("set-cookie") or headers.get("Set-Cookie"),
+            },
+        )
+        self._set_detail("discovery_internal", "Internal URLs", discovery_urls.get("internal"))
+        self._set_detail("discovery_external", "External URLs", discovery_urls.get("external"))
+        self._set_detail("discovery_query_params", "Query params", discovery.get("query_params"))
+        self._set_detail("discovery_forms", "Forms", data.get("forms"))
+        self._set_detail("fp_top_stack", "Top stack", top_stack_val)
+        self._set_detail(
+            "js_sources_total",
+            "JS sources",
+            {
+                "external": js_recon.get("external"),
+                "inline": js_recon.get("inline"),
+                "sources": js_recon.get("sources"),
+            },
+        )
+        self._set_detail("js_endpoint_candidates", "JS endpoint candidates", js_recon.get("endpoint_candidates"))
+        self._set_detail("js_secret_hints", "JS secret hints", secret_hints.get("all"))
+        self._set_detail("js_linkage", "JS endpoint linkage", endpoint_linkage)
+        self._set_detail(
+            "js_grouped_sources",
+            "JS grouped sources",
+            js_summary.get("endpoint_linkage_grouped_sources") or js_summary.get("grouped_sources"),
+        )
+        self._set_detail("cand_total", "Candidates", data.get("candidates"))
+        self._set_detail("cand_xss", "XSS candidates", self._filter_candidates(data.get("candidates"), "xss"))
+        self._set_detail("cand_sqli", "SQLi candidates", self._filter_candidates(data.get("candidates"), "sqli"))
+        self._set_detail("cand_lfi", "LFI candidates", self._filter_candidates(data.get("candidates"), "lfi"))
+        self._set_detail("cand_ssrf", "SSRF candidates", self._filter_candidates(data.get("candidates"), "ssrf"))
+        self._set_detail("cand_types", "Candidate types", types_present)
+
     def _set(self, key: str, value: Any) -> None:
         label = self._fields.get(key)
         if label is None:
@@ -339,3 +397,64 @@ class TaskInspectorPanel(QWidget):
             return
         text = str(value).strip()
         label.setText(text if text else self.DASH)
+
+    @staticmethod
+    def _has_detail_payload(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, Mapping):
+            return any(TaskInspectorPanel._has_detail_payload(v) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return any(TaskInspectorPanel._has_detail_payload(v) for v in value)
+        return True
+
+    @staticmethod
+    def _format_detail(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, tuple, set)):
+            if all(not isinstance(item, (dict, list, tuple, set)) for item in value):
+                return "\n".join(str(item) for item in value)
+            return json.dumps(list(value), ensure_ascii=False, indent=2)
+        if isinstance(value, Mapping):
+            return json.dumps(dict(value), ensure_ascii=False, indent=2)
+        return str(value)
+
+    @staticmethod
+    def _filter_candidates(candidates: Any, keyword: str) -> list[Any]:
+        if not isinstance(candidates, list):
+            return []
+        filtered: list[Any] = []
+        keyword_lower = keyword.lower()
+        for item in candidates:
+            if not isinstance(item, Mapping):
+                continue
+            item_type = str(item.get("type") or item.get("category") or "").lower()
+            if keyword_lower in item_type:
+                filtered.append(item)
+        return filtered
+
+    def _set_detail(self, key: str, title: str, data: Any) -> None:
+        label = self._fields.get(key)
+        if label is None:
+            return
+        if not self._has_detail_payload(data):
+            label.setStyleSheet("color: #d6dbe0;")
+            label.setCursor(QCursor(Qt.IBeamCursor))
+            return
+
+        self._detail_payloads[key] = {"title": title, "body": self._format_detail(data)}
+        label.setStyleSheet("color: #9ecbff; text-decoration: underline;")
+        label.setCursor(QCursor(Qt.PointingHandCursor))
+
+    def _open_detail_for_field(self, field_key: str) -> None:
+        detail = self._detail_payloads.get(field_key)
+        if not detail:
+            return
+        body = detail.get("body", "").strip()
+        if not body:
+            return
+        dialog = InspectorDetailDialog(detail.get("title", "Inspector detail"), body, self)
+        dialog.exec()

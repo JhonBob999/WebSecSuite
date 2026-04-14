@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QSizePolicy,
     QHeaderView,
+    QPushButton,
 )
 from ui.constants import Col, TaskStatus
 from ui.task_inspector import TaskInspectorPanel
@@ -98,6 +99,8 @@ class ScraperTabController(QWidget):
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
         self._apply_responsive_main_layout()
+        self._inspector_visible = True
+        self._inspector_last_sizes = [760, 340]
 
         # Подключение настроек таблиц
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
@@ -237,6 +240,11 @@ class ScraperTabController(QWidget):
         ):
             btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             actions_row.addWidget(btn)
+        self.btnInspectorToggle = QPushButton("Hide Inspector", left_panel)
+        self.btnInspectorToggle.setToolTip("Скрыть или показать Task Inspector")
+        self.btnInspectorToggle.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btnInspectorToggle.clicked.connect(self._toggle_task_inspector)
+        actions_row.addWidget(self.btnInspectorToggle)
         actions_row.addStretch(1)
         left_layout.addLayout(actions_row)
 
@@ -255,8 +263,9 @@ class ScraperTabController(QWidget):
         left_layout.addWidget(self.task_inspector_splitter, 1)
 
         right_panel = QWidget(splitter)
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(10, 2, 4, 0)
+        right_layout.setContentsMargins(6, 2, 6, 0)
         right_layout.setSpacing(6)
 
         header_row = QHBoxLayout()
@@ -270,6 +279,9 @@ class ScraperTabController(QWidget):
         find_row = QHBoxLayout()
         find_row.setContentsMargins(0, 0, 0, 0)
         find_row.setSpacing(6)
+        self.ui.lineEditLogFilter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.ui.lineEditLogFilter.setMinimumWidth(260)
+        self.ui.lineEditLogFilter.setMaximumWidth(16777215)
         find_row.addWidget(self.ui.lineEditLogFilter, 1)
         find_row.addWidget(self.ui.btnFindPrev)
         find_row.addWidget(self.ui.btnFindNext)
@@ -283,6 +295,8 @@ class ScraperTabController(QWidget):
 
         right_layout.addWidget(self.ui.lbl_logs)
         self.ui.logOutput.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ui.logOutput.setMinimumWidth(0)
+        self.ui.logOutput.setMaximumWidth(16777215)
         right_layout.addWidget(self.ui.logOutput, 1)
 
         splitter.addWidget(left_panel)
@@ -484,6 +498,27 @@ class ScraperTabController(QWidget):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
 
     def _on_task_current_cell_changed(self, *_args):
+        self._refresh_task_inspector_for_current()
+
+    def _toggle_task_inspector(self) -> None:
+        if not hasattr(self, "task_inspector_splitter") or not hasattr(self, "task_inspector"):
+            return
+
+        if self._inspector_visible:
+            sizes = self.task_inspector_splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._inspector_last_sizes = sizes
+            self.task_inspector.hide()
+            self.task_inspector_splitter.setSizes([1, 0])
+            self.btnInspectorToggle.setText("Show Inspector")
+            self._inspector_visible = False
+            return
+
+        self.task_inspector.show()
+        restore_sizes = self._inspector_last_sizes if len(self._inspector_last_sizes) >= 2 else [760, 340]
+        self.task_inspector_splitter.setSizes(restore_sizes)
+        self.btnInspectorToggle.setText("Hide Inspector")
+        self._inspector_visible = True
         self._refresh_task_inspector_for_current()
 
     def _on_task_selection_changed(self):
