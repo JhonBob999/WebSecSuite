@@ -154,13 +154,18 @@ class DataPreviewDialog(QDialog):
         t = self.ui.tablePreview
         header = t.horizontalHeader()
 
-        wide_stretch = {"url", "final_url", "title"}
+        preferred_width = {
+            "url": 360,
+            "final_url": 420,
+            "title": 280,
+        }
         tight_cols = {"status_code", "redirects", "request_ms", "content_len"}
         fixed_width = {"task_id": 170}
 
         for idx, col in enumerate(columns):
-            if col in wide_stretch:
-                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Stretch)
+            if col in preferred_width:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+                t.setColumnWidth(idx, preferred_width[col])
             elif col in tight_cols:
                 header.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
             elif col in fixed_width:
