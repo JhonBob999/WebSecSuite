@@ -138,7 +138,7 @@ _PLACEHOLDER_SECRET_VALUES = {
 }
 
 
-def _empty_endpoint_candidate_summary() -> dict[str, int]:
+def _empty_endpoint_candidate_summary() -> dict[str, Any]:
     return {
         "endpoint_candidates_total": 0,
         "endpoint_candidates_unique": 0,
@@ -147,11 +147,23 @@ def _empty_endpoint_candidate_summary() -> dict[str, int]:
         "endpoint_candidates_auth_like": 0,
         "endpoint_candidates_login_like": 0,
         "endpoint_candidates_admin_like": 0,
+        "endpoint_candidates_upload_like": 0,
         "endpoint_candidates_php_like": 0,
         "endpoint_candidates_absolute": 0,
         "endpoint_candidates_relative": 0,
         "endpoint_candidates_internal_hint": 0,
         "endpoint_candidates_external_hint": 0,
+        "endpoint_candidates_low_confidence": 0,
+        "endpoint_candidates_medium_confidence": 0,
+        "endpoint_candidates_high_confidence": 0,
+        "endpoint_candidates_string_literal": 0,
+        "endpoint_candidates_fetch": 0,
+        "endpoint_candidates_axios": 0,
+        "endpoint_candidates_xhr": 0,
+        "confidences_present": [],
+        "categories_present": [],
+        "transport_hints_present": [],
+        "max_confidence": "",
     }
 
 
@@ -1114,23 +1126,41 @@ def _build_endpoint_candidate(
     }
 
 
-def _derive_endpoint_candidate_summary(endpoint_candidates: list[dict[str, Any]]) -> dict[str, int]:
+def _max_endpoint_confidence(confidences: list[str]) -> str:
+    confidence_order = ("low", "medium", "high")
+    ranked = [value for value in confidences if value in confidence_order]
+    if not ranked:
+        return ""
+    return max(ranked, key=confidence_order.index)
+
+
+def _derive_endpoint_candidate_summary(endpoint_candidates: list[dict[str, Any]]) -> dict[str, Any]:
     summary = _empty_endpoint_candidate_summary()
     summary["endpoint_candidates_total"] = len(endpoint_candidates)
-    summary["endpoint_candidates_unique"] = len(endpoint_candidates)
+    summary["endpoint_candidates_unique"] = len({_endpoint_candidate_identity(item) for item in endpoint_candidates})
+    categories: list[str] = []
+    confidences: list[str] = []
+    transport_hints: list[str] = []
     for item in endpoint_candidates:
         category = str(item.get("category") or "")
-        if category == "api":
+        confidence = str(item.get("confidence") or "").strip().lower()
+        transport_hint = str(item.get("transport_hint") or "").strip().lower()
+        categories.append(category)
+        confidences.append(confidence)
+        transport_hints.append(transport_hint)
+        if bool(item.get("api_like")):
             summary["endpoint_candidates_api_like"] += 1
-        if category == "graphql":
+        if bool(item.get("graphql_like")):
             summary["endpoint_candidates_graphql_like"] += 1
-        if category == "auth":
+        if bool(item.get("auth_like")):
             summary["endpoint_candidates_auth_like"] += 1
-        if category == "login":
+        if category == "login" or "login" in (item.get("matched_signals") or []):
             summary["endpoint_candidates_login_like"] += 1
-        if category == "admin":
+        if bool(item.get("admin_like")):
             summary["endpoint_candidates_admin_like"] += 1
-        if category == "php":
+        if bool(item.get("upload_like")):
+            summary["endpoint_candidates_upload_like"] += 1
+        if category == "php" or "php" in (item.get("matched_signals") or []):
             summary["endpoint_candidates_php_like"] += 1
         if bool(item.get("is_absolute")):
             summary["endpoint_candidates_absolute"] += 1
@@ -1140,6 +1170,14 @@ def _derive_endpoint_candidate_summary(endpoint_candidates: list[dict[str, Any]]
             summary["endpoint_candidates_internal_hint"] += 1
         if bool(item.get("external_hint")):
             summary["endpoint_candidates_external_hint"] += 1
+        if confidence in {"low", "medium", "high"}:
+            summary[f"endpoint_candidates_{confidence}_confidence"] += 1
+        if transport_hint in {"string_literal", "fetch", "axios", "xhr"}:
+            summary[f"endpoint_candidates_{transport_hint}"] += 1
+    summary["confidences_present"] = _stable_unique_sorted(confidences, order=("low", "medium", "high"))
+    summary["categories_present"] = _stable_unique_sorted(categories, order=_ENDPOINT_CATEGORY_ORDER)
+    summary["transport_hints_present"] = _stable_unique_sorted(transport_hints, order=("fetch", "axios", "xhr", "string_literal", "unknown"))
+    summary["max_confidence"] = _max_endpoint_confidence(confidences)
     return summary
 
 
@@ -1149,7 +1187,7 @@ def _collect_endpoint_candidates(
     source_page_url: str,
     external_scripts: list[dict[str, Any]],
     inline_raw_items: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     candidates_by_key: dict[str, dict[str, Any]] = {}
 
     def _put(candidate: dict[str, Any] | None) -> None:
