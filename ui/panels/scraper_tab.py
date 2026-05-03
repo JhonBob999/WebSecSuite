@@ -33,6 +33,7 @@ from ui import export_bridge as xb
 from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
+from dialogs.universal_viewer_dialog import UniversalViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
@@ -1571,7 +1572,12 @@ class ScraperTabController(QWidget):
     def _view_headers_dialog(self, row: int):
         payload = self._get_result_payload(row)
         hdrs = (payload or {}).get("headers") or {}
-        self._show_json_dialog("Response Headers", hdrs)
+        self._open_universal_viewer(
+            "Response Headers",
+            hdrs,
+            pretty_default_name="response_headers.json",
+            raw_default_name="response_headers.txt",
+        )
 
     def _view_redirect_chain_dialog(self, row: int):
         payload = self._get_result_payload(row)
@@ -1580,6 +1586,28 @@ class ScraperTabController(QWidget):
         self._show_json_dialog(title, chain)
 
     def _show_json_dialog(self, title: str, data):
+        return self._open_universal_viewer(title, data)
+
+    def _open_universal_viewer(
+        self,
+        title: str,
+        payload,
+        *,
+        save_dialog_title: str | None = None,
+        pretty_default_name: str = "viewer.json",
+        raw_default_name: str = "viewer.txt",
+    ):
+        dlg = UniversalViewerDialog(
+            payload=payload,
+            parent=self,
+            title=title,
+            save_dialog_title=save_dialog_title or f"Save {title}",
+            pretty_default_name=pretty_default_name,
+            raw_default_name=raw_default_name,
+        )
+        dlg.exec()
+
+    def _legacy_show_json_dialog(self, title: str, data):
         # 1) Нормализация -> pretty string
         pretty = ""
         try:
@@ -1767,25 +1795,21 @@ class ScraperTabController(QWidget):
         # ЕДИНЫЙ PRETTY-PRINT
         try:
             data = storage.jar_to_json(jar)
-            pretty = self._pretty_json(data)
         except Exception as e:
             self.log._log("WARN", f"jar_to_json failed: {e}", "UI")
-            pretty = "Could not serialize cookies."
+            data = "Could not serialize cookies."
 
         title = f"Cookies — {loaded} item(s)"
-        head = f"Path: {path}\nLoaded: {loaded}"
-
-        # Для больших наборов — в detailedText, чтобы не подвесить QMessageBox
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle(title)
-        dlg.setIcon(QMessageBox.Information)
-        dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        if len(pretty) > 4000:
-            dlg.setText(f"{title}\n{head}\n\n(See details)")
-            dlg.setDetailedText(pretty)
-        else:
-            dlg.setText(f"{title}\n{head}\n\n{pretty}")
-        dlg.exec()
+        self._open_universal_viewer(
+            title,
+            {
+                "path": str(path),
+                "loaded": loaded,
+                "cookies": data,
+            },
+            pretty_default_name="cookies.json",
+            raw_default_name="cookies.txt",
+        )
         
     def _export_mode(self, mode: str):
         """Тонкий адаптер для ScraperActions → зовём реальный экспортёр."""
@@ -1794,9 +1818,6 @@ class ScraperTabController(QWidget):
     
     # --- Диалог: показать headers для выбранных задач ---
     def show_task_headers_dialog(self, task_ids: list[str]):
-        import json
-        from PySide6.QtWidgets import QMessageBox
-
         for tid in task_ids:
             task = self.task_manager.get_task(tid)
             headers = None
@@ -1808,19 +1829,17 @@ class ScraperTabController(QWidget):
                 self.log.append_log_line(f"[WARN] No headers for task {tid[:8]}")
                 continue
 
-            msg = QMessageBox(self)
-            msg.setWindowTitle(f"Headers — {tid[:8]}")
-            pretty = json.dumps(headers, ensure_ascii=False, indent=2)
-            msg.setText("Response headers (pretty-JSON):")
-            msg.setDetailedText(pretty)  # всё в detailedText, если длинно
-            msg.setIcon(QMessageBox.Information)
-            msg.exec()
+            self._open_universal_viewer(
+                f"Headers — {tid[:8]}",
+                headers,
+                pretty_default_name=f"headers_{tid[:8]}.json",
+                raw_default_name=f"headers_{tid[:8]}.txt",
+            )
             
     # --- Диалог: показать cookies для выбранных задач ---
     def show_task_cookies_dialog(self, task_ids: list[str]):
-        import json, os
+        import os
         from urllib.parse import urlparse
-        from PySide6.QtWidgets import QMessageBox
         # если у тебя модуль хранения cookies в другом месте — поправь импорт:
         try:
             from core.cookies.storage import load_cookiejar_as_json
@@ -1847,17 +1866,23 @@ class ScraperTabController(QWidget):
                 except Exception as e:
                     self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
 
-            msg = QMessageBox(self)
-            msg.setWindowTitle(f"Cookies — {tid[:8]}")
             if data:
-                pretty = json.dumps(data, ensure_ascii=False, indent=2)
-                msg.setText(f"Cookies file: {cookie_path}")
-                msg.setDetailedText(pretty)
-                msg.setIcon(QMessageBox.Information)
+                self._open_universal_viewer(
+                    f"Cookies — {tid[:8]}",
+                    {
+                        "path": str(cookie_path),
+                        "cookies": data,
+                    },
+                    pretty_default_name=f"cookies_{tid[:8]}.json",
+                    raw_default_name=f"cookies_{tid[:8]}.txt",
+                )
             else:
-                msg.setText(f"No cookies found\n{cookie_path}")
-                msg.setIcon(QMessageBox.Warning)
-            msg.exec()
+                self._open_universal_viewer(
+                    f"Cookies — {tid[:8]}",
+                    f"No cookies found\n{cookie_path}",
+                    pretty_default_name=f"cookies_{tid[:8]}.json",
+                    raw_default_name=f"cookies_{tid[:8]}.txt",
+                )
 
 
         
@@ -2208,8 +2233,12 @@ class ScraperTabController(QWidget):
             QMessageBox.information(self, "Headers", "No headers available")
             return
 
-        pretty = self._pretty_json(headers)
-        QMessageBox.information(self, "Response Headers", pretty[:6000])
+        self._open_universal_viewer(
+            "Response Headers",
+            headers,
+            pretty_default_name="response_headers.json",
+            raw_default_name="response_headers.txt",
+        )
 
 
     def _ctx_view_redirects_dialog(self, row: int):
@@ -2246,7 +2275,12 @@ class ScraperTabController(QWidget):
             QMessageBox.information(self, "Cookies", "No Set-Cookie in response")
             return
         text = sc if isinstance(sc, str) else str(sc)
-        QMessageBox.information(self, "Cookies", text[:6000])
+        self._open_universal_viewer(
+            "Cookies",
+            text,
+            pretty_default_name="response_cookies.json",
+            raw_default_name="response_cookies.txt",
+        )
 
 
     def _ctx_edit_params_dialog(self, row: int, open_tab: str = "Basic"):

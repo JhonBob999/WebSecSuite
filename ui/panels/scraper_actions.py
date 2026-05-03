@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMessageBox
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 from dialogs.forms_viewer_dialog import FormsViewerDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
+from dialogs.universal_viewer_dialog import UniversalViewerDialog
 
 # Предполагаем, что у тебя есть:
 # - TaskTableController со словами: selected_rows(), set_*_cell(), ...
@@ -614,16 +615,25 @@ class ScraperActions:
             task = self.task_manager.get_task(tid)
             headers = getattr(task, "result", {}) or {}
             headers = headers.get("headers")
-            msg = QMessageBox(self.parent)
-            msg.setWindowTitle(f"Headers — {tid[:8]}")
             if headers:
-                msg.setText("Response headers (pretty-JSON):")
-                msg.setDetailedText(json.dumps(headers, ensure_ascii=False, indent=2))
-                msg.setIcon(QMessageBox.Information)
+                dlg = UniversalViewerDialog(
+                    payload=headers,
+                    parent=self.parent,
+                    title=f"Headers — {tid[:8]}",
+                    save_dialog_title=f"Save Headers — {tid[:8]}",
+                    pretty_default_name=f"headers_{tid[:8]}.json",
+                    raw_default_name=f"headers_{tid[:8]}.txt",
+                )
             else:
-                msg.setText("No headers found")
-                msg.setIcon(QMessageBox.Warning)
-            msg.exec()
+                dlg = UniversalViewerDialog(
+                    payload="No headers found",
+                    parent=self.parent,
+                    title=f"Headers — {tid[:8]}",
+                    save_dialog_title=f"Save Headers — {tid[:8]}",
+                    pretty_default_name=f"headers_{tid[:8]}.json",
+                    raw_default_name=f"headers_{tid[:8]}.txt",
+                )
+            dlg.exec()
 
     def view_cookies(self):
         tids = self._rows_to_task_ids()
