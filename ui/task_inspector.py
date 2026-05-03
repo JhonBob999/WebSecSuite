@@ -170,6 +170,13 @@ class TaskInspectorPanel(QWidget):
             return len(value)
         return 0
 
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def clear(self, message: str = "No task selected") -> None:
         self.empty_label.setText(message)
         self.empty_label.show()
@@ -311,11 +318,11 @@ class TaskInspectorPanel(QWidget):
         self._set("fp_x_powered_by", x_powered)
         self._set("fp_x_generator", x_generator)
 
-        js_sources_total = self._first_non_empty(
-            js_summary.get("external_total"),
-            self._safe_len(js_recon.get("external")) + self._safe_len(js_recon.get("inline")),
-            default=0,
-        )
+        js_sources_total = self._safe_int(js_summary.get("external_total")) + self._safe_int(js_summary.get("inline_total"))
+        if js_sources_total <= 0:
+            js_sources_total = self._safe_len(js_recon.get("external_scripts")) + self._safe_len(js_recon.get("inline_scripts"))
+        if js_sources_total <= 0:
+            js_sources_total = self._safe_len(js_recon.get("external")) + self._safe_len(js_recon.get("inline"))
         endpoint_candidates_total = self._first_non_empty(
             js_summary.get("endpoint_candidates_total"),
             self._safe_len(js_recon.get("endpoint_candidates")),
@@ -365,11 +372,7 @@ class TaskInspectorPanel(QWidget):
         self._set_detail(
             "js_sources_total",
             "JS sources",
-            {
-                "external": js_recon.get("external"),
-                "inline": js_recon.get("inline"),
-                "sources": js_recon.get("sources"),
-            },
+            self._build_js_sources_detail(js_recon, js_summary),
         )
         self._set_detail("js_endpoint_candidates", "JS endpoint candidates", js_recon.get("endpoint_candidates"))
         self._set_detail("js_secret_hints", "JS secret hints", secret_hints.get("all"))
@@ -421,6 +424,39 @@ class TaskInspectorPanel(QWidget):
             if keyword_lower in item_type:
                 filtered.append(item)
         return filtered
+
+    def _build_js_sources_detail(self, js_recon: Mapping[str, Any], js_summary: Mapping[str, Any]) -> dict[str, Any]:
+        external_scripts = self._first_non_empty(
+            js_recon.get("external_scripts"),
+            js_recon.get("external"),
+            default=[],
+        )
+        inline_scripts = self._first_non_empty(
+            js_recon.get("inline_scripts"),
+            js_recon.get("inline"),
+            default=[],
+        )
+        page_sources = self._first_non_empty(
+            js_recon.get("page_sources"),
+            js_recon.get("sources"),
+            default=[],
+        )
+        sources_total = self._safe_int(js_summary.get("external_total")) + self._safe_int(js_summary.get("inline_total"))
+
+        detail: dict[str, Any] = {
+            "external_scripts": external_scripts,
+            "inline_scripts": inline_scripts,
+            "page_sources": page_sources,
+        }
+        if js_summary and (sources_total > 0 or self._has_detail_payload(detail)):
+            detail["summary"] = {
+                "external_total": js_summary.get("external_total"),
+                "inline_total": js_summary.get("inline_total"),
+                "internal_external_scripts": js_summary.get("internal_external_scripts"),
+                "third_party_external_scripts": js_summary.get("third_party_external_scripts"),
+                "page_sources_total": js_summary.get("page_sources_total"),
+            }
+        return detail
 
     def _set_detail(self, key: str, title: str, data: Any) -> None:
         label = self._fields.get(key)
