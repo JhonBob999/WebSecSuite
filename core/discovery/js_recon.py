@@ -274,6 +274,62 @@ def _empty_endpoint_linkage_summary() -> dict[str, int | float]:
     }
 
 
+def _empty_js_recon_summary() -> dict[str, Any]:
+    return {
+        "external_total": 0,
+        "inline_total": 0,
+        "internal_external_scripts": 0,
+        "third_party_external_scripts": 0,
+        "app_relevant_external_scripts": 0,
+        "internal_app_scripts": 0,
+        "third_party_supporting_scripts": 0,
+        "low_value_platform_scripts": 0,
+        "high_priority_external_scripts": 0,
+        "medium_priority_external_scripts": 0,
+        "low_priority_external_scripts": 0,
+        "module_scripts": 0,
+        "async_scripts": 0,
+        "defer_scripts": 0,
+        "integrity_scripts": 0,
+        "inline_nonempty_total": 0,
+        "minified_external_scripts": 0,
+        "module_external_scripts": 0,
+        "blocking_external_scripts": 0,
+        "library_hinted_external_scripts": 0,
+        "version_hinted_external_scripts": 0,
+        "external_with_query_params": 0,
+        "inline_module_scripts": 0,
+        "inline_json_like_scripts": 0,
+        "inline_importmap_scripts": 0,
+        "inline_with_close_guard": 0,
+        "page_sources_total": 0,
+        "external_scripts_with_page_link": 0,
+        "inline_scripts_with_page_link": 0,
+        "multi_page_script_links": 0,
+        "unique_external_hosts": 0,
+        "unique_source_page_hosts": 0,
+        "internal_page_sources": 0,
+        "external_page_sources": 0,
+        "pages_with_inline_scripts": 0,
+        "pages_with_external_scripts": 0,
+        "max_external_scripts_on_page": 0,
+        "max_inline_scripts_on_page": 0,
+        "avg_external_scripts_per_page": 0.0,
+        "avg_inline_scripts_per_page": 0.0,
+        **_empty_endpoint_candidate_summary(),
+        **_empty_endpoint_linkage_summary(),
+    }
+
+
+def _empty_js_recon_coverage() -> dict[str, Any]:
+    return {
+        "external_scripts_linked_ratio": 0.0,
+        "inline_scripts_linked_ratio": 0.0,
+        "page_sources_complete": True,
+        "linkage_mode": "single_page_passive",
+    }
+
+
 def _empty_secret_hints_summary() -> dict[str, Any]:
     return {
         "total_hints": 0,
@@ -1130,6 +1186,47 @@ def _stable_unique_sorted(values: list[str], order: tuple[str, ...] = ()) -> lis
     return sorted(seen, key=lambda value: (order.index(value) if value in order else len(order), value))
 
 
+def _finalize_js_recon_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    final = empty_js_recon_contract()
+    for key in (
+        "external_scripts",
+        "inline_scripts",
+        "page_sources",
+        "endpoint_candidates",
+        "endpoint_linkage",
+        "secret_hint_linkage",
+    ):
+        value = contract.get(key)
+        final[key] = value if isinstance(value, list) else []
+
+    secret_hints = contract.get("secret_hints")
+    if isinstance(secret_hints, dict):
+        secret_summary = secret_hints.get("summary") if isinstance(secret_hints.get("summary"), dict) else {}
+        final["secret_hints"] = {
+            "all": secret_hints.get("all") if isinstance(secret_hints.get("all"), list) else [],
+            "summary": {**_empty_secret_hints_summary(), **secret_summary},
+        }
+
+    summary = contract.get("summary") if isinstance(contract.get("summary"), dict) else {}
+    final["summary"] = {**_empty_js_recon_summary(), **summary}
+    final["summary"]["categories_present"] = _stable_unique_sorted(
+        final["summary"].get("categories_present") or [],
+        order=_ENDPOINT_CATEGORY_ORDER,
+    )
+    final["summary"]["confidences_present"] = _stable_unique_sorted(
+        final["summary"].get("confidences_present") or [],
+        order=("low", "medium", "high"),
+    )
+    final["summary"]["transport_hints_present"] = _stable_unique_sorted(
+        final["summary"].get("transport_hints_present") or [],
+        order=("fetch", "axios", "xhr", "string_literal", "unknown"),
+    )
+
+    coverage = contract.get("coverage") if isinstance(contract.get("coverage"), dict) else {}
+    final["coverage"] = {**_empty_js_recon_coverage(), **coverage}
+    return final
+
+
 def _endpoint_candidate_identity(candidate: dict[str, Any]) -> str:
     semantics = _endpoint_candidate_final_semantics(candidate)
     parts = (
@@ -1601,53 +1698,8 @@ def empty_js_recon_contract() -> dict[str, Any]:
         "secret_hints": _empty_secret_hints_contract(),
         "secret_hint_linkage": [],
         "page_sources": [],
-        "summary": {
-            "external_total": 0,
-            "inline_total": 0,
-            "internal_external_scripts": 0,
-            "third_party_external_scripts": 0,
-            "app_relevant_external_scripts": 0,
-            "internal_app_scripts": 0,
-            "third_party_supporting_scripts": 0,
-            "low_value_platform_scripts": 0,
-            "module_scripts": 0,
-            "async_scripts": 0,
-            "defer_scripts": 0,
-            "integrity_scripts": 0,
-            "inline_nonempty_total": 0,
-            "minified_external_scripts": 0,
-            "module_external_scripts": 0,
-            "blocking_external_scripts": 0,
-            "library_hinted_external_scripts": 0,
-            "version_hinted_external_scripts": 0,
-            "external_with_query_params": 0,
-            "inline_module_scripts": 0,
-            "inline_json_like_scripts": 0,
-            "inline_importmap_scripts": 0,
-            "inline_with_close_guard": 0,
-            "page_sources_total": 0,
-            "external_scripts_with_page_link": 0,
-            "inline_scripts_with_page_link": 0,
-            "multi_page_script_links": 0,
-            "unique_external_hosts": 0,
-            "unique_source_page_hosts": 0,
-            "internal_page_sources": 0,
-            "external_page_sources": 0,
-            "pages_with_inline_scripts": 0,
-            "pages_with_external_scripts": 0,
-            "max_external_scripts_on_page": 0,
-            "max_inline_scripts_on_page": 0,
-            "avg_external_scripts_per_page": 0.0,
-            "avg_inline_scripts_per_page": 0.0,
-            **_empty_endpoint_candidate_summary(),
-            **_empty_endpoint_linkage_summary(),
-        },
-        "coverage": {
-            "external_scripts_linked_ratio": 0.0,
-            "inline_scripts_linked_ratio": 0.0,
-            "page_sources_complete": True,
-            "linkage_mode": "single_page_passive",
-        },
+        "summary": _empty_js_recon_summary(),
+        "coverage": _empty_js_recon_coverage(),
     }
 
 
@@ -1883,6 +1935,9 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     internal_app_total = 0
     third_party_supporting_total = 0
     low_value_platform_total = 0
+    high_priority_external_total = 0
+    medium_priority_external_total = 0
+    low_priority_external_total = 0
 
     for item in parser.external:
         src = str(item.get("src") or "").strip()
@@ -1954,6 +2009,13 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
             third_party_supporting_total += 1
         if bool(source_relevance.get("low_value_platform")):
             low_value_platform_total += 1
+        source_priority = str(source_relevance.get("source_priority") or "").strip().lower()
+        if source_priority == "high":
+            high_priority_external_total += 1
+        elif source_priority == "medium":
+            medium_priority_external_total += 1
+        elif source_priority == "low":
+            low_priority_external_total += 1
 
         external_scripts.append(
             {
@@ -2106,7 +2168,8 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         inline_raw_items=inline_raw_items,
         page_sources=page_sources,
     )
-    summary = {
+    summary = _empty_js_recon_summary()
+    summary.update({
         "external_total": external_total,
         "inline_total": len(inline_scripts),
         "internal_external_scripts": internal_total,
@@ -2115,6 +2178,9 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "internal_app_scripts": internal_app_total,
         "third_party_supporting_scripts": third_party_supporting_total,
         "low_value_platform_scripts": low_value_platform_total,
+        "high_priority_external_scripts": high_priority_external_total,
+        "medium_priority_external_scripts": medium_priority_external_total,
+        "low_priority_external_scripts": low_priority_external_total,
         "module_scripts": module_total,
         "async_scripts": async_total,
         "defer_scripts": defer_total,
@@ -2146,7 +2212,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "avg_inline_scripts_per_page": avg_inline_scripts_per_page,
         **endpoint_summary,
         **endpoint_linkage_summary,
-    }
+    })
     has_inventory = bool(external_scripts or inline_scripts)
     coverage = {
         "external_scripts_linked_ratio": float(external_with_page_link_total / external_total) if external_total > 0 else 0.0,
@@ -2154,7 +2220,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "page_sources_complete": bool(page_sources_total > 0) if has_inventory else True,
         "linkage_mode": "single_page_passive",
     }
-    return {
+    return _finalize_js_recon_contract({
         "external_scripts": external_scripts,
         "inline_scripts": inline_scripts,
         "endpoint_candidates": endpoint_candidates,
@@ -2164,4 +2230,4 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "page_sources": page_sources,
         "summary": summary,
         "coverage": coverage,
-    }
+    })
