@@ -63,6 +63,45 @@ _ASSET_UTILITY_HINTS = (
     "hotjar",
     "mixpanel",
 )
+_PLATFORM_CHALLENGE_PATH_PREFIXES = (
+    "/cdn-cgi/challenge-platform/",
+    "/cdn-cgi/scripts/",
+    "/cdn-cgi/bm/",
+    "/cdn-cgi/zaraz/",
+)
+_THIRD_PARTY_NOISE_HOST_HINTS = (
+    "analytics.google",
+    "googletagmanager",
+    "google-analytics",
+    "doubleclick",
+    "hotjar",
+    "mixpanel",
+    "segment.",
+    "amplitude.",
+    "fullstory.",
+    "sentry.io",
+    "intercom.",
+    "drift.",
+    "zendesk.",
+    "crisp.chat",
+    "tawk.to",
+)
+_THIRD_PARTY_NOISE_PATH_SEGMENTS = {
+    "analytics",
+    "beacon",
+    "chat",
+    "collect",
+    "embed",
+    "loader",
+    "metric",
+    "metrics",
+    "pixel",
+    "telemetry",
+    "track",
+    "tracking",
+    "widget",
+    "widgets",
+}
 _HTML_TAG_NOISE = {
     "a",
     "body",
@@ -764,6 +803,46 @@ def _looks_like_external_host_in_relative_path(value: str) -> bool:
     )
 
 
+def _looks_like_platform_challenge_candidate(value: str, path: str) -> bool:
+    path_value = str(path or "").strip().lower()
+    if not path_value:
+        candidate = str(value or "").strip()
+        parsed = urlparse(candidate if candidate.startswith(("http://", "https://", "/")) else "")
+        path_value = (parsed.path or candidate.split("?", 1)[0].split("#", 1)[0]).lower()
+    return any(path_value.startswith(prefix) for prefix in _PLATFORM_CHALLENGE_PATH_PREFIXES)
+
+
+def _has_strong_app_endpoint_signal(candidate: dict[str, Any]) -> bool:
+    category = str(candidate.get("endpoint_category") or candidate.get("category") or "").strip().lower()
+    if category in {"graphql", "api", "login", "auth", "admin", "upload", "php"}:
+        return True
+    matched_signals = {str(signal or "").strip().lower() for signal in candidate.get("matched_signals") or []}
+    return bool(matched_signals.intersection({"graphql", "api", "login", "auth", "admin", "upload", "php"}))
+
+
+def _looks_like_third_party_noise_candidate(candidate: dict[str, Any]) -> bool:
+    if not bool(candidate.get("external_hint")):
+        return False
+    if _has_strong_app_endpoint_signal(candidate):
+        return False
+    host = str(candidate.get("host") or "").strip().lower()
+    path = str(candidate.get("path") or "").strip().lower()
+    value = str(candidate.get("value") or "").strip().lower()
+    normalized = str(candidate.get("normalized_value") or "").strip().lower()
+    path_only = path or value.split("?", 1)[0].split("#", 1)[0]
+    filename = path_only.rsplit("/", 1)[-1]
+    segments = {segment for segment in path_only.split("/") if segment}
+    combined = " ".join(part for part in (host, path_only, normalized) if part)
+
+    if any(hint in host for hint in _THIRD_PARTY_NOISE_HOST_HINTS):
+        return True
+    if segments.intersection(_THIRD_PARTY_NOISE_PATH_SEGMENTS):
+        return True
+    if filename and re.search(r"(?:embed|widget|loader|tracking|analytics|beacon|pixel)(?:[-_.].*)?\.(?:js|mjs)$", filename):
+        return True
+    return any(hint in combined for hint in ("/telemetry/", "/metrics/", "/tracking/", "/analytics/", "/widget/", "/embed/"))
+
+
 def _collect_category_signals(value: str, normalized_value: str, path: str, host: str, evidence: str, source_kind: str) -> dict[str, bool]:
     lowered_path = str(path or "").lower()
     lowered_value = str(value or "").lower()
@@ -984,6 +1063,10 @@ def _should_filter_endpoint_candidate(candidate: dict[str, Any]) -> bool:
     if not value or not lowered:
         return True
     if "${" in value:
+        return True
+    if _looks_like_platform_challenge_candidate(value, str(candidate.get("path") or "")):
+        return True
+    if _looks_like_third_party_noise_candidate(candidate):
         return True
     source_kind = str(candidate.get("source_kind") or "").lower()
     if source_kind in {"script_src", "external_js"} and _looks_like_asset_path(value, lowered, str(candidate.get("path") or ""), str(candidate.get("host") or "")):
