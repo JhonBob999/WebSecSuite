@@ -1,12 +1,14 @@
 # ui/panels/scraper_actions.py
 from __future__ import annotations
 from typing import List, Optional
+import json
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QMenu, QApplication
 from PySide6.QtWidgets import QMessageBox
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 from dialogs.forms_viewer_dialog import FormsViewerDialog
+from dialogs.results_viewer_dialog import ResultsViewerDialog
 
 # Предполагаем, что у тебя есть:
 # - TaskTableController со словами: selected_rows(), set_*_cell(), ...
@@ -41,14 +43,47 @@ class ScraperActions:
 
         menu = QMenu(table)
         A = self._acts  # кэшированные действия, которые уже работают (Selected и пр.)
+        has_selection = bool(self._get_selected_task_ids_from_table())
+        has_results = self._has_selected_results()
 
-        # --- Selected group (из кэша — у тебя они уже кликаются) ---
+        A["open_results_viewer"].setEnabled(has_selection and has_results)
+        A["copy_results"].setEnabled(has_selection and has_results)
+        A["copy_url"].setEnabled(has_selection)
+        if "copy_final_url" in A:
+            A["copy_final_url"].setEnabled(has_selection)
+
+        # --- Task actions ---
         menu.addAction(A["start_selected"])
         menu.addAction(A["stop_selected"])
         menu.addAction(A["restart_selected"])
         menu.addSeparator()
 
-        # --- All group (одноразовые QAction с родителем menu) ---
+        # --- Data / View ---
+        menu.addAction(A["open_results_viewer"])
+        menu.addAction(A["copy_url"])
+        menu.addAction(A["copy_results"])
+        menu.addAction(A["copy_final_url"])
+        menu.addAction(A["open_in_browser"])
+        menu.addSeparator()
+
+        # --- Analysis ---
+        menu.addAction(A["discover_urls"])
+        menu.addAction(A["view_discovery"]) 
+        menu.addAction(A["view_forms"])
+        menu.addAction(A["view_headers"])
+        menu.addAction(A["view_cookies"])
+        menu.addSeparator()
+
+        # --- Other ---
+        menu.addAction(A["export_selected"])
+        menu.addAction(A["export_completed"])
+        menu.addAction(A["export_all"])
+        menu.addAction(A["clear_results"])
+        menu.addAction(A["duplicate"])
+        menu.addAction(A["remove"])
+        menu.addSeparator()
+
+        # --- All tasks ---
         act_start_all = QAction("Start All", menu)
         act_start_all.triggered.connect(lambda _=False: self._start_all_wrapper())
         menu.addAction(act_start_all)
@@ -60,32 +95,6 @@ class ScraperActions:
         act_restart_all = QAction("Restart All", menu)
         act_restart_all.triggered.connect(lambda _=False: self._restart_all_wrapper())
         menu.addAction(act_restart_all)
-
-        menu.addSeparator()
-
-        # --- Duplicate / Remove ---
-        menu.addAction(A["duplicate"])
-        menu.addAction(A["remove"])
-        menu.addSeparator()
-
-        # --- View / Open / Copy ---
-        menu.addAction(A["open_in_browser"])
-        menu.addAction(A["copy_url"])
-        menu.addAction(A["discover_urls"])
-        menu.addAction(A["view_discovery"]) 
-        menu.addAction(A["view_forms"])
-        menu.addAction(A["view_headers"])
-        menu.addAction(A["view_cookies"])
-        menu.addSeparator()
-
-        # --- Export ---
-        menu.addAction(A["export_selected"])
-        menu.addAction(A["export_completed"])
-        menu.addAction(A["export_all"])
-        menu.addSeparator()
-
-        # --- Clear Results ---
-        menu.addAction(A["clear_results"])
 
         forms_available = False
         tids = self._get_selected_task_ids_from_table()
@@ -120,7 +129,10 @@ class ScraperActions:
             "remove":           act("Remove",            self.remove_selected),
 
             "open_in_browser":  act("Open in Browser",   self.open_in_browser),
+            "open_results_viewer": act("Open Results Viewer", self.open_results_viewer),
             "copy_url":         act("Copy URL",          self.copy_url),
+            "copy_results":     act("Copy Results",      self.copy_results),
+            "copy_final_url":   act("Copy Final URL",    self.copy_final_url),
             "discover_urls":    act("Discover URLs",     self.discover_urls),
             "view_discovery":  act("View Discovery…",    self.view_discovery),
             "view_forms":      act("View Forms",         self.view_forms),
@@ -363,6 +375,73 @@ class ScraperActions:
         if urls:
             QApplication.clipboard().setText("\n".join(urls))
             self._append_log(f"[INFO] Copied URL(s): {len(urls)}")
+
+    def copy_final_url(self):
+        tids = self._rows_to_task_ids()
+        urls = []
+        for tid in tids:
+            payload = self._task_payload(tid)
+            final_url = payload.get("final_url") if isinstance(payload, dict) else None
+            if not final_url:
+                task = self.task_manager.get_task(tid)
+                final_url = getattr(task, "final_url", None)
+            if final_url:
+                urls.append(str(final_url))
+        if urls:
+            QApplication.clipboard().setText("\n".join(urls))
+            self._append_log(f"[INFO] Copied final URL(s): {len(urls)}")
+
+    def _payload_to_pretty_json(self, payload) -> str:
+        if payload in (None, "", {}, []):
+            return "No results available"
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                return payload
+        if isinstance(payload, (dict, list)):
+            try:
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            except Exception:
+                return str(payload)
+        return repr(payload)
+
+    def _task_payload_for_row(self, row: int):
+        tid = self.table_ctl.task_id_by_row(row)
+        if not tid:
+            return {}
+        payload = self._task_payload(tid)
+        if payload:
+            return payload
+        task = self.task_manager.get_task(tid)
+        return getattr(task, "result", None) or {}
+
+    def _has_selected_results(self) -> bool:
+        for row in self.table_ctl.selected_rows():
+            payload = self._task_payload_for_row(row)
+            if payload not in (None, "", {}, []):
+                return True
+        return False
+
+    def open_results_viewer(self):
+        rows = self.table_ctl.selected_rows()
+        if not rows:
+            return
+        row = rows[0]
+        if hasattr(self.parent, "open_results_viewer_for_row"):
+            self.parent.open_results_viewer_for_row(row)
+            return
+        payload = self._task_payload_for_row(row)
+        ResultsViewerDialog(payload=payload, parent=self.parent).exec()
+
+    def copy_results(self):
+        rows = self.table_ctl.selected_rows()
+        if not rows:
+            return
+        payload = self._task_payload_for_row(rows[0])
+        text = self._payload_to_pretty_json(payload)
+        QApplication.clipboard().setText(text)
+        self._append_log("[INFO] Copied results payload")
 
     def discover_urls(self):
         if hasattr(self.parent, "discover_urls_for_selected"):
@@ -608,4 +687,3 @@ class ScraperActions:
             except Exception as e:
                 self._append_log(f"[ERROR] clear_results(row={r}): {e}")
         self._append_log(f"[INFO] Cleared results for {cleared} row(s)")
-

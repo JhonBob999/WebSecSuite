@@ -1,12 +1,76 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 import httpx
 
 from core.cookies.storage import load_cookiejar
+from core.discovery.candidate_generation import generate_candidates
+from core.discovery.finding_artifacts import build_finding_artifacts
+from core.discovery.js_recon import collect_js_sources, empty_js_recon_contract
+from core.discovery.replay_manifest import build_replay_manifest
+from core.discovery.replay_groups import build_replay_groups
+from core.discovery.validation_plan import build_validation_plan, build_validator_handoff, build_validator_queue
 from core.discovery.url_discovery import discover, parse_forms_from_html
 from core.scraper.request_params import normalize_params
+
+logger = logging.getLogger(__name__)
+
+
+def _empty_finding_artifacts() -> dict:
+    return build_finding_artifacts(
+        candidates=None,
+        request_recipe=None,
+        response_snapshot=None,
+        status_code=None,
+        final_url="",
+        discovery=None,
+    )
+
+
+def _empty_replay_groups() -> dict:
+    return build_replay_groups(
+        finding_artifacts=None,
+        request_recipe=None,
+        response_snapshot=None,
+        final_url="",
+        discovery=None,
+    )
+
+
+def _empty_replay_manifest() -> dict:
+    return build_replay_manifest(
+        replay_groups=None,
+        finding_artifacts=None,
+        request_recipe=None,
+        response_snapshot=None,
+        final_url="",
+        discovery=None,
+    )
+
+
+def _empty_validation_plan() -> dict:
+    return build_validation_plan(
+        replay_manifest=None,
+        finding_artifacts=None,
+        candidates=None,
+        request_recipe=None,
+        final_url="",
+        discovery=None,
+    )
+
+
+def _empty_validator_queue() -> dict:
+    return build_validator_queue(validation_plan=None)
+
+
+def _empty_validator_handoff() -> dict:
+    return build_validator_handoff(validator_queue=None, validation_plan=None)
+
+
+def _empty_js_recon() -> dict:
+    return empty_js_recon_contract()
 
 
 def _headers_with_ua(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -64,14 +128,53 @@ def run(task_ctx: dict) -> dict:
     base_url = _infer_base_url(ctx)
     if not html:
         if not base_url:
-            return {"error": "No URL provided for discovery", "stats": {}, "urls": {}, "query_params": {}}
+            return {
+                "error": "No URL provided for discovery",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
+                "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
+                "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
+                "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
+            }
         try:
             html, final_url, headers = _fetch_html(base_url, params)
             base_url = final_url or base_url
         except httpx.HTTPError as e:
-            return {"error": f"HTTP error: {e}", "stats": {}, "urls": {}, "query_params": {}}
+            return {
+                "error": f"HTTP error: {e}",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
+                "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
+                "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
+                "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
+            }
         except Exception as e:  # pragma: no cover - defensive fallback
-            return {"error": f"Unhandled fetch error: {e}", "stats": {}, "urls": {}, "query_params": {}}
+            return {
+                "error": f"Unhandled fetch error: {e}",
+                "stats": {},
+                "urls": {},
+                "query_params": {},
+                "parameter_intelligence": [],
+                "js_recon": _empty_js_recon(),
+                "finding_artifacts": _empty_finding_artifacts(),
+                "replay_groups": _empty_replay_groups(),
+                "replay_manifest": _empty_replay_manifest(),
+                "validation_plan": _empty_validation_plan(),
+                "validator_queue": _empty_validator_queue(),
+                "validator_handoff": _empty_validator_handoff(),
+            }
     else:
         res_ctx = ctx.get("result")
         headers = dict(res_ctx.get("headers") or {}) if isinstance(res_ctx, dict) else {}
@@ -90,4 +193,90 @@ def run(task_ctx: dict) -> dict:
     }
     result["forms"] = forms_pack.get("forms", [])
     result["forms_summary"] = forms_pack.get("summary", {"forms_total": 0, "inputs_total": 0, "unique_input_names": 0})
+    result["js_recon"] = collect_js_sources(html or "", base_url)
+
+    final_url = (
+        base_url
+        or result.get("final_url")
+        or result.get("source", {}).get("base_url")
+        or _infer_base_url(ctx)
+        or ctx.get("source_url")
+        or ""
+    )
+    classified_urls_by_scope = result.get("classified_urls_by_scope")
+    parameter_intelligence = result.get("parameter_intelligence") if "parameter_intelligence" in result else None
+
+    try:
+        result["candidates"] = generate_candidates(
+            final_url=final_url,
+            classified_urls_by_scope=classified_urls_by_scope,
+            parameter_intelligence=parameter_intelligence,
+        )
+    except Exception:
+        logger.exception("Discover URLs candidate generation failed; using baseline fallback.")
+        try:
+            result["candidates"] = generate_candidates(
+                final_url=final_url,
+                classified_urls_by_scope=None,
+                parameter_intelligence=None,
+            )
+        except Exception:
+            logger.exception("Discover URLs baseline candidate generation failed.")
+            result["candidates"] = {
+                "all": [],
+                "by_type": {
+                    "xss_candidate": [],
+                    "sqli_candidate": [],
+                    "lfi_candidate": [],
+                    "ssrf_candidate": [],
+                },
+                "summary": {
+                    "total": 0,
+                    "by_type": {
+                        "xss_candidate": 0,
+                        "sqli_candidate": 0,
+                        "lfi_candidate": 0,
+                        "ssrf_candidate": 0,
+                    },
+                },
+            }
+
+    result["candidates_summary"] = result["candidates"].get("summary", {})
+    result["finding_artifacts"] = build_finding_artifacts(
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        status_code=result.get("status_code"),
+        final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
+    )
+    result["replay_groups"] = build_replay_groups(
+        finding_artifacts=result.get("finding_artifacts"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
+    )
+    result["replay_manifest"] = build_replay_manifest(
+        replay_groups=result.get("replay_groups"),
+        finding_artifacts=result.get("finding_artifacts"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
+    )
+    result["validation_plan"] = build_validation_plan(
+        replay_manifest=result.get("replay_manifest"),
+        finding_artifacts=result.get("finding_artifacts"),
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url") or final_url,
+        discovery=result.get("discovery"),
+    )
+    result["validator_queue"] = build_validator_queue(result.get("validation_plan"))
+    result["validator_handoff"] = build_validator_handoff(
+        result.get("validator_queue"),
+        result.get("validation_plan"),
+    )
     return result

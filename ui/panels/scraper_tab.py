@@ -8,14 +8,31 @@ from copy import deepcopy
 import os, json, httpx, subprocess, re
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QAction
-from PySide6.QtWidgets import QWidget, QTableWidgetItem, QDialog, QFileDialog, QInputDialog, QMessageBox, QTextEdit, QMenu
+from PySide6.QtWidgets import (
+    QWidget,
+    QTableWidgetItem,
+    QDialog,
+    QFileDialog,
+    QInputDialog,
+    QMessageBox,
+    QTextEdit,
+    QMenu,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSplitter,
+    QSizePolicy,
+    QHeaderView,
+    QPushButton,
+)
 from ui.constants import Col, TaskStatus
+from ui.task_inspector import TaskInspectorPanel
 from ui.log_highlighter import LogHighlighter
 from ui.log_panel import LogPanel
 from ui.table_controller import TaskTableController
 from ui import export_bridge as xb
 from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
+from dialogs.results_viewer_dialog import ResultsViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
@@ -24,6 +41,7 @@ from core.scraper.task_types import TaskStatus
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
+from core.discovery.url_discovery import build_scored_classified_urls
 
 # --- палитра ---
 CLR_STATUS = {
@@ -80,6 +98,9 @@ class ScraperTabController(QWidget):
         # 1) Поднимаем UI
         self.ui = Ui_scraper_panel()
         self.ui.setupUi(self)
+        self._apply_responsive_main_layout()
+        self._inspector_visible = True
+        self._inspector_last_sizes = [760, 340]
 
         # Подключение настроек таблиц
         self.settings = QSettings("WebSecSuite", "WebSecSuite")
@@ -93,6 +114,7 @@ class ScraperTabController(QWidget):
         self.table_ctl.apply_common_view_settings()
         self.table_ctl.setup_resize_policies()
         self.table_ctl.restore_column_widths()
+        self._configure_task_table_columns()
         
         
 
@@ -173,6 +195,8 @@ class ScraperTabController(QWidget):
         table = self.ui.taskTable
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(self.actions.on_context_menu)
+        table.itemSelectionChanged.connect(self._on_task_selection_changed)
+        table.currentCellChanged.connect(self._on_task_current_cell_changed)
 
 
         # 5) Демонстрационные задачи (можно оставить для проверки)
@@ -182,6 +206,140 @@ class ScraperTabController(QWidget):
 
         # Остальные внутренние подключения
         self._init_ui_connections()
+        self._refresh_task_inspector_for_current()
+
+    def _apply_responsive_main_layout(self) -> None:
+        """Минимально перестраивает главный layout на основе существующих виджетов."""
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(8)
+
+        splitter = QSplitter(Qt.Horizontal, self)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
+
+        left_panel = QWidget(splitter)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        left_layout.addWidget(self.ui.lbl_tasks)
+
+        actions_row = QHBoxLayout()
+        actions_row.setContentsMargins(0, 0, 0, 0)
+        actions_row.setSpacing(6)
+        # Логический порядок действий (Data Preview рядом с Export).
+        for btn in (
+            self.ui.btnAddTask,
+            self.ui.btnDelete,
+            self.ui.btnStart,
+            self.ui.btnPause,
+            self.ui.btnResume,
+            self.ui.btnStop,
+            self.ui.btnExport,
+            self.ui.btnDataPreview,
+        ):
+            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            actions_row.addWidget(btn)
+        self.btnInspectorToggle = QPushButton("Hide Inspector", left_panel)
+        self.btnInspectorToggle.setToolTip("Скрыть или показать Task Inspector")
+        self.btnInspectorToggle.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btnInspectorToggle.clicked.connect(self._toggle_task_inspector)
+        actions_row.addWidget(self.btnInspectorToggle)
+        actions_row.addStretch(1)
+        left_layout.addLayout(actions_row)
+
+        self.ui.taskTable.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ui.taskTable.setMinimumWidth(220)
+        self.task_inspector_splitter = QSplitter(Qt.Horizontal, left_panel)
+        self.task_inspector_splitter.setChildrenCollapsible(True)
+        self.task_inspector_splitter.setHandleWidth(6)
+        self.task_inspector_splitter.setCollapsible(0, False)
+        self.task_inspector_splitter.setCollapsible(1, True)
+        self.ui.taskTable.setParent(self.task_inspector_splitter)
+        self.task_inspector_splitter.addWidget(self.ui.taskTable)
+
+        self.task_inspector = TaskInspectorPanel(self.task_inspector_splitter)
+        self.task_inspector.setMinimumWidth(220)
+        self.task_inspector_splitter.addWidget(self.task_inspector)
+        self.task_inspector_splitter.setStretchFactor(0, 5)
+        self.task_inspector_splitter.setStretchFactor(1, 2)
+        self.task_inspector_splitter.setSizes([900, 300])
+        left_layout.addWidget(self.task_inspector_splitter, 1)
+
+        right_panel = QWidget(splitter)
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_panel.setMinimumWidth(320)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(6, 2, 0, 0)
+        right_layout.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        header_row.addWidget(self.ui.lbl_search)
+        header_row.addStretch(1)
+        header_row.addWidget(self.ui.btnClearLog)
+        right_layout.addLayout(header_row)
+
+        find_row = QHBoxLayout()
+        find_row.setContentsMargins(0, 0, 0, 0)
+        find_row.setSpacing(6)
+        self.ui.lineEditLogFilter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.ui.lineEditLogFilter.setMinimumWidth(160)
+        self.ui.lineEditLogFilter.setMaximumWidth(16777215)
+        find_row.addWidget(self.ui.lineEditLogFilter, 1)
+        find_row.addWidget(self.ui.btnFindPrev)
+        find_row.addWidget(self.ui.btnFindNext)
+        find_row.addWidget(self.ui.lblMatches)
+        find_row.addWidget(self.ui.lblFindHits)
+        find_row.addStretch(1)
+        find_row.addWidget(self.ui.btnExportMatches)
+        right_layout.addLayout(find_row)
+
+        options_row = QHBoxLayout()
+        options_row.setContentsMargins(0, 0, 0, 0)
+        options_row.setSpacing(10)
+        options_row.addStretch(1)
+        self.ui.cbFindCase.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.ui.cbFindRegex.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.ui.cbFindWhole.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        options_row.addWidget(self.ui.cbFindCase)
+        options_row.addWidget(self.ui.cbFindRegex)
+        options_row.addWidget(self.ui.cbFindWhole)
+        right_layout.addLayout(options_row)
+
+        right_layout.addWidget(self.ui.lbl_logs)
+        self.ui.logOutput.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ui.logOutput.setMinimumWidth(0)
+        self.ui.logOutput.setMaximumWidth(16777215)
+        right_layout.addWidget(self.ui.logOutput, 1)
+
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 5)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([1240, 420])
+        self.main_splitter = splitter
+
+        root_layout.addWidget(splitter, 1)
+
+    def _configure_task_table_columns(self) -> None:
+        """Консервативная адаптивная стратегия ширин колонок Tasks."""
+        table = self.ui.taskTable
+        header = table.horizontalHeader()
+
+        # Базово оставляем ручную регулировку, но делаем URL/Results эластичными.
+        for col in (Col.Status, Col.Code, Col.Time, Col.Cookies, Col.Params):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        header.setSectionResizeMode(Col.URL, QHeaderView.Stretch)
+        header.setSectionResizeMode(Col.Results, QHeaderView.Stretch)
+
+        table.setColumnWidth(Col.Status, 110)
+        table.setColumnWidth(Col.Code, 70)
+        table.setColumnWidth(Col.Time, 90)
+        table.setColumnWidth(Col.Cookies, 90)
+        table.setColumnWidth(Col.Params, 130)
+        table.setColumnWidth(Col.Results, 300)
         
         
     def iter_all_task_ids(self):
@@ -279,6 +437,19 @@ class ScraperTabController(QWidget):
             self.log.append_log_line(f"[ERROR] Discover URLs ({task_id[:8]}): {result.get('error')}")
             return
 
+        urls_section = result.get("urls") if isinstance(result.get("urls"), dict) else {}
+        if isinstance(urls_section, dict):
+            source_urls = urls_section.get("internal")
+            if not isinstance(source_urls, list) or not source_urls:
+                source_urls = urls_section.get("all")
+            if isinstance(source_urls, list):
+                normalized_urls = [u for u in source_urls if isinstance(u, str) and u]
+                result["classified_urls"] = build_scored_classified_urls(
+                    normalized_urls,
+                    result.get("query_params") if isinstance(result.get("query_params"), dict) else {},
+                    result.get("parameter_intelligence") if isinstance(result.get("parameter_intelligence"), list) else [],
+                )
+
         merged = deepcopy(self.task_results.get(task_id) or {})
         merged["discovery"] = result
         self.task_results[task_id] = merged
@@ -340,6 +511,67 @@ class ScraperTabController(QWidget):
         # Clear — очищает экран, но НЕ буфер
         if hasattr(self.ui, "btnClearLog"):
             self.ui.btnClearLog.clicked.connect(self._clear_log_screen)
+
+    def _on_task_current_cell_changed(self, *_args):
+        self._refresh_task_inspector_for_current()
+
+    def _toggle_task_inspector(self) -> None:
+        if not hasattr(self, "task_inspector_splitter") or not hasattr(self, "task_inspector"):
+            return
+
+        if self._inspector_visible:
+            sizes = self.task_inspector_splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._inspector_last_sizes = sizes
+            self.task_inspector.hide()
+            self.task_inspector_splitter.setSizes([1, 0])
+            self.btnInspectorToggle.setText("Show Inspector")
+            self._inspector_visible = False
+            return
+
+        self.task_inspector.show()
+        restore_sizes = self._inspector_last_sizes if len(self._inspector_last_sizes) >= 2 else [760, 340]
+        self.task_inspector_splitter.setSizes(restore_sizes)
+        self.btnInspectorToggle.setText("Hide Inspector")
+        self._inspector_visible = True
+        self._refresh_task_inspector_for_current()
+
+    def _on_task_selection_changed(self):
+        self._refresh_task_inspector_for_current()
+
+    def _refresh_task_inspector_for_current(self):
+        if not hasattr(self, "task_inspector"):
+            return
+        table = self.ui.taskTable
+        row = table.currentRow()
+        if row < 0 or row >= table.rowCount():
+            self.task_inspector.clear("No task selected")
+            return
+
+        task_id = self._task_id_by_row(row)
+        task = self.task_manager.get_task(task_id) if task_id else None
+        payload = {}
+        if task_id and isinstance(self.task_results, dict):
+            payload = self.task_results.get(task_id) or {}
+        if not payload and task is not None:
+            payload = getattr(task, "result", None) or {}
+        if not payload:
+            self.task_inspector.clear("No results available for selected task")
+            return
+
+        status_item = table.item(row, Col.Status)
+        status_text = status_item.text().strip() if status_item and status_item.text() else ""
+        task_url = getattr(task, "url", "") if task is not None else ""
+        task_method = getattr(task, "method", "") if task is not None else ""
+        params = dict(getattr(task, "params", {}) or {}) if task is not None else {}
+        cookie_path = str(params.get("cookie_file") or "")
+        self.task_inspector.update_from_payload(
+            payload,
+            status_text=status_text,
+            task_url=task_url,
+            task_method=task_method,
+            cookie_path=cookie_path,
+        )
                      
     def _on_filter_text_changed(self, text: str):
         # проксируем к новой системе поиска
@@ -554,20 +786,7 @@ class ScraperTabController(QWidget):
                 return
 
             if col == Col.Results:
-                res_item = table.item(row, Col.Results)
-                # Если Results уже заполнен — показываем JSON (tooltip), НО НИЧЕГО не открываем
-                if res_item and (res_item.text() or res_item.toolTip()):
-                    tip = (res_item.toolTip() or "").strip()
-                    if tip:
-                        self._show_json_dialog("Results", tip)
-                    return
-                # Иначе (пусто) — фолбэк: открыть URL
-                url_item = table.item(row, Col.URL)
-                if url_item:
-                    tip = (url_item.toolTip() or url_item.text() or "").strip()
-                    full_url = tip.split("\n", 1)[0].strip()
-                    if full_url:
-                        QDesktopServices.openUrl(QUrl.fromUserInput(full_url))
+                self.open_results_viewer_for_row(row)
                 return
 
             if col == Col.Params:
@@ -584,6 +803,17 @@ class ScraperTabController(QWidget):
                 self.log.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
             except Exception:
                 pass
+
+    def open_results_viewer_for_row(self, row: int):
+        if row < 0 or row >= self.ui.taskTable.rowCount():
+            return
+        task_id = self._task_id_by_row(row)
+        payload = {}
+        if task_id and isinstance(self.task_results, dict):
+            payload = self.task_results.get(task_id) or {}
+        if not payload:
+            payload = self._get_result_payload(row) or {}
+        ResultsViewerDialog(payload=payload, parent=self).exec()
 
     # --- утилиты ---
     def _open_path(self, path: str):
@@ -1189,8 +1419,8 @@ class ScraperTabController(QWidget):
         """
         Диалог 'Save As' → выбор формата (CSV/JSON/XLSX) → экспорт через export_bridge.
         """
-        tasks = self._tasks_for_mode(mode)
-        if not tasks:
+        rows = self._rows_for_export_mode(mode)
+        if not rows:
             self.log.append("WARN", f"Export: no tasks for mode '{mode}'", tag="UI")
             return
 
@@ -1198,9 +1428,9 @@ class ScraperTabController(QWidget):
         if not path:
             return
 
-        # Формируем записи
+        # Формируем записи из того же источника, что Data Preview.
         try:
-            records = [xb.task_to_record(t) for t in tasks]
+            records = self._records_from_rows(rows)
         except Exception as e:
             self.log.append("ERROR", f"Failed to normalize tasks: {e}", tag="EXPORT")
             return
@@ -1211,6 +1441,21 @@ class ScraperTabController(QWidget):
             self.log.append("INFO", f"Exported ({mode}) {len(records)} rows → {path}", tag="EXPORT")
         except Exception as e:
             self.log.append("ERROR", f"Export failed ({mode}): {e}", tag="EXPORT")
+
+    def _rows_for_export_mode(self, mode: str) -> list[int]:
+        if mode == "Selected":
+            return list(self._selected_rows())
+
+        table_rows = list(range(self.ui.taskTable.rowCount()))
+        if mode != "Completed":
+            return table_rows
+
+        done_rows: list[int] = []
+        for row in table_rows:
+            _, task = self._row_to_task(row)
+            if task and getattr(task, "status", "") == TaskStatus.DONE:
+                done_rows.append(row)
+        return done_rows
 
 
     # ==============================
@@ -1878,6 +2123,8 @@ class ScraperTabController(QWidget):
             tooltip = str(payload)
 
         self.set_results_cell(row, summary, tooltip)
+        if self.ui.taskTable.currentRow() == row:
+            self._refresh_task_inspector_for_current()
 
         
     def _records_from_rows(self, rows) -> list[dict]:
@@ -1899,9 +2146,14 @@ class ScraperTabController(QWidget):
                 continue
 
             rec = deepcopy(payload)
+            if tid:
+                rec.setdefault("task_id", tid)
+            _, task = self._row_to_task(row) if hasattr(self, "_row_to_task") else (None, None)
+            if task:
+                rec.setdefault("url", getattr(task, "url", "") or "")
             t = (payload.get("timings") or {})
             rc = payload.get("redirect_chain") or []
-            rec.setdefault("final_url", payload.get("final_url") or payload.get("url"))
+            rec.setdefault("final_url", payload.get("final_url") or rec.get("url") or payload.get("url"))
             rec["request_ms"] = t.get("request_ms")
             rec["redirects"] = len(rc)
             rec.setdefault("status_code", payload.get("status_code"))
