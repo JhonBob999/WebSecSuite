@@ -1003,16 +1003,38 @@ def _stable_unique_sorted(values: list[str], order: tuple[str, ...] = ()) -> lis
 
 
 def _endpoint_candidate_identity(candidate: dict[str, Any]) -> str:
-    dedupe_key = str(candidate.get("dedupe_key") or "").strip()
-    if dedupe_key:
-        return dedupe_key
+    semantics = _endpoint_candidate_final_semantics(candidate)
     parts = (
         str(candidate.get("normalized_value") or "").strip(),
-        str(candidate.get("category") or "").strip(),
+        str(semantics.get("category") or "").strip(),
         str(candidate.get("host") or "").strip().lower(),
         str(candidate.get("path") or "").strip().lower(),
     )
     return "|".join(parts)
+
+
+def _endpoint_candidate_final_semantics(candidate: dict[str, Any]) -> dict[str, Any]:
+    category = str(candidate.get("endpoint_category") or candidate.get("category") or "").strip().lower()
+    confidence = str(candidate.get("confidence") or "").strip().lower()
+    transport_hint = str(candidate.get("transport_hint") or "").strip().lower()
+    matched_signals = {str(value or "").strip().lower() for value in candidate.get("matched_signals") or []}
+    return {
+        "category": category,
+        "confidence": confidence,
+        "transport_hint": transport_hint,
+        "api_like": bool(candidate.get("api_like")),
+        "graphql_like": bool(candidate.get("graphql_like")),
+        "auth_like": bool(candidate.get("auth_like")),
+        "login_like": category == "login" or "login" in matched_signals,
+        "admin_like": bool(candidate.get("admin_like")),
+        "upload_like": bool(candidate.get("upload_like")),
+        "php_like": category == "php" or "php" in matched_signals,
+        "route_like": category in {"route", "relative_url", "absolute_url"},
+        "internal_hint": bool(candidate.get("internal_hint")),
+        "external_hint": bool(candidate.get("external_hint")),
+        "is_absolute": bool(candidate.get("is_absolute")),
+        "is_relative": bool(candidate.get("is_relative")),
+    }
 
 
 def _merge_endpoint_candidate(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
@@ -1142,33 +1164,34 @@ def _derive_endpoint_candidate_summary(endpoint_candidates: list[dict[str, Any]]
     confidences: list[str] = []
     transport_hints: list[str] = []
     for item in endpoint_candidates:
-        category = str(item.get("category") or "")
-        confidence = str(item.get("confidence") or "").strip().lower()
-        transport_hint = str(item.get("transport_hint") or "").strip().lower()
+        semantics = _endpoint_candidate_final_semantics(item)
+        category = str(semantics.get("category") or "")
+        confidence = str(semantics.get("confidence") or "")
+        transport_hint = str(semantics.get("transport_hint") or "")
         categories.append(category)
         confidences.append(confidence)
         transport_hints.append(transport_hint)
-        if bool(item.get("api_like")):
+        if bool(semantics.get("api_like")):
             summary["endpoint_candidates_api_like"] += 1
-        if bool(item.get("graphql_like")):
+        if bool(semantics.get("graphql_like")):
             summary["endpoint_candidates_graphql_like"] += 1
-        if bool(item.get("auth_like")):
+        if bool(semantics.get("auth_like")):
             summary["endpoint_candidates_auth_like"] += 1
-        if category == "login" or "login" in (item.get("matched_signals") or []):
+        if bool(semantics.get("login_like")):
             summary["endpoint_candidates_login_like"] += 1
-        if bool(item.get("admin_like")):
+        if bool(semantics.get("admin_like")):
             summary["endpoint_candidates_admin_like"] += 1
-        if bool(item.get("upload_like")):
+        if bool(semantics.get("upload_like")):
             summary["endpoint_candidates_upload_like"] += 1
-        if category == "php" or "php" in (item.get("matched_signals") or []):
+        if bool(semantics.get("php_like")):
             summary["endpoint_candidates_php_like"] += 1
-        if bool(item.get("is_absolute")):
+        if bool(semantics.get("is_absolute")):
             summary["endpoint_candidates_absolute"] += 1
-        if bool(item.get("is_relative")):
+        if bool(semantics.get("is_relative")):
             summary["endpoint_candidates_relative"] += 1
-        if bool(item.get("internal_hint")):
+        if bool(semantics.get("internal_hint")):
             summary["endpoint_candidates_internal_hint"] += 1
-        if bool(item.get("external_hint")):
+        if bool(semantics.get("external_hint")):
             summary["endpoint_candidates_external_hint"] += 1
         if confidence in {"low", "medium", "high"}:
             summary[f"endpoint_candidates_{confidence}_confidence"] += 1
@@ -1267,28 +1290,53 @@ def _build_endpoint_linkage(
         transport_hints: list[str] = []
         confidences: list[str] = []
         category_counts: dict[str, int] = {}
+        api_like_count = 0
+        graphql_like_count = 0
+        auth_like_count = 0
+        login_like_count = 0
+        admin_like_count = 0
+        upload_like_count = 0
+        php_like_count = 0
+        route_like_count = 0
         internal_hint_count = 0
         external_hint_count = 0
         for item in sorted(candidates, key=_candidate_sort_key):
+            semantics = _endpoint_candidate_final_semantics(item)
             identity = _endpoint_candidate_identity(item)
             candidate_value = str(item.get("value") or "")
             normalized_value = str(item.get("normalized_value") or "")
             if identity and identity not in seen_identities:
                 seen_identities.add(identity)
                 candidate_values.append((candidate_value or normalized_value)[:180])
-            category = str(item.get("category") or "")
+            category = str(semantics.get("category") or "")
             categories.append(category)
-            transport_hints.append(str(item.get("transport_hint") or ""))
-            confidences.append(str(item.get("confidence") or ""))
+            transport_hints.append(str(semantics.get("transport_hint") or ""))
+            confidences.append(str(semantics.get("confidence") or ""))
             category_counts[category] = category_counts.get(category, 0) + 1
-            if bool(item.get("internal_hint")):
+            if bool(semantics.get("api_like")):
+                api_like_count += 1
+            if bool(semantics.get("graphql_like")):
+                graphql_like_count += 1
+            if bool(semantics.get("auth_like")):
+                auth_like_count += 1
+            if bool(semantics.get("login_like")):
+                login_like_count += 1
+            if bool(semantics.get("admin_like")):
+                admin_like_count += 1
+            if bool(semantics.get("upload_like")):
+                upload_like_count += 1
+            if bool(semantics.get("php_like")):
+                php_like_count += 1
+            if bool(semantics.get("route_like")):
+                route_like_count += 1
+            if bool(semantics.get("internal_hint")):
                 internal_hint_count += 1
-            if bool(item.get("external_hint")):
+            if bool(semantics.get("external_hint")):
                 external_hint_count += 1
 
         categories_present = _stable_unique_sorted(categories, _ENDPOINT_CATEGORY_ORDER)
-        transport_hints_present = _stable_unique_sorted(transport_hints)
-        confidences_present = _stable_unique_sorted(confidences)
+        transport_hints_present = _stable_unique_sorted(transport_hints, order=("fetch", "axios", "xhr", "string_literal", "unknown"))
+        confidences_present = _stable_unique_sorted(confidences, order=("low", "medium", "high"))
         candidate_values = sorted(candidate_values)
         top_category = ""
         if category_counts:
@@ -1314,14 +1362,14 @@ def _build_endpoint_linkage(
                 "confidences_present": confidences_present,
                 "internal_hint_count": internal_hint_count,
                 "external_hint_count": external_hint_count,
-                "api_like_count": category_counts.get("api", 0),
-                "graphql_like_count": category_counts.get("graphql", 0),
-                "auth_like_count": category_counts.get("auth", 0),
-                "login_like_count": category_counts.get("login", 0),
-                "admin_like_count": category_counts.get("admin", 0),
-                "upload_like_count": category_counts.get("upload", 0),
-                "php_like_count": category_counts.get("php", 0),
-                "route_like_count": category_counts.get("route", 0) + category_counts.get("relative_url", 0) + category_counts.get("absolute_url", 0),
+                "api_like_count": api_like_count,
+                "graphql_like_count": graphql_like_count,
+                "auth_like_count": auth_like_count,
+                "login_like_count": login_like_count,
+                "admin_like_count": admin_like_count,
+                "upload_like_count": upload_like_count,
+                "php_like_count": php_like_count,
+                "route_like_count": route_like_count,
                 "top_category": top_category,
                 "linkage_key": linkage_key,
             }
@@ -1343,10 +1391,6 @@ def _derive_endpoint_linkage_summary(linkage_items: list[dict[str, Any]], base_h
     )
     candidate_counts = [int(item.get("unique_candidate_count") or 0) for item in final_items]
 
-    def _has_category(item: dict[str, Any], *categories: str) -> bool:
-        present = {str(value or "") for value in item.get("categories_present") or []}
-        return any(category in present for category in categories)
-
     summary["endpoint_linkage_total"] = len(final_items)
     summary["endpoint_linkage_with_candidates"] = sum(1 for count in candidate_counts if count > 0)
     summary["endpoint_linkage_unique_sources"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in final_items})
@@ -1367,13 +1411,13 @@ def _derive_endpoint_linkage_summary(linkage_items: list[dict[str, Any]], base_h
     summary["endpoint_linkage_internal_hint_sources"] = sum(1 for item in final_items if int(item.get("internal_hint_count") or 0) > 0)
     summary["endpoint_linkage_external_hint_sources"] = sum(1 for item in final_items if int(item.get("external_hint_count") or 0) > 0)
     summary["endpoint_linkage_multi_candidate_sources"] = sum(1 for count in candidate_counts if count > 1)
-    summary["endpoint_linkage_api_sources"] = sum(1 for item in final_items if _has_category(item, "api"))
-    summary["endpoint_linkage_graphql_sources"] = sum(1 for item in final_items if _has_category(item, "graphql"))
-    summary["endpoint_linkage_auth_sources"] = sum(1 for item in final_items if _has_category(item, "auth"))
-    summary["endpoint_linkage_login_sources"] = sum(1 for item in final_items if _has_category(item, "login"))
-    summary["endpoint_linkage_admin_sources"] = sum(1 for item in final_items if _has_category(item, "admin"))
-    summary["endpoint_linkage_php_sources"] = sum(1 for item in final_items if _has_category(item, "php"))
-    summary["endpoint_linkage_route_sources"] = sum(1 for item in final_items if _has_category(item, "route", "relative_url", "absolute_url"))
+    summary["endpoint_linkage_api_sources"] = sum(1 for item in final_items if int(item.get("api_like_count") or 0) > 0)
+    summary["endpoint_linkage_graphql_sources"] = sum(1 for item in final_items if int(item.get("graphql_like_count") or 0) > 0)
+    summary["endpoint_linkage_auth_sources"] = sum(1 for item in final_items if int(item.get("auth_like_count") or 0) > 0)
+    summary["endpoint_linkage_login_sources"] = sum(1 for item in final_items if int(item.get("login_like_count") or 0) > 0)
+    summary["endpoint_linkage_admin_sources"] = sum(1 for item in final_items if int(item.get("admin_like_count") or 0) > 0)
+    summary["endpoint_linkage_php_sources"] = sum(1 for item in final_items if int(item.get("php_like_count") or 0) > 0)
+    summary["endpoint_linkage_route_sources"] = sum(1 for item in final_items if int(item.get("route_like_count") or 0) > 0)
     summary["endpoint_linkage_max_candidates_per_source"] = max(candidate_counts, default=0)
     summary["endpoint_linkage_avg_candidates_per_source"] = (
         float(sum(candidate_counts) / len(final_items)) if final_items else 0.0
