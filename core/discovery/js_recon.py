@@ -956,6 +956,30 @@ def _candidate_sort_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
     )
 
 
+def _stable_unique_sorted(values: list[str], order: tuple[str, ...] = ()) -> list[str]:
+    seen = {str(value or "").strip() for value in values if str(value or "").strip()}
+    return sorted(seen, key=lambda value: (order.index(value) if value in order else len(order), value))
+
+
+def _endpoint_candidate_identity(candidate: dict[str, Any]) -> str:
+    dedupe_key = str(candidate.get("dedupe_key") or "").strip()
+    if dedupe_key:
+        return dedupe_key
+    parts = (
+        str(candidate.get("normalized_value") or "").strip(),
+        str(candidate.get("category") or "").strip(),
+        str(candidate.get("host") or "").strip().lower(),
+        str(candidate.get("path") or "").strip().lower(),
+    )
+    return "|".join(parts)
+
+
+def _linkage_source_label(source_kind: str, source_ref: str) -> str:
+    if source_kind == "inline_js" and re.fullmatch(r"[a-fA-F0-9]{12,40}", source_ref):
+        return f"inline:{source_ref[:12]}"
+    return source_ref[:120]
+
+
 def _build_endpoint_candidate(
     raw_value: str,
     source_kind: str,
@@ -1098,88 +1122,55 @@ def _collect_endpoint_candidates(
 def _build_endpoint_linkage(
     *,
     endpoint_candidates: list[dict[str, Any]],
-    external_scripts: list[dict[str, Any]],
-    inline_scripts: list[dict[str, Any]],
     page_sources: list[dict[str, Any]],
     base_host: str,
 ) -> tuple[list[dict[str, Any]], dict[str, int | float]]:
-    source_meta: dict[tuple[str, str], dict[str, str]] = {}
-    for script in external_scripts:
-        src = str(script.get("src") or "").strip()
-        absolute_url = str(script.get("absolute_url") or "").strip()
-        source_ref = absolute_url or src
-        if not source_ref:
-            continue
-        common_meta = {
-            "source_page_url": str(script.get("source_page_url") or ""),
-            "source_page_host": str(script.get("source_page_host") or ""),
-            "source_page_path": str(script.get("source_page_path") or ""),
-        }
-        source_meta[("script_src", source_ref)] = {"source_label": src or absolute_url, **common_meta}
-        source_meta[("external_js", source_ref)] = {"source_label": absolute_url or src, **common_meta}
-    for inline in inline_scripts:
-        sha1_value = str(inline.get("sha1") or "").strip()
-        if not sha1_value:
-            continue
-        source_meta[("inline_js", sha1_value)] = {
-            "source_page_url": str(inline.get("source_page_url") or ""),
-            "source_page_host": str(inline.get("source_page_host") or ""),
-            "source_page_path": str(inline.get("source_page_path") or ""),
-            "source_label": f"inline:{sha1_value[:12]}",
-        }
-    for page in page_sources:
-        page_url = str(page.get("page_url") or "").strip()
-        if not page_url:
-            continue
-        source_meta[("other existing passive source", page_url)] = {
-            "source_page_url": page_url,
-            "source_page_host": str(page.get("page_host") or ""),
-            "source_page_path": str(page.get("page_path") or ""),
-            "source_label": page_url,
-        }
-
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for candidate in endpoint_candidates:
-        source_kind = str(candidate.get("source_kind") or "other existing passive source")
-        source_ref = str(candidate.get("source_ref") or "")
+        source_kind = str(candidate.get("source_kind") or "other existing passive source").strip()
+        source_ref = str(candidate.get("source_ref") or "").strip()
         if not source_ref:
-            source_ref = str(candidate.get("source_page_url") or "")
+            source_ref = str(candidate.get("value") or candidate.get("normalized_value") or "")
         grouped.setdefault((source_kind, source_ref), []).append(candidate)
 
+    page = page_sources[0] if page_sources else {}
+    source_page_url = str(page.get("page_url") or "").strip()
+    source_page_host = str(page.get("page_host") or "").strip().lower()
+    source_page_path = str(page.get("page_path") or "").strip()
     linkage_items: list[dict[str, Any]] = []
     for source_kind, source_ref in sorted(grouped.keys(), key=lambda item: (item[0], item[1])):
         candidates = grouped.get((source_kind, source_ref), [])
-        meta = source_meta.get((source_kind, source_ref), {})
-        source_page_url = str(meta.get("source_page_url") or "")
-        source_page_host = str(meta.get("source_page_host") or "")
-        source_page_path = str(meta.get("source_page_path") or "")
-        if not source_page_url and page_sources:
-            source_page_url = str(page_sources[0].get("page_url") or "")
-            source_page_host = source_page_host or str(page_sources[0].get("page_host") or "")
-            source_page_path = source_page_path or str(page_sources[0].get("page_path") or "")
-        source_label = str(meta.get("source_label") or "") or source_ref[:120]
+        source_label = _linkage_source_label(source_kind, source_ref)
 
-        seen_values: set[str] = set()
+        seen_identities: set[str] = set()
         candidate_values: list[str] = []
-        categories_present: list[str] = []
+        categories: list[str] = []
+        transport_hints: list[str] = []
+        confidences: list[str] = []
         category_counts: dict[str, int] = {}
         internal_hint_count = 0
         external_hint_count = 0
         for item in sorted(candidates, key=_candidate_sort_key):
-            normalized_value = str(item.get("normalized_value") or "")
+            identity = _endpoint_candidate_identity(item)
             candidate_value = str(item.get("value") or "")
-            if normalized_value and normalized_value not in seen_values:
-                seen_values.add(normalized_value)
+            normalized_value = str(item.get("normalized_value") or "")
+            if identity and identity not in seen_identities:
+                seen_identities.add(identity)
                 candidate_values.append((candidate_value or normalized_value)[:180])
             category = str(item.get("category") or "")
-            if category and category not in categories_present:
-                categories_present.append(category)
+            categories.append(category)
+            transport_hints.append(str(item.get("transport_hint") or ""))
+            confidences.append(str(item.get("confidence") or ""))
             category_counts[category] = category_counts.get(category, 0) + 1
             if bool(item.get("internal_hint")):
                 internal_hint_count += 1
             if bool(item.get("external_hint")):
                 external_hint_count += 1
 
+        categories_present = _stable_unique_sorted(categories, _ENDPOINT_CATEGORY_ORDER)
+        transport_hints_present = _stable_unique_sorted(transport_hints)
+        confidences_present = _stable_unique_sorted(confidences)
+        candidate_values = sorted(candidate_values)
         top_category = ""
         if category_counts:
             top_category = sorted(
@@ -1198,8 +1189,10 @@ def _build_endpoint_linkage(
                 "source_label": source_label,
                 "candidate_values": candidate_values,
                 "candidate_count": len(candidates),
-                "unique_candidate_count": len(candidate_values),
+                "unique_candidate_count": len(seen_identities),
                 "categories_present": categories_present,
+                "transport_hints_present": transport_hints_present,
+                "confidences_present": confidences_present,
                 "internal_hint_count": internal_hint_count,
                 "external_hint_count": external_hint_count,
                 "api_like_count": category_counts.get("api", 0),
@@ -1207,6 +1200,7 @@ def _build_endpoint_linkage(
                 "auth_like_count": category_counts.get("auth", 0),
                 "login_like_count": category_counts.get("login", 0),
                 "admin_like_count": category_counts.get("admin", 0),
+                "upload_like_count": category_counts.get("upload", 0),
                 "php_like_count": category_counts.get("php", 0),
                 "route_like_count": category_counts.get("route", 0) + category_counts.get("relative_url", 0) + category_counts.get("absolute_url", 0),
                 "top_category": top_category,
@@ -1214,13 +1208,17 @@ def _build_endpoint_linkage(
             }
         )
 
+    return linkage_items, _derive_endpoint_linkage_summary(linkage_items, base_host)
+
+
+def _derive_endpoint_linkage_summary(linkage_items: list[dict[str, Any]], base_host: str) -> dict[str, int | float]:
     summary = _empty_endpoint_linkage_summary()
     summary["endpoint_linkage_total"] = len(linkage_items)
     summary["endpoint_linkage_with_candidates"] = sum(1 for item in linkage_items if int(item.get("candidate_count") or 0) > 0)
     summary["endpoint_linkage_unique_sources"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in linkage_items})
     summary["endpoint_linkage_inline_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") == "inline_js")
     summary["endpoint_linkage_external_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") in {"script_src", "external_js"})
-    summary["endpoint_linkage_internal_sources"] = sum(1 for item in linkage_items if str(item.get("source_page_host") or "").lower() == (base_host or ""))
+    summary["endpoint_linkage_internal_sources"] = sum(1 for item in linkage_items if str(item.get("source_page_host") or "").lower() == str(base_host or "").lower())
     summary["endpoint_linkage_multi_candidate_sources"] = sum(1 for item in linkage_items if int(item.get("unique_candidate_count") or 0) > 1)
     summary["endpoint_linkage_api_sources"] = sum(1 for item in linkage_items if int(item.get("api_like_count") or 0) > 0)
     summary["endpoint_linkage_graphql_sources"] = sum(1 for item in linkage_items if int(item.get("graphql_like_count") or 0) > 0)
@@ -1233,7 +1231,7 @@ def _build_endpoint_linkage(
     summary["endpoint_linkage_avg_candidates_per_source"] = (
         float(sum(int(item.get("unique_candidate_count") or 0) for item in linkage_items) / len(linkage_items)) if linkage_items else 0.0
     )
-    return linkage_items, summary
+    return summary
 
 
 def empty_js_recon_contract() -> dict[str, Any]:
@@ -1652,8 +1650,6 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     )
     endpoint_linkage, endpoint_linkage_summary = _build_endpoint_linkage(
         endpoint_candidates=endpoint_candidates,
-        external_scripts=external_scripts,
-        inline_scripts=inline_scripts,
         page_sources=page_sources,
         base_host=base_host,
     )
