@@ -239,11 +239,15 @@ class UniversalViewerDialog(QDialog):
         cursor.setPosition(end, QTextCursor.KeepAnchor)
         self.viewer.setTextCursor(cursor)
         self.viewer.centerCursor()
+        current_cursor = QTextCursor(cursor)
+        cursor.clearSelection()
+        cursor.setPosition(start)
+        self.viewer.setTextCursor(cursor)
 
         current_selection = QTextEdit.ExtraSelection()
-        current_selection.cursor = cursor
+        current_selection.cursor = current_cursor
         current_fmt = QTextCharFormat()
-        current_fmt.setBackground(QColor("#F4D35E"))
+        current_fmt.setBackground(QColor("#FFFF00"))
         current_fmt.setForeground(QColor("#111111"))
         current_selection.format = current_fmt
 
@@ -257,8 +261,8 @@ class UniversalViewerDialog(QDialog):
             secondary_selection = QTextEdit.ExtraSelection()
             secondary_selection.cursor = secondary_cursor
             secondary_fmt = QTextCharFormat()
-            secondary_fmt.setBackground(QColor("#B58E00"))
-            secondary_fmt.setForeground(QColor("#F5F5F5"))
+            secondary_fmt.setBackground(QColor("#FFA500"))
+            secondary_fmt.setForeground(QColor("#111111"))
             secondary_selection.format = secondary_fmt
             selections.append(secondary_selection)
 

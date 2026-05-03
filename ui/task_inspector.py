@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import json
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
@@ -17,7 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from dialogs.inspector_detail_dialog import InspectorDetailDialog
+from dialogs.universal_viewer_dialog import UniversalViewerDialog
 
 
 class InspectorValueLabel(QLabel):
@@ -36,7 +34,7 @@ class TaskInspectorPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._fields: dict[str, InspectorValueLabel] = {}
-        self._detail_payloads: dict[str, dict[str, str]] = {}
+        self._detail_payloads: dict[str, dict[str, Any]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -411,18 +409,6 @@ class TaskInspectorPanel(QWidget):
         return True
 
     @staticmethod
-    def _format_detail(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, (list, tuple, set)):
-            if all(not isinstance(item, (dict, list, tuple, set)) for item in value):
-                return "\n".join(str(item) for item in value)
-            return json.dumps(list(value), ensure_ascii=False, indent=2)
-        if isinstance(value, Mapping):
-            return json.dumps(dict(value), ensure_ascii=False, indent=2)
-        return str(value)
-
-    @staticmethod
     def _filter_candidates(candidates: Any, keyword: str) -> list[Any]:
         if not isinstance(candidates, list):
             return []
@@ -445,7 +431,7 @@ class TaskInspectorPanel(QWidget):
             label.setCursor(QCursor(Qt.IBeamCursor))
             return
 
-        self._detail_payloads[key] = {"title": title, "body": self._format_detail(data)}
+        self._detail_payloads[key] = {"title": title, "payload": data}
         label.setStyleSheet("color: #9ecbff; text-decoration: underline;")
         label.setCursor(QCursor(Qt.PointingHandCursor))
 
@@ -453,8 +439,16 @@ class TaskInspectorPanel(QWidget):
         detail = self._detail_payloads.get(field_key)
         if not detail:
             return
-        body = detail.get("body", "").strip()
-        if not body:
+        payload = detail.get("payload")
+        if not self._has_detail_payload(payload):
             return
-        dialog = InspectorDetailDialog(detail.get("title", "Inspector detail"), body, self)
+        title = str(detail.get("title") or "Inspector detail")
+        dialog = UniversalViewerDialog(
+            payload,
+            self,
+            title=title,
+            save_dialog_title=f"Save {title}",
+            pretty_default_name="inspector_detail.json",
+            raw_default_name="inspector_detail.raw.json",
+        )
         dialog.exec()
