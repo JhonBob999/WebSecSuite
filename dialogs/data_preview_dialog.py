@@ -39,6 +39,7 @@ class DataPreviewDialog(QDialog):
         self.fetch_selected = fetch_selected
         self._records: list[dict] = []
         self._columns: list[str] = []
+        self._column_widths: dict[str, int] = {}
 
         # signals
         self.ui.btnLoadAll.clicked.connect(self.on_load_all)
@@ -100,6 +101,7 @@ class DataPreviewDialog(QDialog):
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
         records = xb.normalize_preview_rows(records)
+        self._column_widths.update(self._capture_column_widths())
 
         # 2) Reset таблицы (жёстко)
         t.setSortingEnabled(False)
@@ -145,10 +147,31 @@ class DataPreviewDialog(QDialog):
                 t.setItem(row, col, item)
 
         self._apply_column_resize_policy(keys_order)
+        self._restore_column_widths(keys_order)
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
         self._update_info_label()
+
+    def _capture_column_widths(self) -> dict[str, int]:
+        t = self.ui.tablePreview
+        widths: dict[str, int] = {}
+        for idx in range(t.columnCount()):
+            item = t.horizontalHeaderItem(idx)
+            column = item.text() if item else ""
+            width = t.columnWidth(idx)
+            if column and width > 0:
+                widths[column] = width
+        return widths
+
+    def _restore_column_widths(self, columns: list[str]):
+        t = self.ui.tablePreview
+        header = t.horizontalHeader()
+        for idx, column in enumerate(columns):
+            width = self._column_widths.get(column)
+            if width:
+                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+                t.setColumnWidth(idx, width)
 
     def _apply_column_resize_policy(self, columns: list[str]):
         t = self.ui.tablePreview
