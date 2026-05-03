@@ -1012,6 +1012,35 @@ def _build_endpoint_candidate(
     }
 
 
+def _derive_endpoint_candidate_summary(endpoint_candidates: list[dict[str, Any]]) -> dict[str, int]:
+    summary = _empty_endpoint_candidate_summary()
+    summary["endpoint_candidates_total"] = len(endpoint_candidates)
+    summary["endpoint_candidates_unique"] = len(endpoint_candidates)
+    for item in endpoint_candidates:
+        category = str(item.get("category") or "")
+        if category == "api":
+            summary["endpoint_candidates_api_like"] += 1
+        if category == "graphql":
+            summary["endpoint_candidates_graphql_like"] += 1
+        if category == "auth":
+            summary["endpoint_candidates_auth_like"] += 1
+        if category == "login":
+            summary["endpoint_candidates_login_like"] += 1
+        if category == "admin":
+            summary["endpoint_candidates_admin_like"] += 1
+        if category == "php":
+            summary["endpoint_candidates_php_like"] += 1
+        if bool(item.get("is_absolute")):
+            summary["endpoint_candidates_absolute"] += 1
+        if bool(item.get("is_relative")):
+            summary["endpoint_candidates_relative"] += 1
+        if bool(item.get("internal_hint")):
+            summary["endpoint_candidates_internal_hint"] += 1
+        if bool(item.get("external_hint")):
+            summary["endpoint_candidates_external_hint"] += 1
+    return summary
+
+
 def _collect_endpoint_candidates(
     *,
     base_host: str,
@@ -1020,15 +1049,12 @@ def _collect_endpoint_candidates(
     inline_raw_items: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     candidates_by_key: dict[str, dict[str, Any]] = {}
-    raw_total = 0
 
     def _put(candidate: dict[str, Any] | None) -> None:
-        nonlocal raw_total
         if not candidate:
             return
         if _should_filter_endpoint_candidate(candidate):
             return
-        raw_total += 1
         key = str(candidate.get("dedupe_key") or "")
         if not key or key in candidates_by_key:
             return
@@ -1065,31 +1091,7 @@ def _collect_endpoint_candidates(
             _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "quoted_endpoint_hint"))
 
     endpoint_candidates = sorted(candidates_by_key.values(), key=_candidate_sort_key)
-    summary = _empty_endpoint_candidate_summary()
-    summary["endpoint_candidates_total"] = raw_total
-    summary["endpoint_candidates_unique"] = len(endpoint_candidates)
-    for item in endpoint_candidates:
-        category = str(item.get("category") or "")
-        if category == "api":
-            summary["endpoint_candidates_api_like"] += 1
-        if category == "graphql":
-            summary["endpoint_candidates_graphql_like"] += 1
-        if category == "auth":
-            summary["endpoint_candidates_auth_like"] += 1
-        if category == "login":
-            summary["endpoint_candidates_login_like"] += 1
-        if category == "admin":
-            summary["endpoint_candidates_admin_like"] += 1
-        if category == "php":
-            summary["endpoint_candidates_php_like"] += 1
-        if bool(item.get("is_absolute")):
-            summary["endpoint_candidates_absolute"] += 1
-        if bool(item.get("is_relative")):
-            summary["endpoint_candidates_relative"] += 1
-        if bool(item.get("internal_hint")):
-            summary["endpoint_candidates_internal_hint"] += 1
-        if bool(item.get("external_hint")):
-            summary["endpoint_candidates_external_hint"] += 1
+    summary = _derive_endpoint_candidate_summary(endpoint_candidates)
     return endpoint_candidates, summary
 
 
