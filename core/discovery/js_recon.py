@@ -724,6 +724,20 @@ def _looks_like_asset_path(value: str, normalized_value: str, path: str, host: s
     return any(hint in combined for hint in _ASSET_UTILITY_HINTS)
 
 
+def _looks_like_external_host_in_relative_path(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate.startswith("/") or candidate.startswith(("//", "/./", "/../")):
+        return False
+    path_only = candidate.split("?", 1)[0].split("#", 1)[0]
+    first_segment = path_only.lstrip("/").split("/", 1)[0].strip().lower().strip(".")
+    if not first_segment or "." not in first_segment:
+        return False
+    return bool(
+        re.fullmatch(r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*){1,8}", first_segment)
+        and not first_segment.endswith(".js")
+    )
+
+
 def _collect_category_signals(value: str, normalized_value: str, path: str, host: str, evidence: str, source_kind: str) -> dict[str, bool]:
     lowered_path = str(path or "").lower()
     lowered_value = str(value or "").lower()
@@ -742,6 +756,8 @@ def _collect_category_signals(value: str, normalized_value: str, path: str, host
     auth = any(token in haystack for token in ("/auth", "register", "signup", "sign-up", "session", "reset", "password", "oauth", "token"))
     admin = any(token in haystack for token in ("/admin", "/backend", "dashboard", "controlpanel", "cpanel", "/root"))
     upload = any(token in haystack for token in ("/upload", "upload", "multipart", "formdata", "file/upload", "attachment"))
+    if upload and _looks_like_asset_path(value, normalized_value, path, host):
+        upload = False
     php = ".php" in (lowered_path or lowered_normalized or lowered_value)
     xhr = any(token in haystack for token in ("fetch", "axios", "xmlhttprequest"))
     return {
@@ -917,6 +933,11 @@ def _should_filter_endpoint_candidate(candidate: dict[str, Any]) -> bool:
     value = str(candidate.get("value") or "")
     lowered = str(candidate.get("normalized_value") or "")
     if not value or not lowered:
+        return True
+    source_kind = str(candidate.get("source_kind") or "").lower()
+    if source_kind in {"script_src", "external_js"} and _looks_like_asset_path(value, lowered, str(candidate.get("path") or ""), str(candidate.get("host") or "")):
+        return True
+    if (category in {"relative_url", "route"} or bool(candidate.get("is_relative"))) and _looks_like_external_host_in_relative_path(value):
         return True
     if category not in {"relative_url", "route"} and not bool(candidate.get("is_relative")):
         return False
