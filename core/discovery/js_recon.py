@@ -163,6 +163,12 @@ def _empty_endpoint_linkage_summary() -> dict[str, int | float]:
         "endpoint_linkage_inline_sources": 0,
         "endpoint_linkage_external_sources": 0,
         "endpoint_linkage_internal_sources": 0,
+        "endpoint_linkage_inline_js_sources": 0,
+        "endpoint_linkage_external_script_sources": 0,
+        "endpoint_linkage_internal_page_sources": 0,
+        "endpoint_linkage_external_page_sources": 0,
+        "endpoint_linkage_internal_hint_sources": 0,
+        "endpoint_linkage_external_hint_sources": 0,
         "endpoint_linkage_multi_candidate_sources": 0,
         "endpoint_linkage_api_sources": 0,
         "endpoint_linkage_graphql_sources": 0,
@@ -1213,24 +1219,55 @@ def _build_endpoint_linkage(
 
 def _derive_endpoint_linkage_summary(linkage_items: list[dict[str, Any]], base_host: str) -> dict[str, int | float]:
     summary = _empty_endpoint_linkage_summary()
-    summary["endpoint_linkage_total"] = len(linkage_items)
-    summary["endpoint_linkage_with_candidates"] = sum(1 for item in linkage_items if int(item.get("candidate_count") or 0) > 0)
-    summary["endpoint_linkage_unique_sources"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in linkage_items})
-    summary["endpoint_linkage_inline_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") == "inline_js")
-    summary["endpoint_linkage_external_sources"] = sum(1 for item in linkage_items if str(item.get("source_kind") or "") in {"script_src", "external_js"})
-    summary["endpoint_linkage_internal_sources"] = sum(1 for item in linkage_items if str(item.get("source_page_host") or "").lower() == str(base_host or "").lower())
-    summary["endpoint_linkage_multi_candidate_sources"] = sum(1 for item in linkage_items if int(item.get("unique_candidate_count") or 0) > 1)
-    summary["endpoint_linkage_api_sources"] = sum(1 for item in linkage_items if int(item.get("api_like_count") or 0) > 0)
-    summary["endpoint_linkage_graphql_sources"] = sum(1 for item in linkage_items if int(item.get("graphql_like_count") or 0) > 0)
-    summary["endpoint_linkage_auth_sources"] = sum(1 for item in linkage_items if int(item.get("auth_like_count") or 0) > 0)
-    summary["endpoint_linkage_login_sources"] = sum(1 for item in linkage_items if int(item.get("login_like_count") or 0) > 0)
-    summary["endpoint_linkage_admin_sources"] = sum(1 for item in linkage_items if int(item.get("admin_like_count") or 0) > 0)
-    summary["endpoint_linkage_php_sources"] = sum(1 for item in linkage_items if int(item.get("php_like_count") or 0) > 0)
-    summary["endpoint_linkage_route_sources"] = sum(1 for item in linkage_items if int(item.get("route_like_count") or 0) > 0)
-    summary["endpoint_linkage_max_candidates_per_source"] = max((int(item.get("unique_candidate_count") or 0) for item in linkage_items), default=0)
-    summary["endpoint_linkage_avg_candidates_per_source"] = (
-        float(sum(int(item.get("unique_candidate_count") or 0) for item in linkage_items) / len(linkage_items)) if linkage_items else 0.0
+    normalized_base_host = str(base_host or "").strip().lower()
+    final_items = sorted(
+        linkage_items,
+        key=lambda item: (
+            str(item.get("source_kind") or ""),
+            str(item.get("source_ref") or ""),
+            str(item.get("linkage_key") or ""),
+        ),
     )
+    candidate_counts = [int(item.get("unique_candidate_count") or 0) for item in final_items]
+
+    def _has_category(item: dict[str, Any], *categories: str) -> bool:
+        present = {str(value or "") for value in item.get("categories_present") or []}
+        return any(category in present for category in categories)
+
+    summary["endpoint_linkage_total"] = len(final_items)
+    summary["endpoint_linkage_with_candidates"] = sum(1 for count in candidate_counts if count > 0)
+    summary["endpoint_linkage_unique_sources"] = len({(str(item.get("source_kind") or ""), str(item.get("source_ref") or "")) for item in final_items})
+    summary["endpoint_linkage_inline_js_sources"] = sum(1 for item in final_items if str(item.get("source_kind") or "") == "inline_js")
+    summary["endpoint_linkage_external_script_sources"] = sum(1 for item in final_items if str(item.get("source_kind") or "") in {"script_src", "external_js"})
+    summary["endpoint_linkage_internal_page_sources"] = sum(
+        1
+        for item in final_items
+        if normalized_base_host and str(item.get("source_page_host") or "").strip().lower() == normalized_base_host
+    )
+    summary["endpoint_linkage_external_page_sources"] = sum(
+        1
+        for item in final_items
+        if normalized_base_host
+        and str(item.get("source_page_host") or "").strip()
+        and str(item.get("source_page_host") or "").strip().lower() != normalized_base_host
+    )
+    summary["endpoint_linkage_internal_hint_sources"] = sum(1 for item in final_items if int(item.get("internal_hint_count") or 0) > 0)
+    summary["endpoint_linkage_external_hint_sources"] = sum(1 for item in final_items if int(item.get("external_hint_count") or 0) > 0)
+    summary["endpoint_linkage_multi_candidate_sources"] = sum(1 for count in candidate_counts if count > 1)
+    summary["endpoint_linkage_api_sources"] = sum(1 for item in final_items if _has_category(item, "api"))
+    summary["endpoint_linkage_graphql_sources"] = sum(1 for item in final_items if _has_category(item, "graphql"))
+    summary["endpoint_linkage_auth_sources"] = sum(1 for item in final_items if _has_category(item, "auth"))
+    summary["endpoint_linkage_login_sources"] = sum(1 for item in final_items if _has_category(item, "login"))
+    summary["endpoint_linkage_admin_sources"] = sum(1 for item in final_items if _has_category(item, "admin"))
+    summary["endpoint_linkage_php_sources"] = sum(1 for item in final_items if _has_category(item, "php"))
+    summary["endpoint_linkage_route_sources"] = sum(1 for item in final_items if _has_category(item, "route", "relative_url", "absolute_url"))
+    summary["endpoint_linkage_max_candidates_per_source"] = max(candidate_counts, default=0)
+    summary["endpoint_linkage_avg_candidates_per_source"] = (
+        float(sum(candidate_counts) / len(final_items)) if final_items else 0.0
+    )
+    summary["endpoint_linkage_inline_sources"] = summary["endpoint_linkage_inline_js_sources"]
+    summary["endpoint_linkage_external_sources"] = summary["endpoint_linkage_external_script_sources"]
+    summary["endpoint_linkage_internal_sources"] = summary["endpoint_linkage_internal_page_sources"]
     return summary
 
 
