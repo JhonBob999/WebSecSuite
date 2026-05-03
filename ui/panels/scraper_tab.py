@@ -2101,28 +2101,12 @@ class ScraperTabController(QWidget):
         timings = payload.get("timings", {}) or {}
         self.set_time_cell(row, timings.get("request_ms"))
 
-        # Подсказка по редиректам в статусе
-        redirects = payload.get("redirect_chain", []) or []
-        st_item = self.ui.taskTable.item(row, Col.Status)
-        if st_item:
-            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
-
-
         params = dict(getattr(task, "params", {}) or {}) if task else {}
         self.set_cookies_cell(row, params, url_val)
 
 
-        # 4) >>> ЗАПОЛНЯЕМ КОЛОНКУ Results <<<
-        # краткое резюме в ячейку
         summary = self._format_result_short(payload)   # уже есть у тебя
-        # красивый JSON в tooltip (если нет хелпера, можно через json.dumps)
-        try:
-            import json
-            tooltip = json.dumps(payload, ensure_ascii=False, indent=2)
-        except Exception:
-            tooltip = str(payload)
-
-        self.set_results_cell(row, summary, tooltip)
+        self.set_results_cell(row, summary, None)
         if self.ui.taskTable.currentRow() == row:
             self._refresh_task_inspector_for_current()
 
