@@ -80,6 +80,7 @@ _THIRD_PARTY_NOISE_HOST_HINTS = (
     "amplitude.",
     "fullstory.",
     "sentry.io",
+    "chatra.io",
     "intercom.",
     "drift.",
     "zendesk.",
@@ -102,6 +103,7 @@ _THIRD_PARTY_NOISE_PATH_SEGMENTS = {
     "widget",
     "widgets",
 }
+_THIRD_PARTY_CHAT_WIDGET_FILENAMES = {"chatra.js", "widget.js", "embed.js", "loader.js"}
 _HTML_TAG_NOISE = {
     "a",
     "body",
@@ -837,6 +839,8 @@ def _looks_like_third_party_noise_candidate(candidate: dict[str, Any]) -> bool:
     if any(hint in host for hint in _THIRD_PARTY_NOISE_HOST_HINTS):
         return True
     if segments.intersection(_THIRD_PARTY_NOISE_PATH_SEGMENTS):
+        return True
+    if filename in _THIRD_PARTY_CHAT_WIDGET_FILENAMES and any(token in combined for token in ("chat", "chatra", "intercom", "tawk", "widget", "embed")):
         return True
     if filename and re.search(r"(?:embed|widget|loader|tracking|analytics|beacon|pixel)(?:[-_.].*)?\.(?:js|mjs)$", filename):
         return True
