@@ -780,10 +780,8 @@ def _collect_category_signals(value: str, normalized_value: str, path: str, host
 
 def _normalize_endpoint_category(category: str, is_absolute: bool, is_relative: bool) -> str:
     normalized = str(category or "").strip().lower()
-    if normalized in {"graphql", "api", "auth", "admin", "upload", "absolute_url", "relative_url", "route", "unknown"}:
+    if normalized in {"graphql", "api", "login", "auth", "admin", "upload", "php", "xhr_hint", "absolute_url", "relative_url", "route", "unknown"}:
         return normalized
-    if normalized in {"login"}:
-        return "auth"
     if is_absolute:
         return "absolute_url"
     if is_relative:
@@ -804,14 +802,39 @@ def _derive_transport_hint(evidence: str, source_kind: str) -> str:
     return "unknown"
 
 
-def _derive_endpoint_confidence(endpoint_category: str, signals: dict[str, bool], transport_hint: str, evidence: str) -> str:
-    if endpoint_category in {"graphql", "api", "auth", "admin", "upload"} and transport_hint in {"fetch", "axios", "xhr"}:
+def _derive_endpoint_confidence(
+    endpoint_category: str,
+    signals: dict[str, bool],
+    transport_hint: str,
+    evidence: str,
+    evidence_sources: list[str] | None = None,
+) -> str:
+    endpoint_category = str(endpoint_category or "unknown")
+    transport_hint = str(transport_hint or "unknown")
+    evidence_tokens = {str(source or "").strip().lower() for source in (evidence_sources or []) if str(source or "").strip()}
+    evidence_value = str(evidence or "").lower()
+    active_transport = transport_hint in {"fetch", "axios", "xhr"}
+    strong_signal_names = ("api", "graphql", "auth", "login", "admin", "upload", "php")
+    strong_signal_count = sum(1 for signal in strong_signal_names if signals.get(signal))
+    strong_category = endpoint_category in {"graphql", "api", "login", "auth", "admin", "upload", "php"}
+    extraction_evidence_count = sum(
+        1
+        for token in evidence_tokens
+        if token
+        and token
+        not in {"inline_js", "script_src", "external_js", "passive_js_pattern"}
+    )
+    has_aligned_evidence = strong_signal_count > 1 or extraction_evidence_count > 1
+
+    if active_transport and strong_category:
         return "high"
-    if endpoint_category in {"graphql", "api", "auth", "admin", "upload"}:
+    if active_transport and endpoint_category in {"absolute_url", "relative_url", "route", "xhr_hint"}:
         return "medium"
-    if endpoint_category in {"absolute_url", "relative_url", "route"} and transport_hint in {"fetch", "axios", "xhr"}:
+    if strong_category and has_aligned_evidence:
         return "medium"
-    if "quoted_route_literal" in str(evidence or "").lower() and not any(signals.get(k) for k in ("api", "graphql", "auth", "admin", "upload")):
+    if strong_category and any(signals.get(k) for k in strong_signal_names):
+        return "medium"
+    if "quoted_route_literal" in evidence_value and not any(signals.get(k) for k in strong_signal_names):
         return "low"
     return "low"
 
@@ -980,6 +1003,55 @@ def _endpoint_candidate_identity(candidate: dict[str, Any]) -> str:
     return "|".join(parts)
 
 
+def _merge_endpoint_candidate(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
+    existing["matched_signals"] = _stable_unique_sorted(
+        [*existing.get("matched_signals", []), *incoming.get("matched_signals", [])],
+        order=("graphql", "api", "login", "auth", "admin", "upload", "php"),
+    )
+    existing["evidence_sources"] = _stable_unique_sorted([*existing.get("evidence_sources", []), *incoming.get("evidence_sources", [])])
+
+
+def _polish_final_endpoint_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    value = str(candidate.get("value") or "")
+    normalized_value = str(candidate.get("normalized_value") or "")
+    path = str(candidate.get("path") or "")
+    host = str(candidate.get("host") or "")
+    evidence = str(candidate.get("evidence") or "passive_js_pattern")
+    source_kind = str(candidate.get("source_kind") or "other existing passive source")
+    is_absolute = bool(candidate.get("is_absolute"))
+    is_relative = bool(candidate.get("is_relative"))
+    signals = _collect_category_signals(value, normalized_value, path, host, evidence, source_kind)
+    for signal in candidate.get("matched_signals", []):
+        signal_name = str(signal or "").strip().lower()
+        if signal_name in signals:
+            signals[signal_name] = True
+    category = _classify_endpoint_candidate(value, normalized_value, path, host, evidence, source_kind)
+    endpoint_category = _normalize_endpoint_category(category, is_absolute=is_absolute, is_relative=is_relative)
+    evidence_sources = _stable_unique_sorted([*candidate.get("evidence_sources", []), source_kind, evidence])
+    transport_hint = _derive_transport_hint(" ".join(evidence_sources), source_kind)
+    matched_signals = _stable_unique_sorted(
+        [signal for signal in ("api", "graphql", "auth", "login", "admin", "upload", "php") if signals.get(signal)],
+        order=("graphql", "api", "login", "auth", "admin", "upload", "php"),
+    )
+    candidate.update(
+        {
+            "category": category,
+            "endpoint_category": endpoint_category,
+            "transport_hint": transport_hint,
+            "api_like": bool(signals.get("api")),
+            "auth_like": bool(signals.get("auth") or signals.get("login")),
+            "admin_like": bool(signals.get("admin")),
+            "upload_like": bool(signals.get("upload")),
+            "graphql_like": bool(signals.get("graphql")),
+            "matched_signals": matched_signals,
+            "evidence_sources": evidence_sources,
+            "reason": _build_endpoint_reason(endpoint_category, transport_hint, evidence),
+            "confidence": _derive_endpoint_confidence(endpoint_category, signals, transport_hint, evidence, evidence_sources),
+        }
+    )
+    return candidate
+
+
 def _linkage_source_label(source_kind: str, source_ref: str) -> str:
     if source_kind == "inline_js" and re.fullmatch(r"[a-fA-F0-9]{12,40}", source_ref):
         return f"inline:{source_ref[:12]}"
@@ -1086,7 +1158,10 @@ def _collect_endpoint_candidates(
         if _should_filter_endpoint_candidate(candidate):
             return
         key = str(candidate.get("dedupe_key") or "")
-        if not key or key in candidates_by_key:
+        if not key:
+            return
+        if key in candidates_by_key:
+            _merge_endpoint_candidate(candidates_by_key[key], candidate)
             return
         candidates_by_key[key] = candidate
 
@@ -1120,7 +1195,7 @@ def _collect_endpoint_candidates(
         for match in _JS_QUOTED_ENDPOINT_HINT_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "quoted_endpoint_hint"))
 
-    endpoint_candidates = sorted(candidates_by_key.values(), key=_candidate_sort_key)
+    endpoint_candidates = sorted((_polish_final_endpoint_candidate(candidate) for candidate in candidates_by_key.values()), key=_candidate_sort_key)
     summary = _derive_endpoint_candidate_summary(endpoint_candidates)
     return endpoint_candidates, summary
 
