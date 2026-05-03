@@ -25,10 +25,18 @@ _ENDPOINT_CATEGORY_ORDER: tuple[str, ...] = (
 _JS_ROUTE_QUOTED_RE = re.compile(r"(['\"])((?:https?://|/|\.\.?/)[^'\"\n]{1,512})\1")
 _JS_ABSOLUTE_RE = re.compile(r"https?://[^\s'\"<>]{3,1024}", re.IGNORECASE)
 _JS_RELATIVE_RE = re.compile(r"(?<![\w:])(?:/|\.\.?/)[^\s'\"<>]{1,512}")
-_JS_FETCH_CALL_RE = re.compile(r"\bfetch\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
-_JS_AXIOS_CALL_RE = re.compile(r"\baxios(?:\.[a-z]+)?\s*\(\s*(['\"])([^'\"\n]{1,512})\1", re.IGNORECASE)
+_JS_FETCH_CALL_RE = re.compile(r"\bfetch\s*\(\s*(?:new\s+Request\s*\(\s*)?(['\"`])([^'\"`\n]{1,512})\1", re.IGNORECASE)
+_JS_AXIOS_CALL_RE = re.compile(
+    r"\baxios(?:\s*\.\s*(?:request|get|post|put|patch|delete|head|options))?\s*\(\s*(['\"`])([^'\"`\n]{1,512})\1",
+    re.IGNORECASE,
+)
+_JS_AXIOS_CONFIG_URL_RE = re.compile(
+    r"\baxios(?:\s*\.\s*request)?\s*\(\s*\{[^{}]{0,1200}?\burl\s*:\s*(['\"`])([^'\"`\n]{1,512})\1",
+    re.IGNORECASE | re.DOTALL,
+)
+_JS_XHR_ASSIGN_RE = re.compile(r"\b(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s*=\s*new\s+XMLHttpRequest\s*\(", re.IGNORECASE)
 _JS_XHR_OPEN_RE = re.compile(
-    r"\b(?:xhr|xmlhttprequest\s*\(\s*\)?)\s*\.\s*open\s*\(\s*(['\"])(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)?\1\s*,\s*(['\"])([^'\"\n]{1,512})\2",
+    r"\b(?P<object>[A-Za-z_$][\w$]*|(?:new\s+)?XMLHttpRequest\s*\(\s*\))\s*\.\s*open\s*\(\s*(['\"`])(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\2\s*,\s*(['\"`])([^'\"`\n]{1,512})\3",
     re.IGNORECASE,
 )
 _JS_QUOTED_ENDPOINT_HINT_RE = re.compile(
@@ -975,6 +983,8 @@ def _should_filter_endpoint_candidate(candidate: dict[str, Any]) -> bool:
     lowered = str(candidate.get("normalized_value") or "")
     if not value or not lowered:
         return True
+    if "${" in value:
+        return True
     source_kind = str(candidate.get("source_kind") or "").lower()
     if source_kind in {"script_src", "external_js"} and _looks_like_asset_path(value, lowered, str(candidate.get("path") or ""), str(candidate.get("host") or "")):
         return True
@@ -1148,6 +1158,46 @@ def _build_endpoint_candidate(
     }
 
 
+def _is_static_transport_endpoint_argument(value: str) -> bool:
+    candidate = _clean_endpoint_candidate_value(value)
+    if not candidate or "${" in candidate:
+        return False
+    lowered = _normalize_endpoint_candidate_value(candidate)
+    if not lowered or lowered.startswith(("javascript:", "data:", "mailto:", "tel:")):
+        return False
+    if candidate.startswith(("http://", "https://", "/", "./", "../")):
+        return True
+    return _looks_like_meaningful_route(candidate, lowered)
+
+
+def _iter_transport_endpoint_arguments(text: str) -> list[tuple[str, str]]:
+    if not isinstance(text, str) or not text:
+        return []
+
+    xhr_vars = {"xhr"}
+    xhr_vars.update(match.group(1) for match in _JS_XHR_ASSIGN_RE.finditer(text) if match.group(1))
+    matches: list[tuple[int, str, str]] = []
+
+    for match in _JS_FETCH_CALL_RE.finditer(text):
+        matches.append((match.start(), match.group(2), "fetch_argument"))
+    for match in _JS_AXIOS_CALL_RE.finditer(text):
+        matches.append((match.start(), match.group(2), "axios_argument"))
+    for match in _JS_AXIOS_CONFIG_URL_RE.finditer(text):
+        matches.append((match.start(), match.group(2), "axios_config_url"))
+    for match in _JS_XHR_OPEN_RE.finditer(text):
+        object_name = str(match.group("object") or "").strip()
+        object_key = re.sub(r"\s+", "", object_name.lower())
+        if object_name not in xhr_vars and object_key not in {"xmlhttprequest()", "newxmlhttprequest()"}:
+            continue
+        matches.append((match.start(), match.group(4), "xhr_open_argument"))
+
+    return [
+        (value, evidence)
+        for _, value, evidence in sorted(matches, key=lambda item: (item[0], item[2], item[1]))
+        if _is_static_transport_endpoint_argument(value)
+    ]
+
+
 def _max_endpoint_confidence(confidences: list[str]) -> str:
     confidence_order = ("low", "medium", "high")
     ranked = [value for value in confidences if value in confidence_order]
@@ -1241,12 +1291,8 @@ def _collect_endpoint_candidates(
         if not text.strip():
             continue
         source_ref = inline_sha1 or source_page_url or f"inline_script_{idx}"
-        for match in _JS_FETCH_CALL_RE.finditer(text):
-            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "fetch_argument"))
-        for match in _JS_AXIOS_CALL_RE.finditer(text):
-            _put(_build_endpoint_candidate(match.group(2), "inline_js", source_ref, base_host, "axios_argument"))
-        for match in _JS_XHR_OPEN_RE.finditer(text):
-            _put(_build_endpoint_candidate(match.group(3), "inline_js", source_ref, base_host, "xhr_open_argument"))
+        for value, evidence in _iter_transport_endpoint_arguments(text):
+            _put(_build_endpoint_candidate(value, "inline_js", source_ref, base_host, evidence))
         for match in _JS_ABSOLUTE_RE.finditer(text):
             _put(_build_endpoint_candidate(match.group(0), "inline_js", source_ref, base_host, "absolute_url_literal", force_category="absolute_url"))
         for match in _JS_RELATIVE_RE.finditer(text):
