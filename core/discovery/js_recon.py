@@ -104,6 +104,37 @@ _THIRD_PARTY_NOISE_PATH_SEGMENTS = {
     "widgets",
 }
 _THIRD_PARTY_CHAT_WIDGET_FILENAMES = {"chatra.js", "widget.js", "embed.js", "loader.js"}
+_APP_SCRIPT_FILENAMES = {
+    "app.js",
+    "application.js",
+    "bundle.js",
+    "client.js",
+    "index.js",
+    "main.js",
+    "runtime.js",
+    "site.js",
+}
+_APP_SCRIPT_PATH_SEGMENTS = {
+    "app",
+    "apps",
+    "client",
+    "frontend",
+    "js",
+    "pages",
+    "scripts",
+    "src",
+}
+_PLATFORM_SCRIPT_PATH_SEGMENTS = _THIRD_PARTY_NOISE_PATH_SEGMENTS.union(
+    {
+        "captcha",
+        "challenge-platform",
+        "cdn-cgi",
+        "gtag",
+        "gtm",
+        "recaptcha",
+        "zaraz",
+    }
+)
 _HTML_TAG_NOISE = {
     "a",
     "body",
@@ -1575,6 +1606,10 @@ def empty_js_recon_contract() -> dict[str, Any]:
             "inline_total": 0,
             "internal_external_scripts": 0,
             "third_party_external_scripts": 0,
+            "app_relevant_external_scripts": 0,
+            "internal_app_scripts": 0,
+            "third_party_supporting_scripts": 0,
+            "low_value_platform_scripts": 0,
             "module_scripts": 0,
             "async_scripts": 0,
             "defer_scripts": 0,
@@ -1707,6 +1742,70 @@ def _library_and_version_hint(src: str, path: str, filename: str) -> tuple[str, 
     return "", ""
 
 
+def _looks_like_low_value_platform_script(host: str, path: str, filename: str, src: str) -> bool:
+    host_value = str(host or "").strip().lower()
+    path_value = str(path or "").strip().lower()
+    filename_value = str(filename or "").strip().lower()
+    combined = " ".join(part for part in (host_value, path_value, str(src or "").lower()) if part)
+    segments = {segment for segment in path_value.split("/") if segment}
+
+    if any(path_value.startswith(prefix) for prefix in _PLATFORM_CHALLENGE_PATH_PREFIXES):
+        return True
+    if any(hint in host_value for hint in _THIRD_PARTY_NOISE_HOST_HINTS):
+        return True
+    if segments.intersection(_PLATFORM_SCRIPT_PATH_SEGMENTS):
+        return True
+    if filename_value in _THIRD_PARTY_CHAT_WIDGET_FILENAMES and any(token in combined for token in ("chat", "intercom", "tawk", "widget", "embed")):
+        return True
+    return bool(re.search(r"(?:gtm|gtag|analytics|beacon|pixel|telemetry|tracking|widget|embed|loader|recaptcha)(?:[-_.].*)?\.(?:js|mjs)$", filename_value))
+
+
+def _derive_external_script_relevance(
+    *,
+    is_internal: bool,
+    host: str,
+    path: str,
+    filename: str,
+    src: str,
+    library_hint: str,
+    load_hint: str,
+) -> dict[str, Any]:
+    lowered_path = str(path or "").strip().lower()
+    lowered_filename = str(filename or "").strip().lower()
+    path_segments = {segment for segment in lowered_path.split("/") if segment}
+    low_value_platform = _looks_like_low_value_platform_script(host, path, filename, src)
+    third_party_supporting = bool(not is_internal and not low_value_platform)
+    internal_app_hint = bool(
+        is_internal
+        and not low_value_platform
+        and (
+            lowered_filename in _APP_SCRIPT_FILENAMES
+            or bool(re.search(r"(?:^|[-_.])(app|main|bundle|client|site|route|page|feature|chunk)(?:[-_.]|\d|$)", lowered_filename))
+            or bool(path_segments.intersection(_APP_SCRIPT_PATH_SEGMENTS))
+            or (not library_hint and load_hint in {"blocking", "defer"})
+        )
+    )
+    app_relevant = bool(internal_app_hint)
+
+    if app_relevant:
+        source_priority = "high"
+    elif low_value_platform:
+        source_priority = "low"
+    elif third_party_supporting:
+        source_priority = "medium"
+    elif is_internal:
+        source_priority = "medium"
+    else:
+        source_priority = "low"
+
+    return {
+        "source_priority": source_priority,
+        "app_relevant": app_relevant,
+        "third_party_supporting": third_party_supporting,
+        "low_value_platform": low_value_platform,
+    }
+
+
 def _contains_html_close_guard(text: str) -> bool:
     lowered = (text or "").lower()
     return any(marker in lowered for marker in ("<\\/script", "<\\\\/script", "<\\x2fscript"))
@@ -1780,6 +1879,10 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
     library_hinted_total = 0
     version_hinted_total = 0
     external_with_query_params_total = 0
+    app_relevant_external_total = 0
+    internal_app_total = 0
+    third_party_supporting_total = 0
+    low_value_platform_total = 0
 
     for item in parser.external:
         src = str(item.get("src") or "").strip()
@@ -1812,6 +1915,15 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         library_hint, version_hint = _library_and_version_hint(src, path, filename)
         query_param_names = sorted({name for name, _ in parse_qsl(query, keep_blank_values=True) if name})
         query_params_count = len(query_param_names)
+        source_relevance = _derive_external_script_relevance(
+            is_internal=is_internal,
+            host=host,
+            path=path,
+            filename=filename,
+            src=src,
+            library_hint=library_hint,
+            load_hint=load_hint,
+        )
 
         if is_internal:
             internal_total += 1
@@ -1834,6 +1946,14 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
             version_hinted_total += 1
         if query_params_count > 0:
             external_with_query_params_total += 1
+        if bool(source_relevance.get("app_relevant")):
+            app_relevant_external_total += 1
+            if is_internal:
+                internal_app_total += 1
+        if bool(source_relevance.get("third_party_supporting")):
+            third_party_supporting_total += 1
+        if bool(source_relevance.get("low_value_platform")):
+            low_value_platform_total += 1
 
         external_scripts.append(
             {
@@ -1851,6 +1971,7 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
                 "load_hint": load_hint,
                 "library_hint": library_hint,
                 "version_hint": version_hint,
+                **source_relevance,
                 "query_param_names": query_param_names,
                 "query_params_count": query_params_count,
                 "attrs": flags,
@@ -1990,6 +2111,10 @@ def collect_js_sources(html: str, base_url: str) -> dict[str, Any]:
         "inline_total": len(inline_scripts),
         "internal_external_scripts": internal_total,
         "third_party_external_scripts": max(0, external_total - internal_total),
+        "app_relevant_external_scripts": app_relevant_external_total,
+        "internal_app_scripts": internal_app_total,
+        "third_party_supporting_scripts": third_party_supporting_total,
+        "low_value_platform_scripts": low_value_platform_total,
         "module_scripts": module_total,
         "async_scripts": async_total,
         "defer_scripts": defer_total,
