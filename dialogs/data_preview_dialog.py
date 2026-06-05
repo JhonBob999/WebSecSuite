@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
     QLabel,
+    QLineEdit,
     QSizePolicy,
     QHeaderView,
 )
@@ -48,6 +49,7 @@ class DataPreviewDialog(QDialog):
         self.ui.btnRefresh.clicked.connect(self.on_refresh)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.lineSearch.textChanged.connect(self.on_filter_changed)
+        self.lineColumnSearch.textChanged.connect(self._apply_column_filter)
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
         self._update_info_label()
 
@@ -64,6 +66,14 @@ class DataPreviewDialog(QDialog):
         self.lblSearch.setObjectName("lblSearch")
         top_row.addWidget(self.lblSearch)
         top_row.addWidget(self.ui.lineSearch, 1)
+
+        self.lblColumnSearch = QLabel("Columns:", self)
+        self.lblColumnSearch.setObjectName("lblColumnSearch")
+        top_row.addWidget(self.lblColumnSearch)
+        self.lineColumnSearch = QLineEdit(self)
+        self.lineColumnSearch.setObjectName("lineColumnSearch")
+        self.lineColumnSearch.setPlaceholderText("Search columns...")
+        top_row.addWidget(self.lineColumnSearch, 1)
 
         self.lblInfo = QLabel("Rows: 0 | Visible: 0", self)
         self.lblInfo.setObjectName("lblInfo")
@@ -149,6 +159,7 @@ class DataPreviewDialog(QDialog):
 
         self._apply_column_resize_policy(keys_order)
         self._restore_column_widths()
+        self._apply_column_filter()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
@@ -373,6 +384,20 @@ class DataPreviewDialog(QDialog):
             tbl.setRowHidden(row, not visible)
         tbl.setUpdatesEnabled(True)
         self._update_info_label()
+
+    @Slot(str)
+    def _apply_column_filter(self, text: str | None = None):
+        if text is None:
+            text = self.lineColumnSearch.text() if hasattr(self, "lineColumnSearch") else ""
+
+        needle = (text or "").strip().lower()
+        tbl = self.ui.tablePreview
+        tbl.setUpdatesEnabled(False)
+        for col in range(tbl.columnCount()):
+            item = tbl.horizontalHeaderItem(col)
+            header_text = item.text().strip().lower() if item and item.text() else ""
+            tbl.setColumnHidden(col, bool(needle and needle not in header_text))
+        tbl.setUpdatesEnabled(True)
 
     # ---- dbl-click ----
     @Slot(int, int)
