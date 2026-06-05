@@ -258,7 +258,10 @@ class DataPreviewDialog(QDialog):
 
         self._apply_column_resize_policy(keys_order)
         self._restore_column_widths()
-        self._restore_column_order()
+        if preserve_layout:
+            self._restore_column_order()
+        else:
+            self._restore_default_column_order()
         self._apply_column_visibility_filters()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
@@ -314,6 +317,14 @@ class DataPreviewDialog(QDialog):
             if current_visual_idx != target_visual_idx:
                 header.moveSection(current_visual_idx, target_visual_idx)
             target_visual_idx += 1
+
+    def _restore_default_column_order(self):
+        t = self.ui.tablePreview
+        header = t.horizontalHeader()
+        for logical_idx in range(t.columnCount()):
+            current_visual_idx = header.visualIndex(logical_idx)
+            if current_visual_idx >= 0 and current_visual_idx != logical_idx:
+                header.moveSection(current_visual_idx, logical_idx)
 
     def _capture_column_widths(self):
         t = self.ui.tablePreview
