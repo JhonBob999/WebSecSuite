@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QComboBox,
     QMenu,
     QSizePolicy,
@@ -112,6 +113,7 @@ class DataPreviewDialog(QDialog):
         self.ui.btnLoadSelected.clicked.connect(self.on_load_selected)
         self.ui.btnRefresh.clicked.connect(self.on_refresh)
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
+        self.btnResetLayout.clicked.connect(self._reset_column_layout)
         self.ui.lineSearch.textChanged.connect(self.on_filter_changed)
         self.lineColumnSearch.textChanged.connect(self._apply_column_filter)
         self.comboColumnPreset.currentTextChanged.connect(
@@ -152,6 +154,10 @@ class DataPreviewDialog(QDialog):
         self.lineColumnSearch.setPlaceholderText("Search columns...")
         self.lineColumnSearch.setClearButtonEnabled(True)
         top_row.addWidget(self.lineColumnSearch, 1)
+
+        self.btnResetLayout = QPushButton("Reset layout", self)
+        self.btnResetLayout.setObjectName("btnResetLayout")
+        top_row.addWidget(self.btnResetLayout)
 
         self.lblColumnCount = QLabel("Columns: 0 / 0", self)
         self.lblColumnCount.setObjectName("lblColumnCount")
@@ -195,14 +201,15 @@ class DataPreviewDialog(QDialog):
             keys.update(r.keys())
         return xb.preview_column_order([{k: "" for k in keys}])
 
-    def _rebuild_table(self, records: list[dict] | None = None):
+    def _rebuild_table(self, records: list[dict] | None = None, preserve_layout: bool = True):
         """Перерисовать tablePreview по снапшоту/records (стабильно, без "плывущих" колонок)."""
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
         records = xb.normalize_preview_rows(records)
         self._preview_records = deepcopy(records)
-        self._capture_column_order()
-        self._capture_column_widths()
+        if preserve_layout:
+            self._capture_column_order()
+            self._capture_column_widths()
 
         # 2) Reset таблицы (жёстко)
         t.setSortingEnabled(False)
@@ -257,6 +264,13 @@ class DataPreviewDialog(QDialog):
         t.setSortingEnabled(True)
         self._columns = keys_order
         self._update_info_label()
+
+    @Slot()
+    def _reset_column_layout(self):
+        self._column_widths_by_name.clear()
+        self._column_order_by_name.clear()
+        self._rebuild_table(getattr(self, "_snapshot", []), preserve_layout=False)
+        self.on_filter_changed(self.ui.lineSearch.text())
 
     def _capture_column_order(self):
         t = self.ui.tablePreview
