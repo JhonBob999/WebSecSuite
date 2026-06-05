@@ -87,11 +87,13 @@ class UniversalViewerDialog(QDialog):
         self.btn_pretty = QPushButton("Pretty JSON", self)
         self.btn_raw = QPushButton("Raw JSON", self)
         self.btn_save = QPushButton("Save to file", self)
+        self.line_count_label = QLabel("Lines: 0", self)
         self.btn_close = QPushButton("Close", self)
         btn_row.addWidget(self.btn_copy)
         btn_row.addWidget(self.btn_pretty)
         btn_row.addWidget(self.btn_raw)
         btn_row.addWidget(self.btn_save)
+        btn_row.addWidget(self.line_count_label)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_close)
         root.addLayout(btn_row)
@@ -160,7 +162,11 @@ class UniversalViewerDialog(QDialog):
 
     def _refresh_text(self):
         self.viewer.setPlainText(self._json_text(pretty=self._pretty_mode))
+        self._update_line_count()
         self._rebuild_search_index()
+
+    def _update_line_count(self):
+        self.line_count_label.setText(f"Lines: {self.viewer.blockCount()}")
 
     def _show_pretty_json(self):
         self._pretty_mode = True
