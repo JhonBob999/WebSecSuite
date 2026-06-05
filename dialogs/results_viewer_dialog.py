@@ -64,6 +64,7 @@ class UniversalViewerDialog(QDialog):
         self.search_label = QLabel("Search:", self)
         self.search_input = QLineEdit(self)
         self.search_input.setPlaceholderText("Find in current results...")
+        self.search_input.setClearButtonEnabled(True)
         self.btn_prev = QPushButton("Prev", self)
         self.btn_next = QPushButton("Next", self)
         self.search_counter = QLabel("0 / 0", self)
