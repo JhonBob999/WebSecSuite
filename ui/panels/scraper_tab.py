@@ -702,15 +702,22 @@ class ScraperTabController(QWidget):
             task_status = getattr(task, "status", None)
             task_result = getattr(task, "result", None)
             fallback_result = self.task_results.get(task_id) if isinstance(self.task_results, dict) else None
+            result_payload = task_result if task_result is not None else fallback_result
+            status_text = self._session_status_text(task_status, status_item.text() if status_item else "")
 
             tasks.append({
                 "id": str(getattr(task, "id", task_id) or task_id),
                 "url": str(getattr(task, "url", "") or (url_item.text() if url_item else "")),
                 "params": self._session_task_params(task),
-                "status": self._session_status_text(task_status, status_item.text() if status_item else ""),
-                "progress": self._session_progress_value(getattr(task, "progress", 0)),
+                "status": status_text,
+                "progress": self._session_snapshot_progress(
+                    getattr(task, "progress", 0),
+                    status_text=status_text,
+                    result=result_payload,
+                    task=task,
+                ),
                 "created_at": getattr(task, "created_at", None),
-                "result": deepcopy(task_result if task_result is not None else fallback_result) if (task_result is not None or fallback_result is not None) else None,
+                "result": deepcopy(result_payload) if result_payload is not None else None,
             })
 
         return build_scraper_session(
@@ -738,6 +745,39 @@ class ScraperTabController(QWidget):
             return max(0, min(100, int(value)))
         except Exception:
             return 0
+
+    def _session_snapshot_progress(self, value, *, status_text: str = "", result=None, task=None) -> int:
+        progress = self._session_progress_value(value)
+        if progress >= 100:
+            return 100
+
+        status_key = self._session_status_key(status_text)
+        if status_key in {"done", "ok", "success", "successful", "completed", "complete"}:
+            return 100
+        if status_key in {"pending", "stopped", "notrun", "not run", "running", "paused", "failed", "error"}:
+            return progress
+
+        if self._session_result_looks_successful(result) and getattr(task, "finished_at", None):
+            return 100
+        return progress
+
+    def _session_status_key(self, status_text: str) -> str:
+        text = str(status_text or "").strip()
+        if text.startswith("TaskStatus."):
+            text = text.split(".", 1)[1]
+        text = re.sub(r"\s+\d{1,3}%?$", "", text).strip()
+        return text.strip().lower().replace("_", " ")
+
+    def _session_result_looks_successful(self, result) -> bool:
+        if not result:
+            return False
+        if isinstance(result, dict):
+            if result.get("error") or result.get("last_error"):
+                return False
+            status = result.get("status") or result.get("result_status")
+            if status and self._session_status_key(status) in {"failed", "error", "stopped"}:
+                return False
+        return True
 
     def _ask_session_save_path(self) -> str:
         ts = QDateTime.currentDateTimeUtc().toString("yyyyMMdd_hhmmss")
