@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QMenu,
     QPlainTextEdit,
     QTextEdit,
     QVBoxLayout,
@@ -80,6 +81,8 @@ class UniversalViewerDialog(QDialog):
         mono = QFont("Consolas")
         mono.setStyleHint(QFont.Monospace)
         self.viewer.setFont(mono)
+        self.viewer.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.viewer.customContextMenuRequested.connect(self._show_editor_context_menu)
         root.addWidget(self.viewer, 1)
 
         btn_row = QHBoxLayout()
@@ -183,6 +186,30 @@ class UniversalViewerDialog(QDialog):
             selected_text = cursor.selectedText().replace("\u2029", "\n")
             QGuiApplication.clipboard().setText(selected_text)
             return
+        QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
+
+    def _show_editor_context_menu(self, position):
+        cursor = self.viewer.textCursor()
+        menu = QMenu(self.viewer)
+
+        copy_selected = menu.addAction("Copy selected")
+        copy_selected.setEnabled(cursor.hasSelection())
+        copy_selected.triggered.connect(self._copy_selected_text)
+
+        menu.addAction("Copy all", self._copy_all_text)
+        menu.addAction("Select all", self.viewer.selectAll)
+        menu.addSeparator()
+        menu.addAction("Save to file", self._save_to_file)
+        menu.exec(self.viewer.mapToGlobal(position))
+
+    def _copy_selected_text(self):
+        cursor = self.viewer.textCursor()
+        if not cursor.hasSelection():
+            return
+        selected_text = cursor.selectedText().replace("\u2029", "\n")
+        QGuiApplication.clipboard().setText(selected_text)
+
+    def _copy_all_text(self):
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
 
     def _save_to_file(self):
