@@ -42,6 +42,8 @@ class UniversalViewerDialog(QDialog):
         self._default_save_stem = default_save_stem
 
         self.setWindowTitle(title)
+        self.setMinimumSize(720, 480)
+        self.setSizeGripEnabled(True)
         self.resize(980, 640)
 
         root = QVBoxLayout(self)
