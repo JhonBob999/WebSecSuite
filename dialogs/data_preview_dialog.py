@@ -116,6 +116,7 @@ class DataPreviewDialog(QDialog):
         )
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
         self._update_info_label()
+        self._update_column_count_label()
 
     def _setup_layout(self):
         top_row = QHBoxLayout()
@@ -148,6 +149,11 @@ class DataPreviewDialog(QDialog):
         self.lineColumnSearch.setPlaceholderText("Search columns...")
         self.lineColumnSearch.setClearButtonEnabled(True)
         top_row.addWidget(self.lineColumnSearch, 1)
+
+        self.lblColumnCount = QLabel("Columns: 0 / 0", self)
+        self.lblColumnCount.setObjectName("lblColumnCount")
+        self.lblColumnCount.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        top_row.addWidget(self.lblColumnCount)
 
         self.lblInfo = QLabel("Rows: 0 | Visible: 0", self)
         self.lblInfo.setObjectName("lblInfo")
@@ -199,6 +205,7 @@ class DataPreviewDialog(QDialog):
             t.setUpdatesEnabled(True)
             t.setSortingEnabled(True)
             self._update_info_label()
+            self._update_column_count_label()
             return
 
         # 3) Стабильный порядок колонок: preferred -> остальные
@@ -296,6 +303,16 @@ class DataPreviewDialog(QDialog):
                 visible += 1
         if hasattr(self, "lblInfo"):
             self.lblInfo.setText(f"Rows: {total} | Visible: {visible}")
+
+    def _update_column_count_label(self):
+        table = self.ui.tablePreview
+        total = table.columnCount()
+        visible = 0
+        for col in range(total):
+            if not table.isColumnHidden(col):
+                visible += 1
+        if hasattr(self, "lblColumnCount"):
+            self.lblColumnCount.setText(f"Columns: {visible} / {total}")
 
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):
@@ -500,6 +517,7 @@ class DataPreviewDialog(QDialog):
             matches_search = not needle or needle in header_lower
             tbl.setColumnHidden(col, not (matches_preset and matches_search))
         tbl.setUpdatesEnabled(True)
+        self._update_column_count_label()
 
     # ---- dbl-click ----
     @Slot(int, int)
