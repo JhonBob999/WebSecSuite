@@ -40,6 +40,7 @@ class DataPreviewDialog(QDialog):
         self.fetch_selected = fetch_selected
         self._records: list[dict] = []
         self._columns: list[str] = []
+        self._column_widths_by_name: dict[str, int] = {}
 
         # signals
         self.ui.btnLoadAll.clicked.connect(self.on_load_all)
@@ -101,6 +102,7 @@ class DataPreviewDialog(QDialog):
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
         records = xb.normalize_preview_rows(records)
+        self._capture_column_widths()
 
         # 2) Reset таблицы (жёстко)
         t.setSortingEnabled(False)
@@ -146,10 +148,37 @@ class DataPreviewDialog(QDialog):
                 t.setItem(row, col, item)
 
         self._apply_column_resize_policy(keys_order)
+        self._restore_column_widths()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
         self._update_info_label()
+
+    def _capture_column_widths(self):
+        t = self.ui.tablePreview
+        widths: dict[str, int] = {}
+        for col in range(t.columnCount()):
+            item = t.horizontalHeaderItem(col)
+            header_text = item.text().strip() if item and item.text() else ""
+            if not header_text:
+                continue
+            width = t.columnWidth(col)
+            if width > 0:
+                widths[header_text] = width
+        if widths:
+            self._column_widths_by_name.update(widths)
+
+    def _restore_column_widths(self):
+        if not self._column_widths_by_name:
+            return
+
+        t = self.ui.tablePreview
+        for col in range(t.columnCount()):
+            item = t.horizontalHeaderItem(col)
+            header_text = item.text().strip() if item and item.text() else ""
+            width = self._column_widths_by_name.get(header_text)
+            if width:
+                t.setColumnWidth(col, width)
 
     def _apply_column_resize_policy(self, columns: list[str]):
         t = self.ui.tablePreview
