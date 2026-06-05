@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
 from functools import partial
 from copy import deepcopy
+from datetime import datetime
 import os, json, httpx, subprocess, re
 from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QAction
@@ -35,10 +36,11 @@ from dialogs.data_preview_dialog import DataPreviewDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
+from core.scraper.task_types import ScrapeTask
 from core.scraper import exporter
 from core.cookies import storage
 from core.scraper.task_types import TaskStatus
-from core.session_persistence import build_scraper_session, save_session
+from core.session_persistence import build_scraper_session, load_session, save_session
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
@@ -182,6 +184,7 @@ class ScraperTabController(QWidget):
         self.ui.btnResume.clicked.connect(self.on_resume_clicked)
         self.ui.btnDataPreview.clicked.connect(self._open_data_preview_all)
         self.btnSaveSession.clicked.connect(self.on_save_session_clicked)
+        self.btnLoadSession.clicked.connect(self.on_load_session_clicked)
 
         # ---- ScraperActions: создаём до привязки контекстного меню ----
         # ВАЖНО: table_ctl передаём именно self.table_ctl
@@ -231,6 +234,8 @@ class ScraperTabController(QWidget):
         actions_row.setSpacing(6)
         self.btnSaveSession = QPushButton("Save Session", left_panel)
         self.btnSaveSession.setToolTip("Save current Scraper session snapshot")
+        self.btnLoadSession = QPushButton("Load Session", left_panel)
+        self.btnLoadSession.setToolTip("Load a passive Scraper session snapshot")
         # Логический порядок действий (Data Preview рядом с Export).
         for btn in (
             self.ui.btnAddTask,
@@ -242,6 +247,7 @@ class ScraperTabController(QWidget):
             self.ui.btnExport,
             self.ui.btnDataPreview,
             self.btnSaveSession,
+            self.btnLoadSession,
         ):
             btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             actions_row.addWidget(btn)
@@ -811,6 +817,173 @@ class ScraperTabController(QWidget):
         count = len(session.get("tasks") or [])
         self.log.append("INFO", f"Saved session with {count} task(s) -> {path}", tag="SESSION")
         QMessageBox.information(self, "Save Session", f"Session saved:\n{path}")
+
+    def _ask_session_load_path(self) -> str:
+        suggested = Path("data") / "sessions"
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load session",
+            str(suggested),
+            "JSON (*.json)",
+        )
+        return path or ""
+
+    def on_load_session_clicked(self) -> None:
+        if self._has_active_or_running_tasks():
+            QMessageBox.warning(
+                self,
+                "Load Session",
+                "Cannot load a session while tasks are running. Stop active tasks first.",
+            )
+            self.log.append("WARN", "Load blocked because tasks are still running", tag="SESSION")
+            return
+
+        path = self._ask_session_load_path()
+        if not path:
+            return
+
+        try:
+            session = load_session(path)
+            loaded_count = self._restore_scraper_session_snapshot(session)
+        except Exception as exc:
+            self.log.append("ERROR", f"Load session failed: {exc}", tag="SESSION")
+            QMessageBox.warning(self, "Load Session", f"Failed to load session:\n{exc}")
+            return
+
+        self.log.append("INFO", f"Loaded session with {loaded_count} task(s) <- {path}", tag="SESSION")
+        QMessageBox.information(self, "Load Session", f"Session loaded:\n{path}")
+
+    def _has_active_or_running_tasks(self) -> bool:
+        if hasattr(self.task_manager, "is_idle") and not self.task_manager.is_idle():
+            return True
+        active_statuses = {"running", "paused", "in progress", "in-progress"}
+        for task in self.task_manager.get_all_tasks():
+            if self._session_status_key(getattr(task, "status", "")) in active_statuses:
+                return True
+        table = self.ui.taskTable
+        for row in range(table.rowCount()):
+            item = table.item(row, Col.Status)
+            if item and self._session_status_key(item.text()) in active_statuses:
+                return True
+        return False
+
+    def _restore_scraper_session_snapshot(self, session: dict) -> int:
+        table = self.ui.taskTable
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            self._row_by_task_id.clear()
+            self.task_results.clear()
+            self.task_manager._tasks.clear()
+            self.task_manager._runnables.clear()
+
+            loaded = 0
+            for entry in session.get("tasks") or []:
+                if not isinstance(entry, dict):
+                    continue
+                task_id = str(entry.get("id") or "").strip()
+                url = str(entry.get("url") or "").strip()
+                if not task_id or not url:
+                    self.log.append("WARN", "Skipped session task without id/url", tag="SESSION")
+                    continue
+
+                params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+                result = deepcopy(entry.get("result")) if entry.get("result") is not None else None
+                status_text = self._coerce_loaded_session_status(entry.get("status"))
+                progress = self._session_progress_value(entry.get("progress"))
+                task = ScrapeTask(id=task_id, url=url, params=deepcopy(params))
+                task.status = TaskStatus(status_text)
+                task.progress = progress
+                task.result = result
+                created_at = self._parse_session_created_at(entry.get("created_at"))
+                if created_at is not None:
+                    task.created_at = created_at
+                self.task_manager._tasks[task_id] = task
+                if result is not None:
+                    self.task_results[task_id] = deepcopy(result)
+
+                row = table.rowCount()
+                table.insertRow(row)
+                self.set_url_cell(row, url, task_id=task_id)
+                status_cell = status_text
+                if progress and status_text not in {"Done"}:
+                    status_cell = f"{status_text} {progress}%"
+                self.set_status_cell(row, status_cell)
+                self._restore_loaded_result_cells(row, result)
+                self.set_cookies_cell(row, params, url)
+                params_light = {k: params.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if params.get(k)}
+                self.set_params_cell(row, str(params_light) if params_light else "")
+                self._row_by_task_id[task_id] = row
+                loaded += 1
+        finally:
+            table.blockSignals(False)
+            table.setUpdatesEnabled(True)
+
+        self._restore_session_selection(session)
+        self._refresh_task_inspector_for_current()
+        return loaded
+
+    def _restore_loaded_result_cells(self, row: int, result) -> None:
+        if isinstance(result, dict) and result:
+            self.set_code_cell(row, result.get("status_code"))
+            timings = result.get("timings", {}) or {}
+            self.set_time_cell(row, timings.get("request_ms"))
+            self.table_ctl.set_results_cell(row=row, payload=result)
+            return
+        self.set_code_cell(row, None)
+        self.set_time_cell(row, None)
+        self.set_results_cell(row, None)
+
+    def _restore_session_selection(self, session: dict) -> None:
+        table = self.ui.taskTable
+        workspace = session.get("workspace") or {}
+        row = -1
+        selected_task_id = workspace.get("selected_task_id")
+        if selected_task_id:
+            row = self.table_ctl.row_by_task_id(str(selected_task_id))
+        if row < 0:
+            row = self._session_row_value(workspace.get("current_row"))
+            if row >= table.rowCount():
+                row = -1
+        if row < 0 and table.rowCount() > 0:
+            row = 0
+        if row >= 0:
+            table.setCurrentCell(row, Col.URL)
+            table.selectRow(row)
+
+    def _coerce_loaded_session_status(self, status) -> str:
+        key = self._session_status_key(status)
+        if key in {"running", "in progress", "in-progress", "paused"}:
+            return TaskStatus.STOPPED.value
+        if key in {"done", "complete", "completed", "success", "successful"}:
+            return TaskStatus.DONE.value
+        if key in {"error"}:
+            return TaskStatus.ERROR.value
+        if key in {"failed", "fail"}:
+            return TaskStatus.FAILED.value
+        if key in {"stopped", "stop"}:
+            return TaskStatus.STOPPED.value
+        return TaskStatus.PENDING.value
+
+    def _parse_session_created_at(self, value):
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            return None
+        text = value.strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
+
+    def _session_row_value(self, value) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
     
     
     # --- Table proxies (переходный этап к TaskTableController) ---

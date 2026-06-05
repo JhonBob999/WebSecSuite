@@ -46,6 +46,51 @@ def save_session(path: str | Path, data: Mapping[str, Any]) -> None:
         fh.write("\n")
 
 
+def load_session(path: str | Path) -> dict[str, Any]:
+    target = Path(path)
+    try:
+        with target.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid session JSON: {exc.msg}") from exc
+    except OSError as exc:
+        raise ValueError(f"Could not read session file: {exc}") from exc
+    return validate_session_data(data)
+
+
+def validate_session_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        raise ValueError("Invalid session file: root value must be an object.")
+    if data.get("schema") != SESSION_SCHEMA:
+        raise ValueError(f"Invalid session schema. Expected {SESSION_SCHEMA}.")
+    if data.get("version") != SESSION_VERSION:
+        raise ValueError(f"Unsupported session version. Expected {SESSION_VERSION}.")
+
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        raise ValueError("Invalid session file: tasks must be a list.")
+
+    workspace = data.get("workspace")
+    if not isinstance(workspace, Mapping):
+        workspace = {}
+
+    return {
+        **dict(data),
+        "workspace": {
+            "selected_task_id": workspace.get("selected_task_id") or None,
+            "current_row": _safe_int(workspace.get("current_row"), -1),
+        },
+        "tasks": tasks,
+    }
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _safe_json(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
