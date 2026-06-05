@@ -174,6 +174,8 @@ class DataPreviewDialog(QDialog):
         self.ui.tablePreview.setContextMenuPolicy(Qt.CustomContextMenu)
         self.ui.tablePreview.customContextMenuRequested.connect(self._show_cell_context_menu)
         header = self.ui.tablePreview.horizontalHeader()
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._show_header_context_menu)
         self.ui.tablePreview.verticalHeader().setVisible(False)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(56)
@@ -407,6 +409,84 @@ class DataPreviewDialog(QDialog):
         if value is None:
             return ""
         return str(value)
+
+    def _value_to_column_clipboard_text(self, value) -> str:
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+        if value is None:
+            return ""
+        return str(value)
+
+    # ---- header context menu ----
+    def _show_header_context_menu(self, pos):
+        table = self.ui.tablePreview
+        header = table.horizontalHeader()
+        col = header.logicalIndexAt(pos)
+        if col < 0 or col >= table.columnCount() or table.isColumnHidden(col):
+            return
+
+        key = self._header_key_for_column(col)
+        if not key:
+            return
+
+        menu = QMenu(header)
+        menu.addAction("Copy column name", lambda: self._copy_column_name(col))
+        menu.addAction("Copy visible column values", lambda: self._copy_visible_column_values(col))
+        menu.addAction("Open column in Viewer", lambda: self._open_column_in_viewer(col))
+        menu.addSeparator()
+        menu.addAction("Resize column to contents", lambda: self._resize_column_to_contents(col))
+        menu.exec(header.viewport().mapToGlobal(pos))
+
+    def _copy_column_name(self, col: int):
+        key = self._header_key_for_column(col)
+        if key:
+            QApplication.clipboard().setText(key)
+
+    def _visible_column_values(self, col: int) -> list:
+        key = self._header_key_for_column(col)
+        if not key:
+            return []
+
+        table = self.ui.tablePreview
+        values = []
+        for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
+            values.append(self._cell_value_for_table_position(row, col))
+        return values
+
+    def _copy_visible_column_values(self, col: int):
+        values = self._visible_column_values(col)
+        text = "\n".join(self._value_to_column_clipboard_text(value) for value in values)
+        QApplication.clipboard().setText(text)
+
+    def _open_column_in_viewer(self, col: int):
+        key = self._header_key_for_column(col)
+        if not key:
+            return
+
+        values = self._visible_column_values(col)
+        UniversalViewerDialog(
+            title=f"Data Preview - Column: {key}",
+            payload={
+                "column": key,
+                "visible_row_count": len(values),
+                "visible_values": values,
+            },
+            parent=self,
+            save_dialog_title="Save Data Preview Column",
+            default_save_stem=f"data_preview_column_{key or 'column'}",
+        ).exec()
+
+    def _resize_column_to_contents(self, col: int):
+        table = self.ui.tablePreview
+        if not (0 <= col < table.columnCount()) or table.isColumnHidden(col):
+            return
+
+        table.resizeColumnToContents(col)
+        key = self._header_key_for_column(col)
+        if key:
+            self._column_widths_by_name[key] = table.columnWidth(col)
 
     def _copy_cell_value(self, row: int, col: int):
         value = self._cell_value_for_table_position(row, col)
