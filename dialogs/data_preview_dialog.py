@@ -188,6 +188,14 @@ class DataPreviewDialog(QDialog):
         self.btnResetLayout.setObjectName("btnResetLayout")
         top_row.addWidget(self.btnResetLayout)
 
+        self.lblExportRows = QLabel("Export:", self)
+        self.lblExportRows.setObjectName("lblExportRows")
+        top_row.addWidget(self.lblExportRows)
+        self.comboExportRows = QComboBox(self)
+        self.comboExportRows.setObjectName("comboExportRows")
+        self.comboExportRows.addItems(["All rows", "Visible rows"])
+        top_row.addWidget(self.comboExportRows)
+
         self.lblColumnCount = QLabel("Columns: 0 / 0", self)
         self.lblColumnCount.setObjectName("lblColumnCount")
         self.lblColumnCount.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
@@ -677,9 +685,12 @@ class DataPreviewDialog(QDialog):
     @Slot()
     def on_export_clicked(self):
         # 1) Берём текущий снимок (только то, что сейчас в предпросмотре)
-        records = getattr(self, "_snapshot", None) or []
+        records = self._records_for_export_mode()
         if not records:
-            QMessageBox.information(self, "Export", "Nothing to export (snapshot is empty).")
+            if self._export_rows_mode() == "Visible rows" and (getattr(self, "_snapshot", None) or []):
+                QMessageBox.warning(self, "Export", "No visible rows to export. Clear or adjust the row search, then try again.")
+            else:
+                QMessageBox.information(self, "Export", "Nothing to export (snapshot is empty).")
             return
 
         # 2) Диалог сохранения: CSV/JSON/XLSX
@@ -710,6 +721,31 @@ class DataPreviewDialog(QDialog):
         if hasattr(self, "export_done"):
             try: self.export_done.emit(path, len(records))
             except Exception: pass
+
+    def _export_rows_mode(self) -> str:
+        if not hasattr(self, "comboExportRows"):
+            return "All rows"
+        mode = (self.comboExportRows.currentText() or "").strip()
+        return mode if mode in {"All rows", "Visible rows"} else "All rows"
+
+    def _records_for_export_mode(self) -> list[dict]:
+        snapshot = getattr(self, "_snapshot", None) or []
+        if self._export_rows_mode() != "Visible rows":
+            return list(snapshot)
+
+        table = self.ui.tablePreview
+        records: list[dict] = []
+        seen_indexes: set[int] = set()
+        for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
+            record_index = self._record_index_for_table_row(row)
+            if record_index is None or record_index in seen_indexes:
+                continue
+            if 0 <= record_index < len(snapshot):
+                records.append(snapshot[record_index])
+                seen_indexes.add(record_index)
+        return records
             
     def _ask_export_path(self) -> tuple[str, str]:
         """
