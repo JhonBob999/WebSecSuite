@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from dialogs.inspector_detail_dialog import InspectorDetailDialog
+from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 
 class InspectorValueLabel(QLabel):
@@ -468,5 +468,10 @@ class TaskInspectorPanel(QWidget):
         body = detail.get("body", "").strip()
         if not body:
             return
-        dialog = InspectorDetailDialog(detail.get("title", "Inspector detail"), body, self)
+        dialog = UniversalViewerDialog(
+            title=detail.get("title", "Inspector detail"),
+            content=body,
+            parent=self,
+            show_summary=False,
+        )
         dialog.exec()

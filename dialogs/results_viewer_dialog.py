@@ -20,30 +20,44 @@ from PySide6.QtWidgets import (
 )
 
 
-class ResultsViewerDialog(QDialog):
-    def __init__(self, payload=None, parent=None):
+class UniversalViewerDialog(QDialog):
+    def __init__(
+        self,
+        title="Viewer",
+        payload=None,
+        content=None,
+        parent=None,
+        show_summary=False,
+        save_dialog_title="Save Results",
+        default_save_stem="results",
+    ):
         super().__init__(parent)
         self._payload = payload
+        self._content = content
         self._pretty_mode = True
         self._search_matches: list[int] = []
         self._current_match_index = -1
+        self._save_dialog_title = save_dialog_title
+        self._default_save_stem = default_save_stem
 
-        self.setWindowTitle("Results Viewer")
+        self.setWindowTitle(title)
         self.resize(980, 640)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        summary_box = QWidget(self)
-        summary_layout = QVBoxLayout(summary_box)
-        summary_layout.setContentsMargins(8, 8, 8, 8)
-        summary_layout.setSpacing(2)
-        self.summary_label = QLabel(self._build_summary_text(payload), self)
-        self.summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.summary_label.setWordWrap(True)
-        summary_layout.addWidget(self.summary_label)
-        root.addWidget(summary_box)
+        self.summary_label = None
+        if show_summary:
+            summary_box = QWidget(self)
+            summary_layout = QVBoxLayout(summary_box)
+            summary_layout.setContentsMargins(8, 8, 8, 8)
+            summary_layout.setSpacing(2)
+            self.summary_label = QLabel(self._build_summary_text(payload), self)
+            self.summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+            self.summary_label.setWordWrap(True)
+            summary_layout.addWidget(self.summary_label)
+            root.addWidget(summary_box)
 
         search_row = QHBoxLayout()
         search_row.setSpacing(6)
@@ -125,7 +139,7 @@ class ResultsViewerDialog(QDialog):
         )
 
     def _json_text(self, pretty: bool) -> str:
-        data = self._payload
+        data = self._content if self._content is not None else self._payload
         if data in (None, "", {}, []):
             return "No results available"
         if isinstance(data, (dict, list)):
@@ -160,11 +174,11 @@ class ResultsViewerDialog(QDialog):
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
 
     def _save_to_file(self):
-        default_name = "results.json" if self._pretty_mode else "results.txt"
+        default_name = f"{self._default_save_stem}.json" if self._pretty_mode else f"{self._default_save_stem}.txt"
         default_path = str(Path("data") / "exports" / default_name)
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Results",
+            self._save_dialog_title,
             default_path,
             "JSON files (*.json);;Text files (*.txt);;All files (*)",
         )
@@ -268,3 +282,15 @@ class ResultsViewerDialog(QDialog):
             return
         self._current_match_index = (self._current_match_index - 1) % len(self._search_matches)
         self._apply_current_match()
+
+
+class ResultsViewerDialog(UniversalViewerDialog):
+    def __init__(self, payload=None, parent=None):
+        super().__init__(
+            title="Results Viewer",
+            payload=payload,
+            parent=parent,
+            show_summary=True,
+            save_dialog_title="Save Results",
+            default_save_stem="results",
+        )
