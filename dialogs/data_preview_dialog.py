@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QLineEdit,
+    QComboBox,
     QSizePolicy,
     QHeaderView,
 )
@@ -25,6 +26,66 @@ from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгене
 class DataPreviewDialog(QDialog):
     export_done = Signal(str, int)
     export_failed = Signal(str)
+    PRESET_ALL_COLUMNS = "All columns"
+    CORE_IDENTITY_COLUMNS = (
+        "task_id",
+        "url",
+        "final_url",
+        "status_code",
+        "title",
+    )
+    COLUMN_PRESETS = {
+        PRESET_ALL_COLUMNS: (),
+        "Core Recon": (
+            "task_id",
+            "url",
+            "final_url",
+            "status_code",
+            "title",
+            "content_len",
+            "request_ms",
+            "redirects",
+            "endpoint_type",
+            "forms_summary",
+        ),
+        "Discovery Focus": (
+            "discovery",
+            "endpoint",
+            "forms",
+            "parameter",
+            "redirect",
+            "request_",
+            "response_",
+        ),
+        "JS Recon": (
+            "js_recon",
+            "secret_hints",
+            "endpoint_candidates",
+            "endpoint_linkage",
+        ),
+        "Candidate Review": (
+            "candidates",
+            "findings",
+            "replay",
+            "artifact",
+        ),
+        "Fingerprint / CVE": (
+            "fingerprint",
+            "technology",
+            "tech",
+            "cve",
+            "server",
+            "response_content_type",
+            "response_status_code",
+        ),
+        "Validation": (
+            "validation_plan",
+            "validator_queue",
+            "validator_handoff",
+            "replay_manifest",
+        ),
+    }
+
     def __init__(self, parent=None,
                  fetch_all: Callable[[], list[dict]] | None = None,
                  fetch_selected: Callable[[], list[dict]] | None = None ):
@@ -50,6 +111,9 @@ class DataPreviewDialog(QDialog):
         self.ui.btnExport.clicked.connect(self.on_export_clicked)
         self.ui.lineSearch.textChanged.connect(self.on_filter_changed)
         self.lineColumnSearch.textChanged.connect(self._apply_column_filter)
+        self.comboColumnPreset.currentTextChanged.connect(
+            lambda _preset: self._apply_column_visibility_filters()
+        )
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
         self._update_info_label()
 
@@ -67,6 +131,14 @@ class DataPreviewDialog(QDialog):
         top_row.addWidget(self.lblSearch)
         self.ui.lineSearch.setClearButtonEnabled(True)
         top_row.addWidget(self.ui.lineSearch, 1)
+
+        self.lblColumnPreset = QLabel("Preset:", self)
+        self.lblColumnPreset.setObjectName("lblColumnPreset")
+        top_row.addWidget(self.lblColumnPreset)
+        self.comboColumnPreset = QComboBox(self)
+        self.comboColumnPreset.setObjectName("comboColumnPreset")
+        self.comboColumnPreset.addItems(list(self.COLUMN_PRESETS.keys()))
+        top_row.addWidget(self.comboColumnPreset)
 
         self.lblColumnSearch = QLabel("Columns:", self)
         self.lblColumnSearch.setObjectName("lblColumnSearch")
@@ -161,7 +233,7 @@ class DataPreviewDialog(QDialog):
 
         self._apply_column_resize_policy(keys_order)
         self._restore_column_widths()
-        self._apply_column_filter()
+        self._apply_column_visibility_filters()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
@@ -389,16 +461,44 @@ class DataPreviewDialog(QDialog):
 
     @Slot(str)
     def _apply_column_filter(self, text: str | None = None):
+        self._apply_column_visibility_filters(text)
+
+    def _current_preset_name(self) -> str:
+        if not hasattr(self, "comboColumnPreset"):
+            return self.PRESET_ALL_COLUMNS
+        preset_name = (self.comboColumnPreset.currentText() or "").strip()
+        return preset_name if preset_name in self.COLUMN_PRESETS else self.PRESET_ALL_COLUMNS
+
+    def _column_matches_preset(self, header_text: str) -> bool:
+        preset_name = self._current_preset_name()
+        if preset_name == self.PRESET_ALL_COLUMNS:
+            return True
+
+        header = (header_text or "").strip().lower()
+        if not header:
+            return False
+
+        core_columns = {name.lower() for name in self.CORE_IDENTITY_COLUMNS}
+        if header in core_columns:
+            return True
+
+        patterns = self.COLUMN_PRESETS.get(preset_name, ())
+        return any(pattern.lower() in header for pattern in patterns)
+
+    @Slot(str)
+    def _apply_column_visibility_filters(self, text: str | None = None):
         if text is None:
             text = self.lineColumnSearch.text() if hasattr(self, "lineColumnSearch") else ""
-
         needle = (text or "").strip().lower()
         tbl = self.ui.tablePreview
         tbl.setUpdatesEnabled(False)
         for col in range(tbl.columnCount()):
             item = tbl.horizontalHeaderItem(col)
-            header_text = item.text().strip().lower() if item and item.text() else ""
-            tbl.setColumnHidden(col, bool(needle and needle not in header_text))
+            header_text = item.text().strip() if item and item.text() else ""
+            header_lower = header_text.lower()
+            matches_preset = self._column_matches_preset(header_text)
+            matches_search = not needle or needle in header_lower
+            tbl.setColumnHidden(col, not (matches_preset and matches_search))
         tbl.setUpdatesEnabled(True)
 
     # ---- dbl-click ----
