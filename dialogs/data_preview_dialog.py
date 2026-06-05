@@ -348,6 +348,7 @@ class DataPreviewDialog(QDialog):
         menu.addAction("Open cell in Viewer", lambda: self._open_cell_in_viewer(row, col))
         menu.addSeparator()
         menu.addAction("Copy row as JSON", lambda: self._copy_row_as_json(row))
+        menu.addAction("Open row in Viewer", lambda: self._open_row_in_viewer(row))
         menu.exec(table.viewport().mapToGlobal(pos))
 
     def _record_index_for_table_row(self, row: int) -> int | None:
@@ -444,6 +445,24 @@ class DataPreviewDialog(QDialog):
         QApplication.clipboard().setText(text)
 
     # ---- действия тулбара ----
+    def _open_row_in_viewer(self, row: int):
+        record = self._source_record_for_table_row(row)
+        if not record:
+            return
+
+        title = "Row details"
+        row_label = record.get("url") or record.get("final_url") or record.get("task_id")
+        if row_label:
+            title = f"{title}: {row_label}"
+
+        UniversalViewerDialog(
+            title=title,
+            payload=record,
+            parent=self,
+            save_dialog_title="Save Data Preview Row",
+            default_save_stem="data_preview_row",
+        ).exec()
+
     @Slot()
     def on_load_all(self):
         if callable(self.fetch_all):
