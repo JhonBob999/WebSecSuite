@@ -121,6 +121,7 @@ class DataPreviewDialog(QDialog):
         )
         self.ui.tablePreview.cellDoubleClicked.connect(self.on_cell_dbl_clicked)
         self._update_info_label()
+        self._update_row_count_label()
         self._update_column_count_label()
 
     def _setup_layout(self):
@@ -164,10 +165,11 @@ class DataPreviewDialog(QDialog):
         self.lblColumnCount.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         top_row.addWidget(self.lblColumnCount)
 
-        self.lblInfo = QLabel("Rows: 0 | Visible: 0", self)
-        self.lblInfo.setObjectName("lblInfo")
-        self.lblInfo.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
-        top_row.addWidget(self.lblInfo)
+        self.lblRowCount = QLabel("Rows: 0 / 0", self)
+        self.lblRowCount.setObjectName("lblRowCount")
+        self.lblRowCount.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        top_row.addWidget(self.lblRowCount)
+
         top_row.addStretch(1)
         top_row.addWidget(self.ui.btnExport)
 
@@ -222,6 +224,7 @@ class DataPreviewDialog(QDialog):
             t.setUpdatesEnabled(True)
             t.setSortingEnabled(True)
             self._update_info_label()
+            self._update_row_count_label()
             self._update_column_count_label()
             return
 
@@ -267,6 +270,7 @@ class DataPreviewDialog(QDialog):
         t.setSortingEnabled(True)
         self._columns = keys_order
         self._update_info_label()
+        self._update_row_count_label()
 
     @Slot()
     def _reset_column_layout(self):
@@ -393,6 +397,16 @@ class DataPreviewDialog(QDialog):
                 visible += 1
         if hasattr(self, "lblColumnCount"):
             self.lblColumnCount.setText(f"Columns: {visible} / {total}")
+
+    def _update_row_count_label(self):
+        table = self.ui.tablePreview
+        total = table.rowCount()
+        visible = 0
+        for row in range(total):
+            if not table.isRowHidden(row):
+                visible += 1
+        if hasattr(self, "lblRowCount"):
+            self.lblRowCount.setText(f"Rows: {visible} / {total}")
 
     def _to_cell(self, val):
         if isinstance(val, (dict, list)):
@@ -764,6 +778,7 @@ class DataPreviewDialog(QDialog):
             tbl.setRowHidden(row, not visible)
         tbl.setUpdatesEnabled(True)
         self._update_info_label()
+        self._update_row_count_label()
 
     @Slot(str)
     def _apply_column_filter(self, text: str | None = None):
