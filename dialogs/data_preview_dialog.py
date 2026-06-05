@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
+from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
 
@@ -349,8 +350,13 @@ class DataPreviewDialog(QDialog):
         rec = self._records[row] if 0 <= row < len(self._records) else {}
         val = rec.get(key)
         if isinstance(val, (dict, list)):
-            pretty = json.dumps(val, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, key, pretty)
+            UniversalViewerDialog(
+                title=key or "Data Preview",
+                payload=val,
+                parent=self,
+                save_dialog_title="Save Data Preview Cell",
+                default_save_stem=f"data_preview_{key or 'cell'}",
+            ).exec()
         elif key in ("final_url", "url"):
             from PySide6.QtGui import QDesktopServices
             from PySide6.QtCore import QUrl
