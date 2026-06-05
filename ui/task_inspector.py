@@ -368,9 +368,9 @@ class TaskInspectorPanel(QWidget):
             "js_sources_total",
             "JS sources",
             {
-                "external": js_recon.get("external"),
-                "inline": js_recon.get("inline"),
-                "sources": js_recon.get("sources"),
+                "external": js_recon.get("external_scripts") or js_recon.get("external"),
+                "inline": js_recon.get("inline_scripts") or js_recon.get("inline"),
+                "sources": js_recon.get("page_sources") or js_recon.get("sources"),
             },
         )
         self._set_detail("js_endpoint_candidates", "JS endpoint candidates", js_recon.get("endpoint_candidates"))
@@ -436,6 +436,17 @@ class TaskInspectorPanel(QWidget):
                 filtered.append(item)
         return filtered
 
+    @staticmethod
+    def _normalize_detail_key(field_key: str) -> str:
+        aliases = {
+            "JS Source": "js_sources_total",
+            "JS Sources": "js_sources_total",
+            "JS sources": "js_sources_total",
+            "js_source": "js_sources_total",
+            "js_sources": "js_sources_total",
+        }
+        return aliases.get(field_key, field_key)
+
     def _set_detail(self, key: str, title: str, data: Any) -> None:
         label = self._fields.get(key)
         if label is None:
@@ -450,6 +461,7 @@ class TaskInspectorPanel(QWidget):
         label.setCursor(QCursor(Qt.PointingHandCursor))
 
     def _open_detail_for_field(self, field_key: str) -> None:
+        field_key = self._normalize_detail_key(field_key)
         detail = self._detail_payloads.get(field_key)
         if not detail:
             return
