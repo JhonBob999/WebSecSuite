@@ -1398,6 +1398,36 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
 # ---- Внутренние реализации -------------------------------------------------
 
 
+def export_projected(
+    records: Iterable[Mapping[str, Any]],
+    path: str,
+    fmt: str = "csv",
+    fieldnames: list[str] | None = None,
+) -> str:
+    """
+    Export caller-projected records without task enrichment or preview re-expansion.
+
+    This is intended for Data Preview visible-column exports where the caller has
+    already resolved the exact columns and order from the table state.
+    """
+    fmt = (fmt or "").lower().strip()
+    if fmt not in {"csv", "json", "xlsx"}:
+        raise ValueError(f"Unsupported export format: {fmt}")
+
+    items = [dict(r) for r in records]
+    columns = list(fieldnames or _union_keys(items))
+    _ensure_parent_dir(path)
+
+    if fmt == "json":
+        _to_json(items, path)
+    elif fmt == "csv":
+        _to_csv(items, path, fieldnames=columns)
+    else:
+        _to_xlsx(items, path, fieldnames=columns)
+
+    return path
+
+
 def _to_json(items: list[dict[str, Any]], path: str) -> None:
     """
     JSON экспорт: сохраняем массив records, но поле '_raw_result' оставляем как есть (dict),

@@ -195,6 +195,10 @@ class DataPreviewDialog(QDialog):
         self.comboExportRows.setObjectName("comboExportRows")
         self.comboExportRows.addItems(["All rows", "Visible rows"])
         top_row.addWidget(self.comboExportRows)
+        self.comboExportColumns = QComboBox(self)
+        self.comboExportColumns.setObjectName("comboExportColumns")
+        self.comboExportColumns.addItems(["All columns", "Visible columns"])
+        top_row.addWidget(self.comboExportColumns)
 
         self.lblColumnCount = QLabel("Columns: 0 / 0", self)
         self.lblColumnCount.setObjectName("lblColumnCount")
@@ -694,13 +698,24 @@ class DataPreviewDialog(QDialog):
             return
 
         # 2) Диалог сохранения: CSV/JSON/XLSX
+        column_keys: list[str] = []
+        if self._export_columns_mode() == "Visible columns":
+            column_keys = self._visible_column_keys()
+            if not column_keys:
+                QMessageBox.warning(self, "Export", "No visible columns to export. Clear or adjust the column search, then try again.")
+                return
+            records = self._project_records_to_columns(records, column_keys)
+
         path, fmt = self._ask_export_path()
         if not path:
             return
 
         # 3) Экспорт через единый мост
         try:
-            xb.export(records, path, fmt=fmt)
+            if self._export_columns_mode() == "Visible columns":
+                xb.export_projected(records, path, fmt=fmt, fieldnames=column_keys)
+            else:
+                xb.export(records, path, fmt=fmt)
         except Exception as e:
             QMessageBox.critical(self, "Export failed", f"{e}")
             # если хочешь прокинуть в логи вкладки:
@@ -728,6 +743,12 @@ class DataPreviewDialog(QDialog):
         mode = (self.comboExportRows.currentText() or "").strip()
         return mode if mode in {"All rows", "Visible rows"} else "All rows"
 
+    def _export_columns_mode(self) -> str:
+        if not hasattr(self, "comboExportColumns"):
+            return "All columns"
+        mode = (self.comboExportColumns.currentText() or "").strip()
+        return mode if mode in {"All columns", "Visible columns"} else "All columns"
+
     def _records_for_export_mode(self) -> list[dict]:
         snapshot = getattr(self, "_snapshot", None) or []
         if self._export_rows_mode() != "Visible rows":
@@ -746,6 +767,40 @@ class DataPreviewDialog(QDialog):
                 records.append(snapshot[record_index])
                 seen_indexes.add(record_index)
         return records
+
+    def _visible_column_keys(self) -> list[str]:
+        table = self.ui.tablePreview
+        header = table.horizontalHeader()
+        keys: list[str] = []
+        seen: set[str] = set()
+        for visual_idx in range(header.count()):
+            logical_idx = header.logicalIndex(visual_idx)
+            if logical_idx < 0 or logical_idx >= table.columnCount():
+                continue
+            if table.isColumnHidden(logical_idx):
+                continue
+            key = self._header_key_for_column(logical_idx)
+            if not key or key in seen:
+                continue
+            keys.append(key)
+            seen.add(key)
+        return keys
+
+    def _project_records_to_columns(self, records: list[dict], column_keys: list[str]) -> list[dict]:
+        preview_records = xb.normalize_preview_rows(records)
+        projected: list[dict] = []
+        for idx, record in enumerate(records):
+            preview_record = preview_records[idx] if idx < len(preview_records) else {}
+            projected_row: dict = {}
+            for key in column_keys:
+                if isinstance(record, dict) and key in record:
+                    projected_row[key] = record.get(key, "")
+                elif isinstance(preview_record, dict):
+                    projected_row[key] = preview_record.get(key, "")
+                else:
+                    projected_row[key] = ""
+            projected.append(projected_row)
+        return projected
             
     def _ask_export_path(self) -> tuple[str, str]:
         """
