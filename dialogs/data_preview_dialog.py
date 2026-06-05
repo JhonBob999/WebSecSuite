@@ -73,6 +73,7 @@ class DataPreviewDialog(QDialog):
         self.lineColumnSearch = QLineEdit(self)
         self.lineColumnSearch.setObjectName("lineColumnSearch")
         self.lineColumnSearch.setPlaceholderText("Search columns...")
+        self.lineColumnSearch.setClearButtonEnabled(True)
         top_row.addWidget(self.lineColumnSearch, 1)
 
         self.lblInfo = QLabel("Rows: 0 | Visible: 0", self)
