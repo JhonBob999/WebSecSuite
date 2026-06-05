@@ -37,6 +37,8 @@ class DiscoveryViewerDialog(QDialog):
 
         self.setWindowTitle("Discovery Viewer")
         self.setMinimumSize(1000, 650)
+        self.setSizeGripEnabled(True)
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
         main_layout = QVBoxLayout(self)
 
