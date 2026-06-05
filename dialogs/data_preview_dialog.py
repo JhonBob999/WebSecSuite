@@ -5,6 +5,7 @@ from copy import deepcopy
 from ui import export_bridge as xb
 from typing import Callable
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QTableWidgetItem,
     QFileDialog,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QComboBox,
+    QMenu,
     QSizePolicy,
     QHeaderView,
 )
@@ -169,6 +171,8 @@ class DataPreviewDialog(QDialog):
         root.addWidget(self.ui.tablePreview, 1)
 
     def _configure_table(self):
+        self.ui.tablePreview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ui.tablePreview.customContextMenuRequested.connect(self._show_cell_context_menu)
         header = self.ui.tablePreview.horizontalHeader()
         self.ui.tablePreview.verticalHeader().setVisible(False)
         header.setStretchLastSection(False)
@@ -192,6 +196,7 @@ class DataPreviewDialog(QDialog):
         records = records or getattr(self, "_snapshot", []) or []
         t = self.ui.tablePreview
         records = xb.normalize_preview_rows(records)
+        self._preview_records = deepcopy(records)
         self._capture_column_widths()
 
         # 2) Reset таблицы (жёстко)
@@ -236,6 +241,7 @@ class DataPreviewDialog(QDialog):
                 if isinstance(val, (int, float)):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
+                item.setData(Qt.UserRole, row)
                 t.setItem(row, col, item)
 
         self._apply_column_resize_policy(keys_order)
@@ -324,6 +330,118 @@ class DataPreviewDialog(QDialog):
             return "", ""
         s = str(val)
         return (s[:200] + "…", s) if len(s) > 200 else (s, "")
+
+    # ---- cell context menu ----
+    def _show_cell_context_menu(self, pos):
+        table = self.ui.tablePreview
+        item = table.itemAt(pos)
+        if item is None:
+            return
+
+        row = item.row()
+        col = item.column()
+        if row < 0 or col < 0:
+            return
+
+        menu = QMenu(table)
+        menu.addAction("Copy cell", lambda: self._copy_cell_value(row, col))
+        menu.addAction("Open cell in Viewer", lambda: self._open_cell_in_viewer(row, col))
+        menu.addSeparator()
+        menu.addAction("Copy row as JSON", lambda: self._copy_row_as_json(row))
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _record_index_for_table_row(self, row: int) -> int | None:
+        table = self.ui.tablePreview
+        if not (0 <= row < table.rowCount()):
+            return None
+
+        for col in range(table.columnCount()):
+            item = table.item(row, col)
+            if item is None:
+                continue
+            record_index = item.data(Qt.UserRole)
+            if isinstance(record_index, int):
+                return record_index
+
+        return row if 0 <= row < len(getattr(self, "_snapshot", [])) else None
+
+    def _header_key_for_column(self, col: int) -> str:
+        table = self.ui.tablePreview
+        if not (0 <= col < table.columnCount()):
+            return ""
+        header = table.horizontalHeaderItem(col)
+        return header.text().strip() if header and header.text() else ""
+
+    def _source_record_for_table_row(self, row: int) -> dict:
+        record_index = self._record_index_for_table_row(row)
+        records = getattr(self, "_snapshot", None) or self._records
+        if record_index is None or not (0 <= record_index < len(records)):
+            return {}
+        rec = records[record_index]
+        return rec if isinstance(rec, dict) else {"value": rec}
+
+    def _preview_record_for_table_row(self, row: int) -> dict:
+        record_index = self._record_index_for_table_row(row)
+        records = getattr(self, "_preview_records", [])
+        if record_index is None or not (0 <= record_index < len(records)):
+            return {}
+        rec = records[record_index]
+        return rec if isinstance(rec, dict) else {"value": rec}
+
+    def _cell_value_for_table_position(self, row: int, col: int):
+        key = self._header_key_for_column(col)
+        if not key:
+            return None
+
+        source_record = self._source_record_for_table_row(row)
+        if key in source_record:
+            return source_record.get(key)
+
+        preview_record = self._preview_record_for_table_row(row)
+        return preview_record.get(key)
+
+    def _value_to_clipboard_text(self, value) -> str:
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+        if value is None:
+            return ""
+        return str(value)
+
+    def _copy_cell_value(self, row: int, col: int):
+        value = self._cell_value_for_table_position(row, col)
+        QApplication.clipboard().setText(self._value_to_clipboard_text(value))
+
+    def _open_cell_in_viewer(self, row: int, col: int):
+        key = self._header_key_for_column(col)
+        if not key:
+            return
+
+        value = self._cell_value_for_table_position(row, col)
+        title = f"Data Preview - {key}"
+        if isinstance(value, (dict, list)):
+            UniversalViewerDialog(
+                title=title,
+                payload=value,
+                parent=self,
+                save_dialog_title="Save Data Preview Cell",
+                default_save_stem=f"data_preview_{key or 'cell'}",
+            ).exec()
+            return
+
+        UniversalViewerDialog(
+            title=title,
+            content=self._value_to_clipboard_text(value),
+            parent=self,
+            save_dialog_title="Save Data Preview Cell",
+            default_save_stem=f"data_preview_{key or 'cell'}",
+        ).exec()
+
+    def _copy_row_as_json(self, row: int):
+        record = self._source_record_for_table_row(row)
+        if not record:
+            return
+        text = json.dumps(record, indent=2, ensure_ascii=False, default=str)
+        QApplication.clipboard().setText(text)
 
     # ---- действия тулбара ----
     @Slot()
