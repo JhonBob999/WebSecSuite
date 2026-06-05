@@ -33,7 +33,7 @@ from ui.table_controller import TaskTableController
 from ui import export_bridge as xb
 from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
-from dialogs.results_viewer_dialog import ResultsViewerDialog
+from dialogs.results_viewer_dialog import ResultsViewerDialog, UniversalViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
 from core.scraper.task_manager import TaskManager
 from core.scraper.task_types import ScrapeTask
@@ -2083,17 +2083,14 @@ class ScraperTabController(QWidget):
         title = f"Cookies — {loaded} item(s)"
         head = f"Path: {path}\nLoaded: {loaded}"
 
-        # Для больших наборов — в detailedText, чтобы не подвесить QMessageBox
-        dlg = QMessageBox(self)
-        dlg.setWindowTitle(title)
-        dlg.setIcon(QMessageBox.Information)
-        dlg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        if len(pretty) > 4000:
-            dlg.setText(f"{title}\n{head}\n\n(See details)")
-            dlg.setDetailedText(pretty)
-        else:
-            dlg.setText(f"{title}\n{head}\n\n{pretty}")
-        dlg.exec()
+        # Keep file metadata visible above the serialized cookie jar.
+        UniversalViewerDialog(
+            title=title,
+            content=f"{head}\n\n{pretty}",
+            parent=self,
+            save_dialog_title="Save Cookies",
+            default_save_stem="cookies",
+        ).exec()
         
     def _export_mode(self, mode: str):
         """Тонкий адаптер для ScraperActions → зовём реальный экспортёр."""
@@ -2102,9 +2099,6 @@ class ScraperTabController(QWidget):
     
     # --- Диалог: показать headers для выбранных задач ---
     def show_task_headers_dialog(self, task_ids: list[str]):
-        import json
-        from PySide6.QtWidgets import QMessageBox
-
         for tid in task_ids:
             task = self.task_manager.get_task(tid)
             headers = None
@@ -2116,19 +2110,16 @@ class ScraperTabController(QWidget):
                 self.log.append_log_line(f"[WARN] No headers for task {tid[:8]}")
                 continue
 
-            msg = QMessageBox(self)
-            msg.setWindowTitle(f"Headers — {tid[:8]}")
-            pretty = json.dumps(headers, ensure_ascii=False, indent=2)
-            msg.setText("Response headers (pretty-JSON):")
-            msg.setDetailedText(pretty)  # всё в detailedText, если длинно
-            msg.setIcon(QMessageBox.Information)
-            msg.exec()
+            UniversalViewerDialog(
+                title=f"Task Headers — {tid[:8]}",
+                payload=headers,
+                parent=self,
+                save_dialog_title="Save Headers",
+                default_save_stem=f"headers_{tid[:8]}",
+            ).exec()
             
     # --- Диалог: показать cookies для выбранных задач ---
     def show_task_cookies_dialog(self, task_ids: list[str]):
-        import json, os
-        from urllib.parse import urlparse
-        from PySide6.QtWidgets import QMessageBox
         # если у тебя модуль хранения cookies в другом месте — поправь импорт:
         try:
             from core.cookies.storage import load_cookiejar_as_json
@@ -2155,17 +2146,23 @@ class ScraperTabController(QWidget):
                 except Exception as e:
                     self.log.append_log_line(f"[ERROR] Read cookies {tid[:8]}: {e}")
 
-            msg = QMessageBox(self)
-            msg.setWindowTitle(f"Cookies — {tid[:8]}")
             if data:
-                pretty = json.dumps(data, ensure_ascii=False, indent=2)
-                msg.setText(f"Cookies file: {cookie_path}")
-                msg.setDetailedText(pretty)
-                msg.setIcon(QMessageBox.Information)
+                UniversalViewerDialog(
+                    title=f"Task Cookies — {tid[:8]}",
+                    payload={
+                        "cookie_file": cookie_path,
+                        "cookies": data,
+                    },
+                    parent=self,
+                    save_dialog_title="Save Cookies",
+                    default_save_stem=f"cookies_{tid[:8]}",
+                ).exec()
             else:
+                msg = QMessageBox(self)
+                msg.setWindowTitle(f"Cookies — {tid[:8]}")
                 msg.setText(f"No cookies found\n{cookie_path}")
                 msg.setIcon(QMessageBox.Warning)
-            msg.exec()
+                msg.exec()
 
 
         
