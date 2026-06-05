@@ -183,21 +183,23 @@ class DataPreviewDialog(QDialog):
     def _apply_column_resize_policy(self, columns: list[str]):
         t = self.ui.tablePreview
         header = t.horizontalHeader()
+        header.setStretchLastSection(False)
 
-        wide_stretch = {"url", "final_url", "title"}
+        readable_widths = {"url": 420, "final_url": 420, "title": 260}
         tight_cols = {"status_code", "redirects", "request_ms", "content_len"}
         fixed_width = {"task_id": 170}
 
         for idx, col in enumerate(columns):
-            if col in wide_stretch:
-                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+
+            if col in readable_widths:
+                t.setColumnWidth(idx, readable_widths[col])
             elif col in tight_cols:
-                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
+                t.resizeColumnToContents(idx)
+                t.setColumnWidth(idx, max(76, min(t.columnWidth(idx), 140)))
             elif col in fixed_width:
-                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
                 t.setColumnWidth(idx, fixed_width[col])
             else:
-                header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
                 t.resizeColumnToContents(idx)
 
     def _update_info_label(self):
