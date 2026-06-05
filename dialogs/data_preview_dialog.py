@@ -65,6 +65,7 @@ class DataPreviewDialog(QDialog):
         self.lblSearch = QLabel("Search:", self)
         self.lblSearch.setObjectName("lblSearch")
         top_row.addWidget(self.lblSearch)
+        self.ui.lineSearch.setClearButtonEnabled(True)
         top_row.addWidget(self.ui.lineSearch, 1)
 
         self.lblColumnSearch = QLabel("Columns:", self)
