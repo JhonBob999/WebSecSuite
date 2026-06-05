@@ -177,6 +177,11 @@ class UniversalViewerDialog(QDialog):
         self._refresh_text()
 
     def _copy_current_text(self):
+        cursor = self.viewer.textCursor()
+        if cursor.hasSelection():
+            selected_text = cursor.selectedText().replace("\u2029", "\n")
+            QGuiApplication.clipboard().setText(selected_text)
+            return
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
 
     def _save_to_file(self):
