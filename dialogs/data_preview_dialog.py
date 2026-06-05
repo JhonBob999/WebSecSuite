@@ -105,6 +105,7 @@ class DataPreviewDialog(QDialog):
         self._records: list[dict] = []
         self._columns: list[str] = []
         self._column_widths_by_name: dict[str, int] = {}
+        self._column_order_by_name: list[str] = []
 
         # signals
         self.ui.btnLoadAll.clicked.connect(self.on_load_all)
@@ -176,6 +177,7 @@ class DataPreviewDialog(QDialog):
         header = self.ui.tablePreview.horizontalHeader()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_context_menu)
+        header.setSectionsMovable(True)
         self.ui.tablePreview.verticalHeader().setVisible(False)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(56)
@@ -199,6 +201,7 @@ class DataPreviewDialog(QDialog):
         t = self.ui.tablePreview
         records = xb.normalize_preview_rows(records)
         self._preview_records = deepcopy(records)
+        self._capture_column_order()
         self._capture_column_widths()
 
         # 2) Reset таблицы (жёстко)
@@ -248,11 +251,55 @@ class DataPreviewDialog(QDialog):
 
         self._apply_column_resize_policy(keys_order)
         self._restore_column_widths()
+        self._restore_column_order()
         self._apply_column_visibility_filters()
         t.setUpdatesEnabled(True)
         t.setSortingEnabled(True)
         self._columns = keys_order
         self._update_info_label()
+
+    def _capture_column_order(self):
+        t = self.ui.tablePreview
+        header = t.horizontalHeader()
+        order: list[str] = []
+        seen: set[str] = set()
+        for visual_idx in range(header.count()):
+            logical_idx = header.logicalIndex(visual_idx)
+            if logical_idx < 0 or logical_idx >= t.columnCount():
+                continue
+            item = t.horizontalHeaderItem(logical_idx)
+            header_text = item.text().strip() if item and item.text() else ""
+            if not header_text or header_text in seen:
+                continue
+            order.append(header_text)
+            seen.add(header_text)
+        if order:
+            self._column_order_by_name = order
+
+    def _restore_column_order(self):
+        if not self._column_order_by_name:
+            return
+
+        t = self.ui.tablePreview
+        header = t.horizontalHeader()
+        logical_by_name: dict[str, int] = {}
+        for col in range(t.columnCount()):
+            item = t.horizontalHeaderItem(col)
+            header_text = item.text().strip() if item and item.text() else ""
+            if header_text and header_text not in logical_by_name:
+                logical_by_name[header_text] = col
+
+        target_visual_idx = 0
+        for header_text in self._column_order_by_name:
+            logical_idx = logical_by_name.get(header_text)
+            if logical_idx is None:
+                continue
+            current_visual_idx = header.visualIndex(logical_idx)
+            if current_visual_idx < 0:
+                continue
+            if current_visual_idx != target_visual_idx:
+                header.moveSection(current_visual_idx, target_visual_idx)
+            target_visual_idx += 1
 
     def _capture_column_widths(self):
         t = self.ui.tablePreview
@@ -739,9 +786,11 @@ class DataPreviewDialog(QDialog):
     # ---- dbl-click ----
     @Slot(int, int)
     def on_cell_dbl_clicked(self, row: int, col: int):
-        key = self._columns[col]
-        rec = self._records[row] if 0 <= row < len(self._records) else {}
-        val = rec.get(key)
+        key = self._header_key_for_column(col)
+        if not key:
+            return
+
+        val = self._cell_value_for_table_position(row, col)
         if isinstance(val, (dict, list)):
             UniversalViewerDialog(
                 title=key or "Data Preview",
