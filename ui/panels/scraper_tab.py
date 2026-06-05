@@ -38,6 +38,7 @@ from core.scraper.task_manager import TaskManager
 from core.scraper import exporter
 from core.cookies import storage
 from core.scraper.task_types import TaskStatus
+from core.session_persistence import build_scraper_session, save_session
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
@@ -180,6 +181,7 @@ class ScraperTabController(QWidget):
         self.ui.btnPause.clicked.connect(self.on_pause_clicked)
         self.ui.btnResume.clicked.connect(self.on_resume_clicked)
         self.ui.btnDataPreview.clicked.connect(self._open_data_preview_all)
+        self.btnSaveSession.clicked.connect(self.on_save_session_clicked)
 
         # ---- ScraperActions: создаём до привязки контекстного меню ----
         # ВАЖНО: table_ctl передаём именно self.table_ctl
@@ -227,6 +229,8 @@ class ScraperTabController(QWidget):
         actions_row = QHBoxLayout()
         actions_row.setContentsMargins(0, 0, 0, 0)
         actions_row.setSpacing(6)
+        self.btnSaveSession = QPushButton("Save Session", left_panel)
+        self.btnSaveSession.setToolTip("Save current Scraper session snapshot")
         # Логический порядок действий (Data Preview рядом с Export).
         for btn in (
             self.ui.btnAddTask,
@@ -237,6 +241,7 @@ class ScraperTabController(QWidget):
             self.ui.btnStop,
             self.ui.btnExport,
             self.ui.btnDataPreview,
+            self.btnSaveSession,
         ):
             btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             actions_row.addWidget(btn)
@@ -676,6 +681,96 @@ class ScraperTabController(QWidget):
             self.ui.taskTable, "Export matches", suggested, "Text (*.txt);;JSON (*.json)"
         )
         return path or ""
+
+    def _collect_scraper_session_snapshot(self) -> dict:
+        table = self.ui.taskTable
+        current_row = table.currentRow()
+        selected_task_id = self._task_id_by_row(current_row) if current_row >= 0 else None
+        tasks = []
+
+        for row in range(table.rowCount()):
+            task_id = self._task_id_by_row(row)
+            if not task_id:
+                continue
+
+            task = self.task_manager.get_task(task_id)
+            if not task:
+                continue
+
+            url_item = table.item(row, Col.URL)
+            status_item = table.item(row, Col.Status)
+            task_status = getattr(task, "status", None)
+            task_result = getattr(task, "result", None)
+            fallback_result = self.task_results.get(task_id) if isinstance(self.task_results, dict) else None
+
+            tasks.append({
+                "id": str(getattr(task, "id", task_id) or task_id),
+                "url": str(getattr(task, "url", "") or (url_item.text() if url_item else "")),
+                "params": self._session_task_params(task),
+                "status": self._session_status_text(task_status, status_item.text() if status_item else ""),
+                "progress": self._session_progress_value(getattr(task, "progress", 0)),
+                "created_at": getattr(task, "created_at", None),
+                "result": deepcopy(task_result if task_result is not None else fallback_result) if (task_result is not None or fallback_result is not None) else None,
+            })
+
+        return build_scraper_session(
+            tasks=tasks,
+            selected_task_id=selected_task_id,
+            current_row=current_row,
+        )
+
+    def _session_task_params(self, task) -> dict:
+        try:
+            params = task.to_params()
+        except Exception:
+            params = getattr(task, "params", {}) or {}
+        return deepcopy(dict(params or {})) if isinstance(params, dict) else {}
+
+    def _session_status_text(self, status, fallback: str = "") -> str:
+        if hasattr(status, "value"):
+            return str(status.value)
+        if status:
+            return str(status)
+        return str(fallback or "")
+
+    def _session_progress_value(self, value) -> int:
+        try:
+            return max(0, min(100, int(value)))
+        except Exception:
+            return 0
+
+    def _ask_session_save_path(self) -> str:
+        ts = QDateTime.currentDateTimeUtc().toString("yyyyMMdd_hhmmss")
+        suggested = Path("data") / "sessions" / f"scraper_session_{ts}.json"
+        suggested.parent.mkdir(parents=True, exist_ok=True)
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save session",
+            str(suggested),
+            "JSON (*.json)",
+        )
+        if not path:
+            return ""
+        if Path(path).suffix.lower() != ".json" or "JSON" in selected_filter:
+            path = str(Path(path).with_suffix(".json"))
+        return path
+
+    def on_save_session_clicked(self) -> None:
+        path = self._ask_session_save_path()
+        if not path:
+            return
+
+        try:
+            session = self._collect_scraper_session_snapshot()
+            save_session(path, session)
+        except Exception as exc:
+            self.log.append("ERROR", f"Save session failed: {exc}", tag="SESSION")
+            QMessageBox.warning(self, "Save Session", f"Failed to save session:\n{exc}")
+            return
+
+        count = len(session.get("tasks") or [])
+        self.log.append("INFO", f"Saved session with {count} task(s) -> {path}", tag="SESSION")
+        QMessageBox.information(self, "Save Session", f"Session saved:\n{path}")
     
     
     # --- Table proxies (переходный этап к TaskTableController) ---
