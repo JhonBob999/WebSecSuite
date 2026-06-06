@@ -359,6 +359,10 @@ class TaskInspectorPanel(QWidget):
                 "set_cookie": headers.get("set-cookie") or headers.get("Set-Cookie"),
             },
         )
+        headers_detail = data.get("headers")
+        if not self._has_detail_payload(headers_detail):
+            headers_detail = request_recipe.get("headers")
+        self._set_detail("nav_headers", "Headers", headers_detail)
         self._set_detail("discovery_internal", "Internal URLs", discovery_urls.get("internal"))
         self._set_detail("discovery_external", "External URLs", discovery_urls.get("external"))
         self._set_detail("discovery_query_params", "Query params", discovery.get("query_params"))
@@ -452,6 +456,7 @@ class TaskInspectorPanel(QWidget):
         stems = {
             "nav_redirects": "inspector_redirect_chain",
             "nav_cookies": "inspector_cookies",
+            "nav_headers": "inspector_headers",
             "discovery_internal": "inspector_internal_urls",
             "discovery_external": "inspector_external_urls",
             "discovery_query_params": "inspector_query_params",
