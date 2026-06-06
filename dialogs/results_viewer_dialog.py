@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
 from core.viewer_keyword_packs import keyword_pack_names, keywords_for_pack
 
 
+_MAX_KEYWORD_REPORT_MATCHES_PER_KEYWORD = 200
+
+
 class UniversalViewerDialog(QDialog):
     def __init__(
         self,
@@ -486,26 +489,42 @@ class UniversalViewerDialog(QDialog):
             payload["pack_name"] = pack_name
         if pack_keywords is not None:
             payload["pack_keywords"] = list(pack_keywords)
+        keyword_reports = []
+        for result in scan_results:
+            reported_matches = min(
+                result["match_count"],
+                _MAX_KEYWORD_REPORT_MATCHES_PER_KEYWORD,
+            )
+            matches = []
+            for line_number, line_text, line_match_count in result["lines"]:
+                if len(matches) >= reported_matches:
+                    break
+                for _ in range(line_match_count):
+                    matches.append(
+                        {
+                            "line": line_number,
+                            "text": line_text,
+                        }
+                    )
+                    if len(matches) >= reported_matches:
+                        break
+            keyword_reports.append(
+                {
+                    "keyword": result["keyword"],
+                    "match_count": result["match_count"],
+                    "reported_matches": reported_matches,
+                    "truncated": result["match_count"] > reported_matches,
+                    "matches": matches,
+                }
+            )
         payload.update(
             {
                 "viewer": self.windowTitle(),
                 "source_mode": "pretty" if self._pretty_mode else "raw",
                 "keywords_scanned": len(keywords),
                 "keywords_matched": matched_keywords,
-                "keywords": [
-                    {
-                        "keyword": result["keyword"],
-                        "match_count": result["match_count"],
-                        "matches": [
-                            {
-                                "line": line_number,
-                                "text": line_text,
-                            }
-                            for line_number, line_text, _ in result["lines"]
-                        ],
-                    }
-                    for result in scan_results
-                ],
+                "report_match_limit_per_keyword": _MAX_KEYWORD_REPORT_MATCHES_PER_KEYWORD,
+                "keywords": keyword_reports,
             }
         )
         return payload
