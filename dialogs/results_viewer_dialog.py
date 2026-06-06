@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QInputDialog,
     QMenu,
     QPlainTextEdit,
     QSpinBox,
@@ -74,6 +75,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_next = QPushButton("Next", self)
         self.btn_copy_match = QPushButton("Copy Match", self)
         self.btn_export_matches = QPushButton("Export Matches", self)
+        self.btn_keyword_scan = QPushButton("Keyword Scan", self)
         self.search_counter = QLabel("0 / 0", self)
         self.line_jump_input = QSpinBox(self)
         self.line_jump_input.setRange(1, 1)
@@ -86,6 +88,7 @@ class UniversalViewerDialog(QDialog):
         search_row.addWidget(self.btn_next)
         search_row.addWidget(self.btn_copy_match)
         search_row.addWidget(self.btn_export_matches)
+        search_row.addWidget(self.btn_keyword_scan)
         search_row.addWidget(self.search_counter)
         search_row.addSpacing(8)
         search_row.addWidget(self.line_jump_input)
@@ -134,6 +137,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_prev.clicked.connect(self._goto_prev_match)
         self.btn_copy_match.clicked.connect(self._copy_current_match_line)
         self.btn_export_matches.clicked.connect(self._export_search_matches)
+        self.btn_keyword_scan.clicked.connect(self._run_keyword_scan)
         self.btn_jump_line.clicked.connect(self._jump_to_line)
         self.line_jump_input.lineEdit().returnPressed.connect(self._jump_to_line)
 
@@ -265,6 +269,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Save to file", self._save_to_file)
         menu.addAction("Save selected text", self._save_selected_text)
         menu.addAction("Export search matches", self._export_search_matches)
+        menu.addAction("Keyword scan...", self._run_keyword_scan)
         menu.exec(self.viewer.mapToGlobal(position))
 
     def _copy_selected_text(self):
@@ -412,6 +417,91 @@ class UniversalViewerDialog(QDialog):
             Path(path).write_text(self._format_search_matches_export(query, matches), encoding="utf-8")
         except Exception as e:
             QMessageBox.warning(self, "Export failed", f"Could not export search matches:\n{e}")
+
+    def _prompt_keyword_scan_terms(self):
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Keyword Scan",
+            "Enter keywords, one per line:",
+            "",
+        )
+        if not accepted:
+            return []
+
+        keywords = []
+        seen = set()
+        for line in (text or "").splitlines():
+            keyword = line.strip()
+            if not keyword:
+                continue
+            key = keyword.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            keywords.append(keyword)
+        return keywords
+
+    def _collect_keyword_scan_matches(self, keywords, text):
+        lines = text.splitlines()
+        lowered_lines = [line.casefold() for line in lines]
+        results = []
+        for keyword in keywords:
+            lower_keyword = keyword.casefold()
+            matches = []
+            for line_number, lower_line in enumerate(lowered_lines, start=1):
+                count = lower_line.count(lower_keyword)
+                if count:
+                    matches.append((line_number, lines[line_number - 1], count))
+            results.append(
+                {
+                    "keyword": keyword,
+                    "match_count": sum(count for _, _, count in matches),
+                    "lines": matches,
+                }
+            )
+        return results
+
+    def _format_keyword_scan_report(self, keywords, scan_results):
+        matched_keywords = sum(1 for result in scan_results if result["match_count"] > 0)
+        lines = [
+            "Keyword Scan Report",
+            f"Viewer: {self.windowTitle()}",
+            "Scan mode: current displayed text",
+            f"Display mode: {'Pretty' if self._pretty_mode else 'Raw'}",
+            f"Keywords scanned: {len(keywords)}",
+            f"Keywords matched: {matched_keywords}",
+            "",
+        ]
+
+        for result in scan_results:
+            lines.append(f"Keyword: {result['keyword']}")
+            lines.append(f"Matches: {result['match_count']}")
+            lines.append("")
+            for index, (line_number, line_text, _) in enumerate(result["lines"], start=1):
+                lines.append(f"[{index}] line {line_number}")
+                lines.append(line_text)
+                lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _run_keyword_scan(self):
+        self._clear_jump_line_highlight()
+        keywords = self._prompt_keyword_scan_terms()
+        if not keywords:
+            QMessageBox.information(self, "Keyword Scan", "No keywords to scan.")
+            return
+
+        text = self.viewer.toPlainText() or ""
+        scan_results = self._collect_keyword_scan_matches(keywords, text)
+        report = self._format_keyword_scan_report(keywords, scan_results)
+        dialog = UniversalViewerDialog(
+            title="Keyword Scan Report",
+            content=report,
+            parent=self,
+            show_summary=False,
+            save_dialog_title="Save Keyword Scan Report",
+            default_save_stem=f"{self._default_save_stem}_keyword_scan",
+        )
+        dialog.exec()
 
     def _rebuild_search_index(self):
         query = (self.search_input.text() or "").strip()
