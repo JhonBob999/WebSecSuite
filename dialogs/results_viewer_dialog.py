@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.viewer_keyword_packs import keyword_pack_names, keywords_for_pack
+
 
 class UniversalViewerDialog(QDialog):
     def __init__(
@@ -76,6 +78,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_copy_match = QPushButton("Copy Match", self)
         self.btn_export_matches = QPushButton("Export Matches", self)
         self.btn_keyword_scan = QPushButton("Keyword Scan", self)
+        self.btn_keyword_packs = QPushButton("Keyword Packs", self)
         self.search_counter = QLabel("0 / 0", self)
         self.line_jump_input = QSpinBox(self)
         self.line_jump_input.setRange(1, 1)
@@ -89,6 +92,7 @@ class UniversalViewerDialog(QDialog):
         search_row.addWidget(self.btn_copy_match)
         search_row.addWidget(self.btn_export_matches)
         search_row.addWidget(self.btn_keyword_scan)
+        search_row.addWidget(self.btn_keyword_packs)
         search_row.addWidget(self.search_counter)
         search_row.addSpacing(8)
         search_row.addWidget(self.line_jump_input)
@@ -138,6 +142,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_copy_match.clicked.connect(self._copy_current_match_line)
         self.btn_export_matches.clicked.connect(self._export_search_matches)
         self.btn_keyword_scan.clicked.connect(self._run_keyword_scan)
+        self.btn_keyword_packs.clicked.connect(self._run_keyword_pack_scan)
         self.btn_jump_line.clicked.connect(self._jump_to_line)
         self.line_jump_input.lineEdit().returnPressed.connect(self._jump_to_line)
 
@@ -270,6 +275,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Save selected text", self._save_selected_text)
         menu.addAction("Export search matches", self._export_search_matches)
         menu.addAction("Keyword scan...", self._run_keyword_scan)
+        menu.addAction("Keyword packs...", self._run_keyword_pack_scan)
         menu.exec(self.viewer.mapToGlobal(position))
 
     def _copy_selected_text(self):
@@ -461,40 +467,48 @@ class UniversalViewerDialog(QDialog):
             )
         return results
 
-    def _build_keyword_scan_report_payload(self, keywords, scan_results):
+    def _build_keyword_scan_report_payload(self, keywords, scan_results, source=None, pack_name=None):
         matched_keywords = sum(1 for result in scan_results if result["match_count"] > 0)
-        return {
+        payload = {
             "report_type": "keyword_scan",
-            "viewer": self.windowTitle(),
-            "source_mode": "pretty" if self._pretty_mode else "raw",
-            "keywords_scanned": len(keywords),
-            "keywords_matched": matched_keywords,
-            "keywords": [
-                {
-                    "keyword": result["keyword"],
-                    "match_count": result["match_count"],
-                    "matches": [
-                        {
-                            "line": line_number,
-                            "text": line_text,
-                        }
-                        for line_number, line_text, _ in result["lines"]
-                    ],
-                }
-                for result in scan_results
-            ],
         }
+        if source:
+            payload["source"] = source
+        if pack_name:
+            payload["pack_name"] = pack_name
+        payload.update(
+            {
+                "viewer": self.windowTitle(),
+                "source_mode": "pretty" if self._pretty_mode else "raw",
+                "keywords_scanned": len(keywords),
+                "keywords_matched": matched_keywords,
+                "keywords": [
+                    {
+                        "keyword": result["keyword"],
+                        "match_count": result["match_count"],
+                        "matches": [
+                            {
+                                "line": line_number,
+                                "text": line_text,
+                            }
+                            for line_number, line_text, _ in result["lines"]
+                        ],
+                    }
+                    for result in scan_results
+                ],
+            }
+        )
+        return payload
 
-    def _run_keyword_scan(self):
-        self._clear_jump_line_highlight()
-        keywords = self._prompt_keyword_scan_terms()
-        if not keywords:
-            QMessageBox.information(self, "Keyword Scan", "No keywords to scan.")
-            return
-
+    def _open_keyword_scan_report(self, keywords, source=None, pack_name=None):
         text = self.viewer.toPlainText() or ""
         scan_results = self._collect_keyword_scan_matches(keywords, text)
-        report_payload = self._build_keyword_scan_report_payload(keywords, scan_results)
+        report_payload = self._build_keyword_scan_report_payload(
+            keywords,
+            scan_results,
+            source=source,
+            pack_name=pack_name,
+        )
         dialog = UniversalViewerDialog(
             title="Keyword Scan Report",
             payload=report_payload,
@@ -504,6 +518,44 @@ class UniversalViewerDialog(QDialog):
             default_save_stem=f"{self._default_save_stem}_keyword_scan",
         )
         dialog.exec()
+
+    def _run_keyword_scan(self):
+        self._clear_jump_line_highlight()
+        keywords = self._prompt_keyword_scan_terms()
+        if not keywords:
+            QMessageBox.information(self, "Keyword Scan", "No keywords to scan.")
+            return
+
+        self._open_keyword_scan_report(keywords)
+
+    def _run_keyword_pack_scan(self):
+        self._clear_jump_line_highlight()
+        pack_names = keyword_pack_names()
+        if not pack_names:
+            QMessageBox.information(self, "Keyword Packs", "No keyword packs are available.")
+            return
+
+        pack_name, accepted = QInputDialog.getItem(
+            self,
+            "Keyword Packs",
+            "Select keyword pack:",
+            pack_names,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+
+        keywords = keywords_for_pack(pack_name)
+        if not keywords:
+            QMessageBox.information(self, "Keyword Packs", "Selected keyword pack has no keywords.")
+            return
+
+        self._open_keyword_scan_report(
+            keywords,
+            source="builtin_pack",
+            pack_name=pack_name,
+        )
 
     def _rebuild_search_index(self):
         query = (self.search_input.text() or "").strip()
