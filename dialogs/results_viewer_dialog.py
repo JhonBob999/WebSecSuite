@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMenu,
     QPlainTextEdit,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -73,6 +74,11 @@ class UniversalViewerDialog(QDialog):
         self.btn_copy_match = QPushButton("Copy Match", self)
         self.btn_export_matches = QPushButton("Export Matches", self)
         self.search_counter = QLabel("0 / 0", self)
+        self.line_jump_input = QSpinBox(self)
+        self.line_jump_input.setRange(1, 1)
+        self.line_jump_input.setPrefix("Line ")
+        self.line_jump_input.setFixedWidth(92)
+        self.btn_jump_line = QPushButton("Go", self)
         search_row.addWidget(self.search_label)
         search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.btn_prev)
@@ -80,6 +86,9 @@ class UniversalViewerDialog(QDialog):
         search_row.addWidget(self.btn_copy_match)
         search_row.addWidget(self.btn_export_matches)
         search_row.addWidget(self.search_counter)
+        search_row.addSpacing(8)
+        search_row.addWidget(self.line_jump_input)
+        search_row.addWidget(self.btn_jump_line)
         root.addLayout(search_row)
 
         self.viewer = QPlainTextEdit(self)
@@ -120,6 +129,8 @@ class UniversalViewerDialog(QDialog):
         self.btn_prev.clicked.connect(self._goto_prev_match)
         self.btn_copy_match.clicked.connect(self._copy_current_match_line)
         self.btn_export_matches.clicked.connect(self._export_search_matches)
+        self.btn_jump_line.clicked.connect(self._jump_to_line)
+        self.line_jump_input.lineEdit().returnPressed.connect(self._jump_to_line)
 
         self._refresh_text()
 
@@ -178,7 +189,28 @@ class UniversalViewerDialog(QDialog):
         self._rebuild_search_index()
 
     def _update_line_count(self):
-        self.line_count_label.setText(f"Lines: {self.viewer.blockCount()}")
+        total_lines = max(1, self.viewer.blockCount())
+        self.line_count_label.setText(f"Lines: {total_lines}")
+        self.line_jump_input.setMaximum(total_lines)
+
+    def _focus_line_jump(self):
+        self.line_jump_input.setFocus(Qt.ShortcutFocusReason)
+        self.line_jump_input.selectAll()
+
+    def _jump_to_line(self):
+        total_lines = max(1, self.viewer.blockCount())
+        line_number = min(max(1, self.line_jump_input.value()), total_lines)
+        if line_number != self.line_jump_input.value():
+            self.line_jump_input.setValue(line_number)
+
+        block = self.viewer.document().findBlockByNumber(line_number - 1)
+        if not block.isValid():
+            return
+
+        cursor = QTextCursor(block)
+        self.viewer.setTextCursor(cursor)
+        self.viewer.centerCursor()
+        self.viewer.setFocus(Qt.ShortcutFocusReason)
 
     def _show_pretty_json(self):
         self._pretty_mode = True
@@ -208,6 +240,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Select all", self.viewer.selectAll)
         menu.addSeparator()
         menu.addAction("Copy current match", self._copy_current_match_line)
+        menu.addAction("Jump to line...", self._focus_line_jump)
         menu.addAction("Save to file", self._save_to_file)
         menu.addAction("Export search matches", self._export_search_matches)
         menu.exec(self.viewer.mapToGlobal(position))
