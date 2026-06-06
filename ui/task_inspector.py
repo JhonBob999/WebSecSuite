@@ -488,9 +488,7 @@ class TaskInspectorPanel(QWidget):
         self._set_detail("js_endpoint_candidates", "JS endpoint candidates", js_recon.get("endpoint_candidates"))
         self._set_detail("js_secret_hints", "JS secret hints", js_recon.get("secret_hints"))
         self._set_detail("js_linkage", "JS endpoint linkage", endpoint_linkage)
-        grouped_sources_detail = js_summary.get("grouped_sources")
-        if not self._has_detail_payload(grouped_sources_detail):
-            grouped_sources_detail = js_summary.get("endpoint_linkage_grouped_sources")
+        grouped_sources_detail = self._js_grouped_sources_detail(js_recon, js_summary)
         if not self._has_detail_payload(grouped_sources_detail):
             grouped_sources_detail = "Grouped source details are not available in this payload."
         self._set_detail("js_grouped_sources", "JS grouped sources", grouped_sources_detail)
@@ -552,6 +550,23 @@ class TaskInspectorPanel(QWidget):
     @classmethod
     def _existing_detail_map(cls, source: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
         return {key: source.get(key) for key in keys if key in source and cls._has_detail_payload(source.get(key))}
+
+    @classmethod
+    def _js_grouped_sources_detail(
+        cls,
+        js_recon: Mapping[str, Any],
+        js_summary: Mapping[str, Any],
+    ) -> Any:
+        for source in (js_recon, js_summary):
+            for key in ("grouped_sources", "endpoint_linkage_grouped_sources"):
+                detail = source.get(key)
+                if cls._has_detail_payload(detail):
+                    return detail
+
+        return cls._existing_detail_map(
+            js_recon,
+            ("external_scripts", "inline_scripts", "page_sources", "sources", "external", "inline"),
+        )
 
     @staticmethod
     def _normalize_detail_key(field_key: str) -> str:
