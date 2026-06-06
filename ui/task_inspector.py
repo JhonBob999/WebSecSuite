@@ -36,7 +36,7 @@ class TaskInspectorPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._fields: dict[str, InspectorValueLabel] = {}
-        self._detail_payloads: dict[str, dict[str, str]] = {}
+        self._detail_payloads: dict[str, dict[str, Any]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -447,6 +447,30 @@ class TaskInspectorPanel(QWidget):
         }
         return aliases.get(field_key, field_key)
 
+    @staticmethod
+    def _detail_save_stem(field_key: str) -> str:
+        stems = {
+            "nav_redirects": "inspector_redirect_chain",
+            "nav_cookies": "inspector_cookies",
+            "discovery_internal": "inspector_internal_urls",
+            "discovery_external": "inspector_external_urls",
+            "discovery_query_params": "inspector_query_params",
+            "discovery_forms": "inspector_forms",
+            "fp_top_stack": "inspector_top_stack",
+            "js_sources_total": "inspector_js_sources",
+            "js_endpoint_candidates": "inspector_endpoint_candidates",
+            "js_secret_hints": "inspector_js_secret_hints",
+            "js_linkage": "inspector_endpoint_linkage",
+            "js_grouped_sources": "inspector_js_grouped_sources",
+            "cand_total": "inspector_candidates_total",
+            "cand_xss": "inspector_xss_candidates",
+            "cand_sqli": "inspector_sqli_candidates",
+            "cand_lfi": "inspector_lfi_candidates",
+            "cand_ssrf": "inspector_ssrf_candidates",
+            "cand_types": "inspector_candidate_types",
+        }
+        return stems.get(field_key, "inspector_detail")
+
     def _set_detail(self, key: str, title: str, data: Any) -> None:
         label = self._fields.get(key)
         if label is None:
@@ -456,7 +480,18 @@ class TaskInspectorPanel(QWidget):
             label.setCursor(QCursor(Qt.IBeamCursor))
             return
 
-        self._detail_payloads[key] = {"title": title, "body": self._format_detail(data)}
+        detail: dict[str, Any] = {
+            "title": title,
+            "payload": None,
+            "content": None,
+            "default_save_stem": self._detail_save_stem(key),
+            "save_dialog_title": f"Save Inspector {title}",
+        }
+        if isinstance(data, (dict, list)):
+            detail["payload"] = data
+        else:
+            detail["content"] = self._format_detail(data)
+        self._detail_payloads[key] = detail
         label.setStyleSheet("color: #9ecbff; text-decoration: underline;")
         label.setCursor(QCursor(Qt.PointingHandCursor))
 
@@ -465,13 +500,21 @@ class TaskInspectorPanel(QWidget):
         detail = self._detail_payloads.get(field_key)
         if not detail:
             return
-        body = detail.get("body", "").strip()
-        if not body:
+        payload = detail.get("payload")
+        content = detail.get("content")
+        if not isinstance(payload, (dict, list)):
+            payload = None
+        if payload is None:
+            content = self._format_detail(content).strip() if content is not None else ""
+        if payload is None and not content:
             return
         dialog = UniversalViewerDialog(
             title=detail.get("title", "Inspector detail"),
-            content=body,
+            payload=payload,
+            content=content if payload is None else None,
             parent=self,
             show_summary=False,
+            save_dialog_title=detail.get("save_dialog_title", "Save Inspector Detail"),
+            default_save_stem=detail.get("default_save_stem", "inspector_detail"),
         )
         dialog.exec()
