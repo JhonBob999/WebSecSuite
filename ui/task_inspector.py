@@ -349,6 +349,8 @@ class TaskInspectorPanel(QWidget):
         self._set("discovery_forms", forms_cnt)
 
         self._set("fp_top_stack", top_stack_text)
+        has_cdn_source_available = "has_cdn" in fp_summary or "has_cdn" in fingerprint
+        has_waf_source_available = "has_waf_hint" in fp_summary or "has_waf_hint" in fingerprint
         self._set("fp_has_cdn", self._to_bool_text(self._first_non_empty(fp_summary.get("has_cdn"), fingerprint.get("has_cdn"), default=False)))
         self._set(
             "fp_has_waf_hint",
@@ -357,49 +359,61 @@ class TaskInspectorPanel(QWidget):
         self._set("fp_server", server)
         self._set("fp_x_powered_by", x_powered)
         self._set("fp_x_generator", x_generator)
-        self._set_explanation_detail(
+        top_stack_detail = top_stack_val if self._has_detail_payload(top_stack_val) else None
+        self._set_fingerprint_explanation_detail(
+            "fp_top_stack",
+            "Top stack explanation",
+            "Top stack",
+            top_stack_text,
+            "A compact summary of the strongest technology fingerprint signals collected for this task.",
+            "It helps prioritize later technology review and keeps the likely delivery or application stack visible during recon.",
+            self._fingerprint_evidence_text(fp_summary, fingerprint, "top_stack"),
+            extra_detail_label="Detected stack detail",
+            extra_detail=top_stack_detail,
+        )
+        self._set_fingerprint_explanation_detail(
             "fp_has_cdn",
             "CDN hint explanation",
             "Has CDN",
-            self._fields["fp_has_cdn"].text(),
-            "Whether the fingerprint summary found signs of an edge or CDN layer.",
-            "CDN hints can explain redirects, caching behavior, response headers, and where origin evidence may be indirect.",
+            self._fields["fp_has_cdn"].text() if has_cdn_source_available else self.DASH,
+            "There may be signs of CDN or edge delivery in the fingerprint summary.",
+            "CDN or edge hints can explain caching behavior, redirects, header changes, and why origin evidence may be indirect.",
             self._fingerprint_evidence_text(fp_summary, fingerprint, "has_cdn"),
         )
-        self._set_explanation_detail(
+        self._set_fingerprint_explanation_detail(
             "fp_has_waf_hint",
             "WAF hint explanation",
             "WAF hint",
-            self._fields["fp_has_waf_hint"].text(),
-            "Whether the fingerprint summary found signs of a WAF or protection layer.",
-            "A WAF hint may explain challenged or blocked responses, but it is not proof of a vulnerability or exploitability.",
+            self._fields["fp_has_waf_hint"].text() if has_waf_source_available else self.DASH,
+            "There may be signs of a protection or filtering layer in the fingerprint summary.",
+            "Protection-layer hints can explain challenged, filtered, or otherwise altered responses during later analysis.",
             self._fingerprint_evidence_text(fp_summary, fingerprint, "has_waf_hint"),
         )
-        self._set_explanation_detail(
+        self._set_fingerprint_explanation_detail(
             "fp_server",
             "Server header explanation",
             "Server",
             self._fields["fp_server"].text(),
-            "Server header value reported by the response when available.",
-            "Server headers are fingerprint hints that can help classify technology, but they can be hidden, generic, or misleading.",
+            "The Server header is a response header that may identify the HTTP server or reverse proxy.",
+            "It helps understand the delivery stack and may guide later fingerprint or CVE review.",
             "Taken from the response headers server or Server field." if server != self.DASH else "No server header evidence was available in the task result payload.",
         )
-        self._set_explanation_detail(
+        self._set_fingerprint_explanation_detail(
             "fp_x_powered_by",
             "X-Powered-By explanation",
             "X-Powered-By",
             self._fields["fp_x_powered_by"].text(),
-            "X-Powered-By header value reported by the response when available.",
-            "This can hint at application framework or runtime, but it is a fingerprint signal, not proof of a vulnerability.",
+            "The X-Powered-By header may identify an application framework, runtime, or platform component.",
+            "It can guide later technology review and help connect responses to framework-specific behavior.",
             "Taken from the response headers x-powered-by or X-Powered-By field." if x_powered != self.DASH else "No X-Powered-By header evidence was available in the task result payload.",
         )
-        self._set_explanation_detail(
+        self._set_fingerprint_explanation_detail(
             "fp_x_generator",
             "X-Generator explanation",
             "X-Generator",
             self._fields["fp_x_generator"].text(),
-            "X-Generator header value reported by the response when available.",
-            "This can hint at CMS or tooling, but it is a fingerprint signal, not proof of a vulnerability.",
+            "The X-Generator header may identify a CMS, site generator, framework, or publishing tool.",
+            "It can help focus later fingerprint review and explain technology-specific page patterns.",
             "Taken from the response headers x-generator or X-Generator field." if x_generator != self.DASH else "No X-Generator header evidence was available in the task result payload.",
         )
 
@@ -466,7 +480,6 @@ class TaskInspectorPanel(QWidget):
         self._set_detail("discovery_external", "External URLs", discovery_urls.get("external"))
         self._set_detail("discovery_query_params", "Query params", discovery.get("query_params"))
         self._set_detail("discovery_forms", "Forms", data.get("forms"))
-        self._set_detail("fp_top_stack", "Top stack", top_stack_val)
         self._set_detail(
             "js_sources_total",
             "JS sources",
@@ -560,7 +573,7 @@ class TaskInspectorPanel(QWidget):
             "discovery_external": "inspector_external_urls",
             "discovery_query_params": "inspector_query_params",
             "discovery_forms": "inspector_forms",
-            "fp_top_stack": "inspector_top_stack",
+            "fp_top_stack": "inspector_top_stack_explanation",
             "js_sources_total": "inspector_js_sources",
             "js_endpoint_candidates": "inspector_endpoint_candidates",
             "js_secret_hints": "inspector_js_secret_hints",
@@ -629,6 +642,40 @@ class TaskInspectorPanel(QWidget):
             ]
         )
         self._set_detail(key, title, content)
+
+    def _set_fingerprint_explanation_detail(
+        self,
+        key: str,
+        title: str,
+        field_name: str,
+        value: Any,
+        meaning: str,
+        why_it_matters: str,
+        evidence: str,
+        *,
+        safety_note: str = "This is a fingerprint hint only. It is not proof of vulnerability or exploitability.",
+        extra_detail_label: str = "",
+        extra_detail: Any = None,
+    ) -> None:
+        lines = [
+            f"Field: {field_name}",
+            f"Value: {self._display_value_for_explanation(value)}",
+            "",
+            "Meaning:",
+            meaning,
+            "",
+            "Why it matters:",
+            why_it_matters,
+            "",
+            "Evidence/source:",
+            evidence,
+            "",
+            "Safety note:",
+            safety_note,
+        ]
+        if self._has_detail_payload(extra_detail):
+            lines.extend(["", f"{extra_detail_label or 'Detail'}:", self._format_detail(extra_detail)])
+        self._set_detail(key, title, "\n".join(lines))
 
     def _set_detail(self, key: str, title: str, data: Any) -> None:
         label = self._fields.get(key)
