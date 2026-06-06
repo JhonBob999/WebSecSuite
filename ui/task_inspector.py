@@ -480,23 +480,20 @@ class TaskInspectorPanel(QWidget):
         self._set_detail("discovery_external", "External URLs", discovery_urls.get("external"))
         self._set_detail("discovery_query_params", "Query params", discovery.get("query_params"))
         self._set_detail("discovery_forms", "Forms", data.get("forms"))
-        self._set_detail(
-            "js_sources_total",
-            "JS sources",
-            {
-                "external": js_recon.get("external_scripts") or js_recon.get("external"),
-                "inline": js_recon.get("inline_scripts") or js_recon.get("inline"),
-                "sources": js_recon.get("page_sources") or js_recon.get("sources"),
-            },
+        js_sources_detail = self._existing_detail_map(
+            js_recon,
+            ("external_scripts", "inline_scripts", "page_sources", "sources", "external", "inline"),
         )
+        self._set_detail("js_sources_total", "JS sources", js_sources_detail)
         self._set_detail("js_endpoint_candidates", "JS endpoint candidates", js_recon.get("endpoint_candidates"))
-        self._set_detail("js_secret_hints", "JS secret hints", secret_hints.get("all"))
+        self._set_detail("js_secret_hints", "JS secret hints", js_recon.get("secret_hints"))
         self._set_detail("js_linkage", "JS endpoint linkage", endpoint_linkage)
-        self._set_detail(
-            "js_grouped_sources",
-            "JS grouped sources",
-            js_summary.get("endpoint_linkage_grouped_sources") or js_summary.get("grouped_sources"),
-        )
+        grouped_sources_detail = js_summary.get("grouped_sources")
+        if not self._has_detail_payload(grouped_sources_detail):
+            grouped_sources_detail = js_summary.get("endpoint_linkage_grouped_sources")
+        if not self._has_detail_payload(grouped_sources_detail):
+            grouped_sources_detail = "Grouped source details are not available in this payload."
+        self._set_detail("js_grouped_sources", "JS grouped sources", grouped_sources_detail)
         self._set_detail("cand_total", "Candidates", data.get("candidates"))
         self._set_detail("cand_xss", "XSS candidates", self._filter_candidates(data.get("candidates"), "xss"))
         self._set_detail("cand_sqli", "SQLi candidates", self._filter_candidates(data.get("candidates"), "sqli"))
@@ -552,6 +549,10 @@ class TaskInspectorPanel(QWidget):
                 filtered.append(item)
         return filtered
 
+    @classmethod
+    def _existing_detail_map(cls, source: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+        return {key: source.get(key) for key in keys if key in source and cls._has_detail_payload(source.get(key))}
+
     @staticmethod
     def _normalize_detail_key(field_key: str) -> str:
         aliases = {
@@ -575,9 +576,9 @@ class TaskInspectorPanel(QWidget):
             "discovery_forms": "inspector_forms",
             "fp_top_stack": "inspector_top_stack_explanation",
             "js_sources_total": "inspector_js_sources",
-            "js_endpoint_candidates": "inspector_endpoint_candidates",
+            "js_endpoint_candidates": "inspector_js_endpoint_candidates",
             "js_secret_hints": "inspector_js_secret_hints",
-            "js_linkage": "inspector_endpoint_linkage",
+            "js_linkage": "inspector_js_endpoint_linkage",
             "js_grouped_sources": "inspector_js_grouped_sources",
             "cand_total": "inspector_candidates_total",
             "cand_xss": "inspector_xss_candidates",
