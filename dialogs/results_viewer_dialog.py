@@ -99,6 +99,7 @@ class UniversalViewerDialog(QDialog):
         self.viewer.setFont(mono)
         self.viewer.setContextMenuPolicy(Qt.CustomContextMenu)
         self.viewer.customContextMenuRequested.connect(self._show_editor_context_menu)
+        self.viewer.viewport().installEventFilter(self)
         root.addWidget(self.viewer, 1)
 
         btn_row = QHBoxLayout()
@@ -136,6 +137,14 @@ class UniversalViewerDialog(QDialog):
         self._refresh_text()
 
     def eventFilter(self, watched, event):
+        if watched is self.viewer.viewport() and event.type() == QEvent.MouseButtonPress:
+            self._clear_jump_line_highlight()
+        if watched is self.search_input and event.type() in (
+            QEvent.FocusIn,
+            QEvent.MouseButtonPress,
+            QEvent.KeyPress,
+        ):
+            self._clear_jump_line_highlight()
         if (
             watched is self.search_input
             and event.type() == QEvent.KeyPress
@@ -196,6 +205,7 @@ class UniversalViewerDialog(QDialog):
         self.line_jump_input.setMaximum(total_lines)
 
     def _focus_line_jump(self):
+        self._clear_jump_line_highlight()
         self.line_jump_input.setFocus(Qt.ShortcutFocusReason)
         self.line_jump_input.selectAll()
 
@@ -217,14 +227,17 @@ class UniversalViewerDialog(QDialog):
         self.viewer.setFocus(Qt.ShortcutFocusReason)
 
     def _show_pretty_json(self):
+        self._clear_jump_line_highlight()
         self._pretty_mode = True
         self._refresh_text()
 
     def _show_raw_json(self):
+        self._clear_jump_line_highlight()
         self._pretty_mode = False
         self._refresh_text()
 
     def _copy_current_text(self):
+        self._clear_jump_line_highlight()
         cursor = self.viewer.textCursor()
         if cursor.hasSelection():
             selected_text = cursor.selectedText().replace("\u2029", "\n")
@@ -233,6 +246,7 @@ class UniversalViewerDialog(QDialog):
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
 
     def _show_editor_context_menu(self, position):
+        self._clear_jump_line_highlight()
         cursor = self.viewer.textCursor()
         menu = QMenu(self.viewer)
 
@@ -250,6 +264,7 @@ class UniversalViewerDialog(QDialog):
         menu.exec(self.viewer.mapToGlobal(position))
 
     def _copy_selected_text(self):
+        self._clear_jump_line_highlight()
         cursor = self.viewer.textCursor()
         if not cursor.hasSelection():
             return
@@ -257,6 +272,7 @@ class UniversalViewerDialog(QDialog):
         QGuiApplication.clipboard().setText(selected_text)
 
     def _copy_all_text(self):
+        self._clear_jump_line_highlight()
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
 
     def _line_for_offset(self, text: str, offset: int):
@@ -282,6 +298,7 @@ class UniversalViewerDialog(QDialog):
         return self._line_for_offset(text, self._search_matches[self._current_match_index])
 
     def _copy_current_match_line(self):
+        self._clear_jump_line_highlight()
         line = self._current_match_line()
         if line is None:
             QMessageBox.information(self, "Copy Match", "No current search match to copy.")
@@ -289,6 +306,7 @@ class UniversalViewerDialog(QDialog):
         QGuiApplication.clipboard().setText(line)
 
     def _save_to_file(self):
+        self._clear_jump_line_highlight()
         default_name = f"{self._default_save_stem}.json" if self._pretty_mode else f"{self._default_save_stem}.txt"
         default_path = str(Path("data") / "exports" / default_name)
         path, _ = QFileDialog.getSaveFileName(
@@ -347,6 +365,7 @@ class UniversalViewerDialog(QDialog):
         return "\n".join(lines)
 
     def _export_search_matches(self):
+        self._clear_jump_line_highlight()
         query, matches = self._collect_search_match_lines()
         if not query or not matches:
             QMessageBox.information(self, "Export Search Matches", "No search matches to export.")
@@ -471,6 +490,12 @@ class UniversalViewerDialog(QDialog):
             selections.extend(search_selections)
         self.viewer.setExtraSelections(selections)
 
+    def _clear_jump_line_highlight(self):
+        if self._jumped_line_number is None:
+            return
+        self._jumped_line_number = None
+        self._apply_current_highlights(self._current_search_highlight_selections())
+
     def _jumped_line_selection(self):
         if self._jumped_line_number is None:
             return None
@@ -494,6 +519,7 @@ class UniversalViewerDialog(QDialog):
         self.search_counter.setText(f"{current} / {total}")
 
     def _goto_next_match(self):
+        self._clear_jump_line_highlight()
         if not self._search_matches:
             self._update_search_counter()
             return
@@ -501,6 +527,7 @@ class UniversalViewerDialog(QDialog):
         self._apply_current_match()
 
     def _goto_prev_match(self):
+        self._clear_jump_line_highlight()
         if not self._search_matches:
             self._update_search_counter()
             return
