@@ -70,12 +70,14 @@ class UniversalViewerDialog(QDialog):
         self.search_input.setClearButtonEnabled(True)
         self.btn_prev = QPushButton("Prev", self)
         self.btn_next = QPushButton("Next", self)
+        self.btn_copy_match = QPushButton("Copy Match", self)
         self.btn_export_matches = QPushButton("Export Matches", self)
         self.search_counter = QLabel("0 / 0", self)
         search_row.addWidget(self.search_label)
         search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.btn_prev)
         search_row.addWidget(self.btn_next)
+        search_row.addWidget(self.btn_copy_match)
         search_row.addWidget(self.btn_export_matches)
         search_row.addWidget(self.search_counter)
         root.addLayout(search_row)
@@ -116,6 +118,7 @@ class UniversalViewerDialog(QDialog):
         self.search_input.installEventFilter(self)
         self.btn_next.clicked.connect(self._goto_next_match)
         self.btn_prev.clicked.connect(self._goto_prev_match)
+        self.btn_copy_match.clicked.connect(self._copy_current_match_line)
         self.btn_export_matches.clicked.connect(self._export_search_matches)
 
         self._refresh_text()
@@ -204,6 +207,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Copy all", self._copy_all_text)
         menu.addAction("Select all", self.viewer.selectAll)
         menu.addSeparator()
+        menu.addAction("Copy current match", self._copy_current_match_line)
         menu.addAction("Save to file", self._save_to_file)
         menu.addAction("Export search matches", self._export_search_matches)
         menu.exec(self.viewer.mapToGlobal(position))
@@ -217,6 +221,35 @@ class UniversalViewerDialog(QDialog):
 
     def _copy_all_text(self):
         QGuiApplication.clipboard().setText(self.viewer.toPlainText() or "")
+
+    def _line_for_offset(self, text: str, offset: int):
+        if offset < 0 or offset > len(text):
+            return None
+        line_start = text.rfind("\n", 0, offset) + 1
+        line_end = text.find("\n", offset)
+        if line_end == -1:
+            line_end = len(text)
+        return text[line_start:line_end].rstrip("\r")
+
+    def _current_match_line(self):
+        query = (self.search_input.text() or "").strip()
+        text = self.viewer.toPlainText() or ""
+        if (
+            not query
+            or not text
+            or not self._search_matches
+            or self._current_match_index < 0
+            or self._current_match_index >= len(self._search_matches)
+        ):
+            return None
+        return self._line_for_offset(text, self._search_matches[self._current_match_index])
+
+    def _copy_current_match_line(self):
+        line = self._current_match_line()
+        if line is None:
+            QMessageBox.information(self, "Copy Match", "No current search match to copy.")
+            return
+        QGuiApplication.clipboard().setText(line)
 
     def _save_to_file(self):
         default_name = f"{self._default_save_stem}.json" if self._pretty_mode else f"{self._default_save_stem}.txt"
