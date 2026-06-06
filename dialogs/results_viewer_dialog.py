@@ -120,6 +120,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_raw = QPushButton("Raw JSON", self)
         self.btn_save = QPushButton("Save to file", self)
         self.btn_save_selection = QPushButton("Save Selection", self)
+        self.btn_help = QPushButton("Help", self)
         self.line_count_label = QLabel("Lines: 0", self)
         self.btn_close = QPushButton("Close", self)
         btn_row.addWidget(self.btn_copy)
@@ -127,6 +128,7 @@ class UniversalViewerDialog(QDialog):
         btn_row.addWidget(self.btn_raw)
         btn_row.addWidget(self.btn_save)
         btn_row.addWidget(self.btn_save_selection)
+        btn_row.addWidget(self.btn_help)
         btn_row.addWidget(self.line_count_label)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_close)
@@ -137,6 +139,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_raw.clicked.connect(self._show_raw_json)
         self.btn_save.clicked.connect(self._save_to_file)
         self.btn_save_selection.clicked.connect(self._save_selected_text)
+        self.btn_help.clicked.connect(self._open_viewer_help)
         self.btn_close.clicked.connect(self.close)
         self.search_input.textChanged.connect(self._rebuild_search_index)
         self.search_input.returnPressed.connect(self._goto_next_match)
@@ -280,7 +283,55 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Export search matches", self._export_search_matches)
         menu.addAction("Keyword scan...", self._run_keyword_scan)
         menu.addAction("Keyword packs...", self._run_keyword_pack_scan)
+        menu.addSeparator()
+        menu.addAction("Viewer help", self._open_viewer_help)
         menu.exec(self.viewer.mapToGlobal(position))
+
+    def _viewer_help_text(self) -> str:
+        return """Viewer Help
+
+Search
+- Search is a case-insensitive substring search.
+- Use Enter or Next to move forward.
+- Use Shift+Enter or Prev to move backward.
+
+Copy
+- Copy copies selected text, otherwise the full displayed text.
+- Copy Match copies the full line containing the active search match.
+
+Save
+- Save exports the currently displayed full text.
+- Save Selection exports only selected text.
+
+Export Matches
+- Exports current search matches with line numbers and matched lines.
+
+Jump to Line
+- Jumps to a 1-based line number in the current displayed mode.
+
+Keyword Scan
+- Scans custom keywords, one per line.
+
+Keyword Packs
+- Built-in packs provide safe recon/review keyword sets.
+- Preview shows pack keywords before scan.
+
+Pretty / Raw JSON
+- Pretty JSON shows formatted JSON where possible.
+- Raw JSON shows compact/raw JSON for structured payloads.
+"""
+
+    def _open_viewer_help(self):
+        self._clear_jump_line_highlight()
+        dialog = UniversalViewerDialog(
+            title="Viewer Help",
+            content=self._viewer_help_text(),
+            parent=self,
+            show_summary=False,
+            save_dialog_title="Save Viewer Help",
+            default_save_stem=f"{self._default_save_stem}_viewer_help",
+        )
+        dialog.exec()
 
     def _copy_selected_text(self):
         self._clear_jump_line_highlight()
