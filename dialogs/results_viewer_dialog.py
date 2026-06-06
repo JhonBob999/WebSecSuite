@@ -70,11 +70,13 @@ class UniversalViewerDialog(QDialog):
         self.search_input.setClearButtonEnabled(True)
         self.btn_prev = QPushButton("Prev", self)
         self.btn_next = QPushButton("Next", self)
+        self.btn_export_matches = QPushButton("Export Matches", self)
         self.search_counter = QLabel("0 / 0", self)
         search_row.addWidget(self.search_label)
         search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.btn_prev)
         search_row.addWidget(self.btn_next)
+        search_row.addWidget(self.btn_export_matches)
         search_row.addWidget(self.search_counter)
         root.addLayout(search_row)
 
@@ -114,6 +116,7 @@ class UniversalViewerDialog(QDialog):
         self.search_input.installEventFilter(self)
         self.btn_next.clicked.connect(self._goto_next_match)
         self.btn_prev.clicked.connect(self._goto_prev_match)
+        self.btn_export_matches.clicked.connect(self._export_search_matches)
 
         self._refresh_text()
 
@@ -202,6 +205,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Select all", self.viewer.selectAll)
         menu.addSeparator()
         menu.addAction("Save to file", self._save_to_file)
+        menu.addAction("Export search matches", self._export_search_matches)
         menu.exec(self.viewer.mapToGlobal(position))
 
     def _copy_selected_text(self):
@@ -230,6 +234,68 @@ class UniversalViewerDialog(QDialog):
             Path(path).write_text(self.viewer.toPlainText() or "", encoding="utf-8")
         except Exception as e:
             QMessageBox.warning(self, "Save failed", f"Could not save file:\n{e}")
+
+    def _collect_search_match_lines(self):
+        query = (self.search_input.text() or "").strip()
+        text = self.viewer.toPlainText() or ""
+        if not query or not text or not self._search_matches:
+            return query, []
+
+        matches = []
+        match_index = 0
+        line_start = 0
+        sorted_offsets = sorted(pos for pos in self._search_matches if pos >= 0)
+        lines = text.splitlines(keepends=True)
+
+        for line_number, line in enumerate(lines, start=1):
+            line_end = line_start + len(line)
+            display_line = line.rstrip("\r\n")
+            while match_index < len(sorted_offsets) and sorted_offsets[match_index] < line_end:
+                matches.append((line_number, display_line))
+                match_index += 1
+            line_start = line_end
+
+        if match_index < len(sorted_offsets):
+            fallback_lines = text.splitlines()
+            line_number = max(1, len(fallback_lines))
+            line_text = fallback_lines[-1] if fallback_lines else ""
+            for _ in sorted_offsets[match_index:]:
+                matches.append((line_number, line_text))
+        return query, matches
+
+    def _format_search_matches_export(self, query, matches) -> str:
+        lines = [
+            f"Viewer: {self.windowTitle()}",
+            f"Search query: {query}",
+            f"Total matches: {len(matches)}",
+            "",
+        ]
+        for index, (line_number, line_text) in enumerate(matches, start=1):
+            lines.append(f"[{index}] line {line_number}")
+            lines.append(line_text)
+            lines.append("")
+        return "\n".join(lines)
+
+    def _export_search_matches(self):
+        query, matches = self._collect_search_match_lines()
+        if not query or not matches:
+            QMessageBox.information(self, "Export Search Matches", "No search matches to export.")
+            return
+
+        default_path = str(Path("data") / "exports" / f"{self._default_save_stem}_matches.txt")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Search Matches",
+            default_path,
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(self._format_search_matches_export(query, matches), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "Export failed", f"Could not export search matches:\n{e}")
 
     def _rebuild_search_index(self):
         query = (self.search_input.text() or "").strip()
