@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -467,7 +468,14 @@ class UniversalViewerDialog(QDialog):
             )
         return results
 
-    def _build_keyword_scan_report_payload(self, keywords, scan_results, source=None, pack_name=None):
+    def _build_keyword_scan_report_payload(
+        self,
+        keywords,
+        scan_results,
+        source=None,
+        pack_name=None,
+        pack_keywords=None,
+    ):
         matched_keywords = sum(1 for result in scan_results if result["match_count"] > 0)
         payload = {
             "report_type": "keyword_scan",
@@ -476,6 +484,8 @@ class UniversalViewerDialog(QDialog):
             payload["source"] = source
         if pack_name:
             payload["pack_name"] = pack_name
+        if pack_keywords is not None:
+            payload["pack_keywords"] = list(pack_keywords)
         payload.update(
             {
                 "viewer": self.windowTitle(),
@@ -500,7 +510,7 @@ class UniversalViewerDialog(QDialog):
         )
         return payload
 
-    def _open_keyword_scan_report(self, keywords, source=None, pack_name=None):
+    def _open_keyword_scan_report(self, keywords, source=None, pack_name=None, pack_keywords=None):
         text = self.viewer.toPlainText() or ""
         scan_results = self._collect_keyword_scan_matches(keywords, text)
         report_payload = self._build_keyword_scan_report_payload(
@@ -508,6 +518,7 @@ class UniversalViewerDialog(QDialog):
             scan_results,
             source=source,
             pack_name=pack_name,
+            pack_keywords=pack_keywords,
         )
         dialog = UniversalViewerDialog(
             title="Keyword Scan Report",
@@ -528,6 +539,51 @@ class UniversalViewerDialog(QDialog):
 
         self._open_keyword_scan_report(keywords)
 
+    def _prompt_keyword_pack_selection(self, pack_names):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Keyword Packs")
+        dialog.setMinimumSize(360, 300)
+
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        selector = QComboBox(dialog)
+        selector.addItems(pack_names)
+        root.addWidget(selector)
+
+        preview = QPlainTextEdit(dialog)
+        preview.setReadOnly(True)
+        preview.setLineWrapMode(QPlainTextEdit.NoWrap)
+        mono = QFont("Consolas")
+        mono.setStyleHint(QFont.Monospace)
+        preview.setFont(mono)
+        root.addWidget(preview, 1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        run_button = QPushButton("Run Scan", dialog)
+        cancel_button = QPushButton("Cancel", dialog)
+        button_row.addWidget(run_button)
+        button_row.addWidget(cancel_button)
+        root.addLayout(button_row)
+
+        selected_keywords = []
+
+        def update_preview():
+            selected_keywords[:] = keywords_for_pack(selector.currentText())
+            preview.setPlainText("\n".join(selected_keywords))
+            run_button.setEnabled(bool(selected_keywords))
+
+        selector.currentTextChanged.connect(update_preview)
+        run_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+        update_preview()
+
+        if dialog.exec() != QDialog.Accepted:
+            return None, []
+        return selector.currentText(), list(selected_keywords)
+
     def _run_keyword_pack_scan(self):
         self._clear_jump_line_highlight()
         pack_names = keyword_pack_names()
@@ -535,18 +591,9 @@ class UniversalViewerDialog(QDialog):
             QMessageBox.information(self, "Keyword Packs", "No keyword packs are available.")
             return
 
-        pack_name, accepted = QInputDialog.getItem(
-            self,
-            "Keyword Packs",
-            "Select keyword pack:",
-            pack_names,
-            0,
-            False,
-        )
-        if not accepted:
+        pack_name, keywords = self._prompt_keyword_pack_selection(pack_names)
+        if not pack_name:
             return
-
-        keywords = keywords_for_pack(pack_name)
         if not keywords:
             QMessageBox.information(self, "Keyword Packs", "Selected keyword pack has no keywords.")
             return
@@ -555,6 +602,7 @@ class UniversalViewerDialog(QDialog):
             keywords,
             source="builtin_pack",
             pack_name=pack_name,
+            pack_keywords=keywords,
         )
 
     def _rebuild_search_index(self):
