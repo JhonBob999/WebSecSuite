@@ -272,11 +272,56 @@ class TaskInspectorPanel(QWidget):
         req_ms = self._first_non_empty(timings.get("request_ms"), data.get("request_ms"), data.get("time"), default=self.DASH)
         self._set("basic_request_ms", f"{req_ms} ms" if isinstance(req_ms, (int, float)) else req_ms)
         self._set("basic_content_len", self._first_non_empty(data.get("content_len"), default=self.DASH))
+        self._set_explanation_detail(
+            "basic_status",
+            "Status explanation",
+            "Status",
+            self._fields["basic_status"].text(),
+            "Task status shown for the selected result.",
+            "It helps distinguish completed, failed, skipped, or still-running task outcomes before reviewing deeper evidence.",
+            "Taken from the selected task status text when available, otherwise from the task result payload status field.",
+        )
+        self._set_explanation_detail(
+            "basic_status_code",
+            "Status code explanation",
+            "Status code",
+            self._fields["basic_status_code"].text(),
+            "HTTP status code returned by the target response.",
+            "It helps separate successful responses, redirects, client errors, server errors, and blocked or challenged responses.",
+            "Taken from the task result payload status_code field.",
+        )
+        self._set_explanation_detail(
+            "basic_request_ms",
+            "Request time explanation",
+            "Request time",
+            self._fields["basic_request_ms"].text(),
+            "Measured request duration for the selected task result.",
+            "Slow responses can help prioritize endpoints for stability review, timeout tuning, or later safe validation.",
+            "Taken from timings.request_ms, request_ms, or time in the task result payload.",
+        )
+        self._set_explanation_detail(
+            "basic_content_len",
+            "Content length explanation",
+            "Content length",
+            self._fields["basic_content_len"].text(),
+            "Reported response body length for the selected task result.",
+            "Size changes can help compare responses, spot empty or unusual pages, and prepare evidence for later analysis.",
+            "Taken from the task result payload content_len field.",
+        )
 
         self._set("nav_redirects", redirects)
         self._set("nav_method", method_text)
         self._set("nav_cookies", cookies_text)
         self._set("nav_headers", self._to_bool_text(bool(headers)))
+        self._set_explanation_detail(
+            "nav_method",
+            "Method explanation",
+            "Method",
+            self._fields["nav_method"].text(),
+            "HTTP method used for the selected request.",
+            "The method affects routing, caching, form behavior, and which endpoints are relevant for later validation.",
+            "Taken from request_recipe.method, payload method, or the selected task method.",
+        )
 
         internal_cnt = self._first_non_empty(
             discovery_stats.get("internal"),
@@ -312,6 +357,51 @@ class TaskInspectorPanel(QWidget):
         self._set("fp_server", server)
         self._set("fp_x_powered_by", x_powered)
         self._set("fp_x_generator", x_generator)
+        self._set_explanation_detail(
+            "fp_has_cdn",
+            "CDN hint explanation",
+            "Has CDN",
+            self._fields["fp_has_cdn"].text(),
+            "Whether the fingerprint summary found signs of an edge or CDN layer.",
+            "CDN hints can explain redirects, caching behavior, response headers, and where origin evidence may be indirect.",
+            self._fingerprint_evidence_text(fp_summary, fingerprint, "has_cdn"),
+        )
+        self._set_explanation_detail(
+            "fp_has_waf_hint",
+            "WAF hint explanation",
+            "WAF hint",
+            self._fields["fp_has_waf_hint"].text(),
+            "Whether the fingerprint summary found signs of a WAF or protection layer.",
+            "A WAF hint may explain challenged or blocked responses, but it is not proof of a vulnerability or exploitability.",
+            self._fingerprint_evidence_text(fp_summary, fingerprint, "has_waf_hint"),
+        )
+        self._set_explanation_detail(
+            "fp_server",
+            "Server header explanation",
+            "Server",
+            self._fields["fp_server"].text(),
+            "Server header value reported by the response when available.",
+            "Server headers are fingerprint hints that can help classify technology, but they can be hidden, generic, or misleading.",
+            "Taken from the response headers server or Server field." if server != self.DASH else "No server header evidence was available in the task result payload.",
+        )
+        self._set_explanation_detail(
+            "fp_x_powered_by",
+            "X-Powered-By explanation",
+            "X-Powered-By",
+            self._fields["fp_x_powered_by"].text(),
+            "X-Powered-By header value reported by the response when available.",
+            "This can hint at application framework or runtime, but it is a fingerprint signal, not proof of a vulnerability.",
+            "Taken from the response headers x-powered-by or X-Powered-By field." if x_powered != self.DASH else "No X-Powered-By header evidence was available in the task result payload.",
+        )
+        self._set_explanation_detail(
+            "fp_x_generator",
+            "X-Generator explanation",
+            "X-Generator",
+            self._fields["fp_x_generator"].text(),
+            "X-Generator header value reported by the response when available.",
+            "This can hint at CMS or tooling, but it is a fingerprint signal, not proof of a vulnerability.",
+            "Taken from the response headers x-generator or X-Generator field." if x_generator != self.DASH else "No X-Generator header evidence was available in the task result payload.",
+        )
 
         js_sources_total = self._first_non_empty(
             js_summary.get("external_total"),
@@ -347,6 +437,15 @@ class TaskInspectorPanel(QWidget):
         self._set("cand_ssrf", self._first_non_empty(types_breakdown.get("ssrf_candidate"), default=0))
         self._set("cand_max_conf", self._first_non_empty(candidates_summary.get("max_confidence"), default=self.DASH))
         self._set("cand_types", types_present_text)
+        self._set_explanation_detail(
+            "cand_max_conf",
+            "Max confidence explanation",
+            "Max confidence",
+            self._fields["cand_max_conf"].text(),
+            "Highest confidence score reported among vulnerability candidates for this result.",
+            "It is a candidate ranking indicator for review priority, not proof of exploitability.",
+            "Taken from the candidates_summary.max_confidence field." if candidates_summary.get("max_confidence") is not None else "No max confidence evidence was available in the task result payload.",
+        )
 
         self._set_detail("nav_redirects", "Redirect chain", data.get("redirect_chain"))
         self._set_detail(
@@ -472,9 +571,64 @@ class TaskInspectorPanel(QWidget):
             "cand_sqli": "inspector_sqli_candidates",
             "cand_lfi": "inspector_lfi_candidates",
             "cand_ssrf": "inspector_ssrf_candidates",
+            "basic_status": "inspector_status_explanation",
+            "basic_status_code": "inspector_status_code_explanation",
+            "basic_request_ms": "inspector_request_time_explanation",
+            "basic_content_len": "inspector_content_length_explanation",
+            "nav_method": "inspector_method_explanation",
+            "fp_has_cdn": "inspector_cdn_hint_explanation",
+            "fp_has_waf_hint": "inspector_waf_hint_explanation",
+            "fp_server": "inspector_server_header_explanation",
+            "fp_x_powered_by": "inspector_x_powered_by_explanation",
+            "fp_x_generator": "inspector_x_generator_explanation",
+            "cand_max_conf": "inspector_max_confidence_explanation",
             "cand_types": "inspector_candidate_types",
         }
         return stems.get(field_key, "inspector_detail")
+
+    @classmethod
+    def _display_value_for_explanation(cls, value: Any) -> str:
+        text = str(value).strip() if value is not None else ""
+        return "not detected / not available" if not text or text == cls.DASH else text
+
+    @staticmethod
+    def _fingerprint_evidence_text(
+        fp_summary: Mapping[str, Any],
+        fingerprint: Mapping[str, Any],
+        key: str,
+    ) -> str:
+        if key in fp_summary:
+            return f"Taken from the fingerprint summary {key} field."
+        if key in fingerprint:
+            return f"Taken from the fingerprint {key} field."
+        return "No direct fingerprint evidence was available in the task result payload."
+
+    def _set_explanation_detail(
+        self,
+        key: str,
+        title: str,
+        field_name: str,
+        value: Any,
+        meaning: str,
+        why_it_matters: str,
+        evidence: str,
+    ) -> None:
+        content = "\n".join(
+            [
+                f"Field: {field_name}",
+                f"Value: {self._display_value_for_explanation(value)}",
+                "",
+                "Meaning:",
+                meaning,
+                "",
+                "Why it matters:",
+                why_it_matters,
+                "",
+                "Evidence:",
+                evidence,
+            ]
+        )
+        self._set_detail(key, title, content)
 
     def _set_detail(self, key: str, title: str, data: Any) -> None:
         label = self._fields.get(key)
