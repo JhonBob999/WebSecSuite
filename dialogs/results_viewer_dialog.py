@@ -461,27 +461,29 @@ class UniversalViewerDialog(QDialog):
             )
         return results
 
-    def _format_keyword_scan_report(self, keywords, scan_results):
+    def _build_keyword_scan_report_payload(self, keywords, scan_results):
         matched_keywords = sum(1 for result in scan_results if result["match_count"] > 0)
-        lines = [
-            "Keyword Scan Report",
-            f"Viewer: {self.windowTitle()}",
-            "Scan mode: current displayed text",
-            f"Display mode: {'Pretty' if self._pretty_mode else 'Raw'}",
-            f"Keywords scanned: {len(keywords)}",
-            f"Keywords matched: {matched_keywords}",
-            "",
-        ]
-
-        for result in scan_results:
-            lines.append(f"Keyword: {result['keyword']}")
-            lines.append(f"Matches: {result['match_count']}")
-            lines.append("")
-            for index, (line_number, line_text, _) in enumerate(result["lines"], start=1):
-                lines.append(f"[{index}] line {line_number}")
-                lines.append(line_text)
-                lines.append("")
-        return "\n".join(lines).rstrip() + "\n"
+        return {
+            "report_type": "keyword_scan",
+            "viewer": self.windowTitle(),
+            "source_mode": "pretty" if self._pretty_mode else "raw",
+            "keywords_scanned": len(keywords),
+            "keywords_matched": matched_keywords,
+            "keywords": [
+                {
+                    "keyword": result["keyword"],
+                    "match_count": result["match_count"],
+                    "matches": [
+                        {
+                            "line": line_number,
+                            "text": line_text,
+                        }
+                        for line_number, line_text, _ in result["lines"]
+                    ],
+                }
+                for result in scan_results
+            ],
+        }
 
     def _run_keyword_scan(self):
         self._clear_jump_line_highlight()
@@ -492,10 +494,10 @@ class UniversalViewerDialog(QDialog):
 
         text = self.viewer.toPlainText() or ""
         scan_results = self._collect_keyword_scan_matches(keywords, text)
-        report = self._format_keyword_scan_report(keywords, scan_results)
+        report_payload = self._build_keyword_scan_report_payload(keywords, scan_results)
         dialog = UniversalViewerDialog(
             title="Keyword Scan Report",
-            content=report,
+            payload=report_payload,
             parent=self,
             show_summary=False,
             save_dialog_title="Save Keyword Scan Report",
