@@ -108,12 +108,14 @@ class UniversalViewerDialog(QDialog):
         self.btn_pretty = QPushButton("Pretty JSON", self)
         self.btn_raw = QPushButton("Raw JSON", self)
         self.btn_save = QPushButton("Save to file", self)
+        self.btn_save_selection = QPushButton("Save Selection", self)
         self.line_count_label = QLabel("Lines: 0", self)
         self.btn_close = QPushButton("Close", self)
         btn_row.addWidget(self.btn_copy)
         btn_row.addWidget(self.btn_pretty)
         btn_row.addWidget(self.btn_raw)
         btn_row.addWidget(self.btn_save)
+        btn_row.addWidget(self.btn_save_selection)
         btn_row.addWidget(self.line_count_label)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_close)
@@ -123,6 +125,7 @@ class UniversalViewerDialog(QDialog):
         self.btn_pretty.clicked.connect(self._show_pretty_json)
         self.btn_raw.clicked.connect(self._show_raw_json)
         self.btn_save.clicked.connect(self._save_to_file)
+        self.btn_save_selection.clicked.connect(self._save_selected_text)
         self.btn_close.clicked.connect(self.close)
         self.search_input.textChanged.connect(self._rebuild_search_index)
         self.search_input.returnPressed.connect(self._goto_next_match)
@@ -260,6 +263,7 @@ class UniversalViewerDialog(QDialog):
         menu.addAction("Copy current match", self._copy_current_match_line)
         menu.addAction("Jump to line...", self._focus_line_jump)
         menu.addAction("Save to file", self._save_to_file)
+        menu.addAction("Save selected text", self._save_selected_text)
         menu.addAction("Export search matches", self._export_search_matches)
         menu.exec(self.viewer.mapToGlobal(position))
 
@@ -322,6 +326,29 @@ class UniversalViewerDialog(QDialog):
             Path(path).write_text(self.viewer.toPlainText() or "", encoding="utf-8")
         except Exception as e:
             QMessageBox.warning(self, "Save failed", f"Could not save file:\n{e}")
+
+    def _save_selected_text(self):
+        self._clear_jump_line_highlight()
+        cursor = self.viewer.textCursor()
+        if not cursor.hasSelection():
+            QMessageBox.information(self, "Save Selected Text", "No selected text to save.")
+            return
+
+        selected_text = cursor.selectedText().replace("\u2029", "\n")
+        default_path = str(Path("data") / "exports" / f"{self._default_save_stem}_selection.txt")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Selected Text",
+            default_path,
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(selected_text, encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "Save failed", f"Could not save selected text:\n{e}")
 
     def _collect_search_match_lines(self):
         query = (self.search_input.text() or "").strip()
