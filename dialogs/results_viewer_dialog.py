@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor, QTextFormat
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -39,6 +39,7 @@ class UniversalViewerDialog(QDialog):
         self._pretty_mode = True
         self._search_matches: list[int] = []
         self._current_match_index = -1
+        self._jumped_line_number = None
         self._save_dialog_title = save_dialog_title
         self._default_save_stem = default_save_stem
 
@@ -184,6 +185,7 @@ class UniversalViewerDialog(QDialog):
             return "No results available"
 
     def _refresh_text(self):
+        self._jumped_line_number = None
         self.viewer.setPlainText(self._json_text(pretty=self._pretty_mode))
         self._update_line_count()
         self._rebuild_search_index()
@@ -210,6 +212,8 @@ class UniversalViewerDialog(QDialog):
         cursor = QTextCursor(block)
         self.viewer.setTextCursor(cursor)
         self.viewer.centerCursor()
+        self._jumped_line_number = line_number
+        self._apply_current_highlights(self._current_search_highlight_selections())
         self.viewer.setFocus(Qt.ShortcutFocusReason)
 
     def _show_pretty_json(self):
@@ -366,9 +370,10 @@ class UniversalViewerDialog(QDialog):
     def _rebuild_search_index(self):
         query = (self.search_input.text() or "").strip()
         text = self.viewer.toPlainText() or ""
+        self._jumped_line_number = None
         self._search_matches = []
         self._current_match_index = -1
-        self.viewer.setExtraSelections([])
+        self._apply_current_highlights()
 
         if not query or not text:
             self._update_search_counter()
@@ -400,7 +405,7 @@ class UniversalViewerDialog(QDialog):
             or self._current_match_index < 0
             or self._current_match_index >= len(self._search_matches)
         ):
-            self.viewer.setExtraSelections([])
+            self._apply_current_highlights()
             self._update_search_counter()
             return
 
@@ -411,6 +416,27 @@ class UniversalViewerDialog(QDialog):
         cursor.setPosition(end, QTextCursor.KeepAnchor)
         self.viewer.setTextCursor(cursor)
         self.viewer.centerCursor()
+
+        self._apply_current_highlights(self._current_search_highlight_selections())
+        self._update_search_counter()
+
+    def _current_search_highlight_selections(self):
+        query = (self.search_input.text() or "").strip()
+        text = self.viewer.toPlainText() or ""
+        if (
+            not query
+            or not text
+            or not self._search_matches
+            or self._current_match_index < 0
+            or self._current_match_index >= len(self._search_matches)
+        ):
+            return []
+
+        start = self._search_matches[self._current_match_index]
+        end = start + len(query)
+        cursor = QTextCursor(self.viewer.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
 
         current_selection = QTextEdit.ExtraSelection()
         current_selection.cursor = cursor
@@ -423,7 +449,7 @@ class UniversalViewerDialog(QDialog):
         for pos in self._search_matches:
             if pos == start:
                 continue
-            secondary_cursor = self.viewer.textCursor()
+            secondary_cursor = QTextCursor(self.viewer.document())
             secondary_cursor.setPosition(pos)
             secondary_cursor.setPosition(pos + len(query), QTextCursor.KeepAnchor)
             secondary_selection = QTextEdit.ExtraSelection()
@@ -434,8 +460,33 @@ class UniversalViewerDialog(QDialog):
             secondary_selection.format = secondary_fmt
             selections.append(secondary_selection)
 
+        return selections
+
+    def _apply_current_highlights(self, search_selections=None):
+        selections = []
+        jump_selection = self._jumped_line_selection()
+        if jump_selection is not None:
+            selections.append(jump_selection)
+        if search_selections:
+            selections.extend(search_selections)
         self.viewer.setExtraSelections(selections)
-        self._update_search_counter()
+
+    def _jumped_line_selection(self):
+        if self._jumped_line_number is None:
+            return None
+
+        block = self.viewer.document().findBlockByNumber(self._jumped_line_number - 1)
+        if not block.isValid():
+            return None
+
+        selection = QTextEdit.ExtraSelection()
+        selection.cursor = QTextCursor(block)
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("#2F6F9F"))
+        fmt.setForeground(QColor("#FFFFFF"))
+        fmt.setProperty(QTextFormat.FullWidthSelection, True)
+        selection.format = fmt
+        return selection
 
     def _update_search_counter(self):
         total = len(self._search_matches)
