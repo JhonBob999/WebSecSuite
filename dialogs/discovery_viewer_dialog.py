@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidgetItem,
     QHeaderView,
+    QInputDialog,
     QTableWidget,
     QTabWidget,
     QVBoxLayout,
@@ -791,7 +792,75 @@ class DiscoveryViewerDialog(QDialog):
                 self._selected_discovery_items(table)
             )
         )
+
+        entity_key = self._discovery_url_entity_key_for_row(
+            table, clicked_item.row() if clicked_item is not None else -1
+        )
+        if entity_key is not None and self.annotation_store is not None:
+            annotation = self.annotation_store.get_annotation(entity_key) or {}
+            menu.addSeparator()
+            note_action = menu.addAction("Add / Edit URL Note")
+            bookmark_action = menu.addAction(
+                "Remove URL Bookmark"
+                if annotation.get("bookmark", False)
+                else "Bookmark URL"
+            )
+            clear_action = menu.addAction("Clear URL Annotation")
+            clear_action.setEnabled(bool(annotation))
+            note_action.triggered.connect(
+                lambda: self._edit_discovery_url_note(entity_key)
+            )
+            bookmark_action.triggered.connect(
+                lambda: self._toggle_discovery_url_bookmark(entity_key)
+            )
+            clear_action.triggered.connect(
+                lambda: self._clear_discovery_url_annotation(entity_key)
+            )
         menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _discovery_url_entity_key_for_row(
+        self, table: QTableWidget, row: int
+    ) -> Optional[str]:
+        """Return the stable discovery URL key attached to a selectable URL row."""
+        if row < 0:
+            return None
+        item = table.item(row, 0)
+        if item is None or not (item.flags() & Qt.ItemIsSelectable):
+            return None
+        entity_key = item.data(DISCOVERY_URL_ENTITY_KEY_ROLE)
+        if not isinstance(entity_key, str):
+            return None
+        entity_key = entity_key.strip()
+        expected_key = self._build_discovery_url_entity_key(item.data(Qt.UserRole))
+        if expected_key is None or entity_key != expected_key:
+            return None
+        return entity_key
+
+    def _edit_discovery_url_note(self, entity_key: str):
+        if self.annotation_store is None:
+            return
+        annotation = self.annotation_store.get_annotation(entity_key) or {}
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            "URL Note",
+            "Note:",
+            annotation.get("note", ""),
+        )
+        if accepted:
+            self.annotation_store.upsert_annotation(entity_key, note=note)
+
+    def _toggle_discovery_url_bookmark(self, entity_key: str):
+        if self.annotation_store is None:
+            return
+        annotation = self.annotation_store.get_annotation(entity_key) or {}
+        self.annotation_store.upsert_annotation(
+            entity_key,
+            bookmark=not bool(annotation.get("bookmark", False)),
+        )
+
+    def _clear_discovery_url_annotation(self, entity_key: str):
+        if self.annotation_store is not None:
+            self.annotation_store.remove_annotation(entity_key)
 
     @staticmethod
     def _selected_discovery_text(editor: QPlainTextEdit) -> str:
