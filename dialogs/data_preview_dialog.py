@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
+from core.metadata import build_preview_field_entity_key
 from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
@@ -119,7 +120,8 @@ class DataPreviewDialog(QDialog):
 
     def __init__(self, parent=None,
                  fetch_all: Callable[[], list[dict]] | None = None,
-                 fetch_selected: Callable[[], list[dict]] | None = None ):
+                 fetch_selected: Callable[[], list[dict]] | None = None,
+                 annotation_store=None):
         super().__init__(parent)
         self.ui = Ui_DataPreviewDialog()
         self.ui.setupUi(self)
@@ -131,6 +133,7 @@ class DataPreviewDialog(QDialog):
 
         self.fetch_all = fetch_all
         self.fetch_selected = fetch_selected
+        self.annotation_store = annotation_store
         self._records: list[dict] = []
         self._columns: list[str] = []
         self._column_widths_by_name: dict[str, int] = {}
@@ -508,6 +511,22 @@ class DataPreviewDialog(QDialog):
             return {}
         rec = records[record_index]
         return rec if isinstance(rec, dict) else {"value": rec}
+
+    def _preview_field_entity_key_for_cell(self, row: int, column: int) -> str | None:
+        """Return the stable annotation key for a preview cell, when available."""
+        record = self._source_record_for_table_row(row)
+        task_id = record.get("task_id") if record else None
+        column_key = self._header_key_for_column(column)
+        if task_id is None or not str(task_id).strip() or not column_key:
+            return None
+        try:
+            return build_preview_field_entity_key(task_id, column_key)
+        except (TypeError, ValueError):
+            return None
+
+    def _can_annotate_preview_cell(self, row: int, column: int) -> bool:
+        """Report whether a preview cell has enough stable identity metadata."""
+        return self._preview_field_entity_key_for_cell(row, column) is not None
 
     def _preview_record_for_table_row(self, row: int) -> dict:
         record_index = self._record_index_for_table_row(row)

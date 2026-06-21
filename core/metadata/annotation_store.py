@@ -6,6 +6,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from .entity_keys import build_task_entity_key
+
 
 ANNOTATION_STORE_VERSION = 1
 
@@ -28,16 +30,6 @@ def _normalize_timestamp(value: Any) -> Optional[str]:
     return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
         "+00:00", "Z"
     )
-
-
-def build_task_entity_key(task_id: str) -> str:
-    """Build the stable annotation key for a task."""
-    if not isinstance(task_id, str):
-        raise TypeError("task_id must be a string")
-    task_id = task_id.strip()
-    if not task_id:
-        raise ValueError("task_id must not be empty")
-    return f"task:{task_id}"
 
 
 def _normalize_tags(tags: Sequence[str]) -> list[str]:

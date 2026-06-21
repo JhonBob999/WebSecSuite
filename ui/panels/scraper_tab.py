@@ -404,6 +404,7 @@ class ScraperTabController(QWidget):
             self,
             fetch_all=lambda: self._records_from_rows(range(self.ui.taskTable.rowCount())),
             fetch_selected=lambda: self._records_from_rows(self._selected_rows()),
+            annotation_store=self.annotation_store,
         )
         records = self._records_from_rows(rows_all)
         self.log.append("DEBUG", f"Preview rows={len(records)}", tag="DPV")
