@@ -7,6 +7,7 @@ from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QMenu, QApplication, QInputDialog
 from PySide6.QtWidgets import QMessageBox
 from core.metadata import build_task_entity_key
+from ui.constants import Col
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 from dialogs.forms_viewer_dialog import FormsViewerDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
@@ -215,6 +216,39 @@ class ScraperActions:
             return None
         return store.get_annotation(build_task_entity_key(task_id))
 
+    def refresh_task_annotation_visuals(self, task_id: Optional[str] = None) -> None:
+        """Refresh bookmark/note feedback on task-table URL cells only."""
+        table = self.table_ctl.table
+        if table is None:
+            return
+
+        if task_id is not None:
+            row = self.table_ctl.row_by_task_id(task_id)
+            rows = [row] if row >= 0 else []
+        else:
+            rows = range(table.rowCount())
+
+        for row in rows:
+            row_task_id = self.table_ctl.task_id_by_row(row)
+            item = table.item(row, Col.URL)
+            if not row_task_id or item is None:
+                continue
+
+            annotation = self._get_task_annotation(row_task_id) or {}
+            note = annotation.get("note") or ""
+            bookmarked = bool(annotation.get("bookmark", False))
+
+            font = item.font()
+            font.setBold(bookmarked)
+            item.setFont(font)
+
+            tooltip = f"URL:\n{item.text()}"
+            if bookmarked or note:
+                tooltip += f"\n\nAnnotation:\nBookmarked: {'yes' if bookmarked else 'no'}"
+            if note:
+                tooltip += f"\nNote:\n{note}"
+            item.setToolTip(tooltip)
+
     # ---------- Task annotations ----------
     def edit_task_note(self):
         task_id = self._context_or_selected_task_id()
@@ -232,6 +266,7 @@ class ScraperActions:
         if not accepted:
             return
         store.upsert_annotation(entity_key, note=note)
+        self.refresh_task_annotation_visuals(task_id)
         self._append_log(f"[INFO] Task note updated: {task_id}")
 
     def toggle_task_bookmark(self):
@@ -243,6 +278,7 @@ class ScraperActions:
         annotation = store.get_annotation(entity_key) or {}
         bookmarked = not bool(annotation.get("bookmark", False))
         store.upsert_annotation(entity_key, bookmark=bookmarked)
+        self.refresh_task_annotation_visuals(task_id)
         state = "added" if bookmarked else "removed"
         self._append_log(f"[INFO] Task bookmark {state}: {task_id}")
 
@@ -253,6 +289,7 @@ class ScraperActions:
             return
         entity_key = build_task_entity_key(task_id)
         if store.remove_annotation(entity_key):
+            self.refresh_task_annotation_visuals(task_id)
             self._append_log(f"[INFO] Task annotation cleared: {task_id}")
 
     def _task_payload(self, task_id: str) -> dict:

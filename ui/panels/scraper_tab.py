@@ -930,6 +930,7 @@ class ScraperTabController(QWidget):
 
         self._restore_session_selection(session)
         self.annotation_store = extract_annotation_store(session)
+        self.actions.refresh_task_annotation_visuals()
         self._refresh_task_inspector_for_current()
         return loaded
 
@@ -1053,6 +1054,10 @@ class ScraperTabController(QWidget):
     # --- Table proxies (единые сигнатуры!) ---
     def set_url_cell(self, row: int, url: str, title: str | None = None, task_id: str | None = None):
         self.table_ctl.set_url_cell(row=row, url=url, title=title, task_id=task_id)
+        if hasattr(self, "actions"):
+            resolved_task_id = task_id or self.table_ctl.task_id_by_row(row)
+            if resolved_task_id:
+                self.actions.refresh_task_annotation_visuals(resolved_task_id)
 
     def set_status_cell(self, row: int, status: str):
         self.table_ctl.set_status_cell(row=row, status=status)
