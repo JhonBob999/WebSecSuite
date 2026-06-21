@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, parse_qsl, urlparse
 
@@ -28,6 +29,21 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def _project_root() -> Path:
+    markers = ("main.py", "pyproject.toml", "requirements.txt", ".git")
+    module_dir = Path(__file__).resolve().parent
+    for candidate in (module_dir, *module_dir.parents):
+        if any((candidate / marker).exists() for marker in markers):
+            return candidate
+    return Path.cwd()
+
+
+def _discovery_export_dir() -> Path:
+    export_dir = _project_root() / "data" / "Discovery_Urls"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return export_dir
 
 
 class DiscoveryViewerDialog(QDialog):
@@ -276,10 +292,20 @@ class DiscoveryViewerDialog(QDialog):
         return self.discovery_filter.currentText() or "All"
 
     def _export_filtered_view(self):
+        try:
+            default_path = _discovery_export_dir() / "discovery_filtered_view.json"
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export Failed",
+                f"Could not create the Discovery Viewer export directory:\n{exc}",
+            )
+            return
+
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Export Discovery Filtered View",
-            "discovery_filtered_view.json",
+            str(default_path),
             "JSON Files (*.json);;Text Files (*.txt);;All Files (*)",
         )
         if not path:
