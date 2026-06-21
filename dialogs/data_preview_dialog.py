@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QComboBox,
+    QInputDialog,
     QMenu,
     QSizePolicy,
     QHeaderView,
@@ -477,10 +478,61 @@ class DataPreviewDialog(QDialog):
         menu = QMenu(table)
         menu.addAction("Copy cell", lambda: self._copy_cell_value(row, col))
         menu.addAction("Open cell in Viewer", lambda: self._open_cell_in_viewer(row, col))
+
+        entity_key = self._preview_field_entity_key_for_cell(row, col)
+        if entity_key is not None and self.annotation_store is not None:
+            annotation = self.annotation_store.get_annotation(entity_key)
+            menu.addSeparator()
+            menu.addAction(
+                "Add / Edit Cell Note",
+                lambda: self._edit_cell_note(row, col),
+            )
+            menu.addAction(
+                "Remove Cell Bookmark"
+                if annotation and annotation.get("bookmark")
+                else "Bookmark Cell",
+                lambda: self._toggle_cell_bookmark(row, col),
+            )
+            clear_action = menu.addAction(
+                "Clear Cell Annotation",
+                lambda: self._clear_cell_annotation(row, col),
+            )
+            clear_action.setEnabled(annotation is not None)
+
         menu.addSeparator()
         menu.addAction("Copy row as JSON", lambda: self._copy_row_as_json(row))
         menu.addAction("Open row in Viewer", lambda: self._open_row_in_viewer(row))
         menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _edit_cell_note(self, row: int, column: int):
+        entity_key = self._preview_field_entity_key_for_cell(row, column)
+        if entity_key is None or self.annotation_store is None:
+            return
+
+        annotation = self.annotation_store.get_annotation(entity_key) or {}
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Cell Note",
+            "Note:",
+            annotation.get("note", ""),
+        )
+        if accepted:
+            self.annotation_store.upsert_annotation(entity_key, note=note)
+
+    def _toggle_cell_bookmark(self, row: int, column: int):
+        entity_key = self._preview_field_entity_key_for_cell(row, column)
+        if entity_key is None or self.annotation_store is None:
+            return
+
+        annotation = self.annotation_store.get_annotation(entity_key) or {}
+        bookmarked = not bool(annotation.get("bookmark", False))
+        self.annotation_store.upsert_annotation(entity_key, bookmark=bookmarked)
+
+    def _clear_cell_annotation(self, row: int, column: int):
+        entity_key = self._preview_field_entity_key_for_cell(row, column)
+        if entity_key is None or self.annotation_store is None:
+            return
+        self.annotation_store.remove_annotation(entity_key)
 
     def _record_index_for_table_row(self, row: int) -> int | None:
         table = self.ui.tablePreview
