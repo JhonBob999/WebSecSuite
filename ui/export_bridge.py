@@ -8,6 +8,8 @@ from dataclasses import is_dataclass, asdict
 from typing import Any, Iterable, Mapping
 from core.scraper.request_params import normalize_params
 
+PREVIEW_RECORD_KEY_FIELD = "_preview_record_key"
+
 PREVIEW_PREFERRED_COLUMNS: list[str] = [
     "task_id",
     "url",
@@ -252,6 +254,7 @@ PREVIEW_PREFERRED_COLUMNS: list[str] = [
 ]
 
 PREVIEW_HIDDEN_RAW_FIELDS: set[str] = {
+    PREVIEW_RECORD_KEY_FIELD,
     "candidates",
     "candidates_summary",
     "finding_artifacts",
@@ -1375,7 +1378,10 @@ def export(records: Iterable[Mapping[str, Any]], path: str, fmt: str = "csv") ->
     if fmt not in {"csv", "json", "xlsx"}:
         raise ValueError(f"Unsupported export format: {fmt}")
 
-    source_records = [dict(r) for r in records]
+    source_records = [
+        {key: value for key, value in dict(record).items() if key != PREVIEW_RECORD_KEY_FIELD}
+        for record in records
+    ]
     # Нормализуем список к export-friendly плоскому виду (включая candidate summary поля).
     items = [task_to_record(r) for r in source_records]
 

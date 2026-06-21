@@ -2468,6 +2468,7 @@ class ScraperTabController(QWidget):
             rec = deepcopy(payload)
             if tid:
                 rec.setdefault("task_id", tid)
+                rec.setdefault(xb.PREVIEW_RECORD_KEY_FIELD, tid)
             _, task = self._row_to_task(row) if hasattr(self, "_row_to_task") else (None, None)
             if task:
                 rec.setdefault("url", getattr(task, "url", "") or "")

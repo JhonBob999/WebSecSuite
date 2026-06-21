@@ -623,11 +623,18 @@ class DataPreviewDialog(QDialog):
         """Return the stable annotation key for a preview cell, when available."""
         record = self._source_record_for_table_row(row)
         task_id = record.get("task_id") if record else None
+        record_key = (
+            record.get(xb.PREVIEW_RECORD_KEY_FIELD, task_id) if record else task_id
+        )
         column_key = self._header_key_for_column(column)
         if task_id is None or not str(task_id).strip() or not column_key:
             return None
         try:
-            return build_preview_field_entity_key(task_id, column_key)
+            return build_preview_field_entity_key(
+                task_id,
+                column_key,
+                record_key=record_key,
+            )
         except (TypeError, ValueError):
             return None
 
