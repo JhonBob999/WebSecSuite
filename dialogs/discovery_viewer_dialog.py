@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QMessageBox,
@@ -29,6 +30,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 
 def _project_root() -> Path:
@@ -81,6 +84,7 @@ class DiscoveryViewerDialog(QDialog):
         self._details_widgets: Dict[str, Dict[str, Any]] = {}
         self._forms_cache: List[Any] = []
         self._query_params_cache: List[tuple[str, str]] = []
+        self._row_payloads: Dict[int, Any] = {}
 
         self.setWindowTitle("Discovery Viewer")
         self.setMinimumSize(1000, 650)
@@ -115,9 +119,9 @@ class DiscoveryViewerDialog(QDialog):
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self._build_tab("table_internal"), "Internal URLs (0)")
         self.tabs.addTab(self._build_tab("table_external"), "External URLs (0)")
-        self.forms_text = self._build_text_tab()
+        self.forms_text = self._build_text_tab("forms")
         self.tabs.addTab(self.forms_text.parentWidget(), "Forms (0)")
-        self.query_params_text = self._build_text_tab()
+        self.query_params_text = self._build_text_tab("params")
         self.tabs.addTab(self.query_params_text.parentWidget(), "Query Params (0)")
         self.tabs.addTab(self._build_tab("table_high_value"), "High-value endpoints (0)")
         main_layout.addWidget(self.tabs, stretch=1)
@@ -190,11 +194,16 @@ class DiscoveryViewerDialog(QDialog):
         }
         return tab
 
-    def _build_text_tab(self) -> QPlainTextEdit:
+    def _build_text_tab(self, group_key: str) -> QPlainTextEdit:
         tab = QWidget(self)
         layout = QVBoxLayout(tab)
         text = QPlainTextEdit(tab)
         text.setReadOnly(True)
+        text.setContextMenuPolicy(Qt.CustomContextMenu)
+        text.customContextMenuRequested.connect(
+            lambda pos, editor=text, key=group_key:
+            self._show_discovery_text_context_menu(editor, key, pos)
+        )
         layout.addWidget(text)
         return text
 
@@ -214,6 +223,12 @@ class DiscoveryViewerDialog(QDialog):
             table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             table.setAlternatingRowColors(True)
             table.setSortingEnabled(True)
+            table.setContextMenuPolicy(Qt.CustomContextMenu)
+            key = table.objectName().replace("table_", "", 1)
+            table.customContextMenuRequested.connect(
+                lambda pos, current_table=table, group_key=key:
+                self._show_discovery_context_menu(current_table, group_key, pos)
+            )
 
             header = table.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -460,6 +475,10 @@ class DiscoveryViewerDialog(QDialog):
             display_url = full_url if len(full_url) <= 240 else full_url[:237] + "..."
             url_item = QTableWidgetItem(display_url)
             url_item.setData(Qt.UserRole, full_url)
+            url_item.setData(
+                Qt.UserRole + 1,
+                self._row_payloads.get(id(row_data), dict(row_data)),
+            )
             if display_url != full_url:
                 url_item.setToolTip(full_url)
             table.setItem(row_idx, 0, url_item)
@@ -571,6 +590,115 @@ class DiscoveryViewerDialog(QDialog):
             return
         QDesktopServices.openUrl(QUrl(self._selected_url))
 
+    def _selected_discovery_items(self, table: QTableWidget) -> List[Any]:
+        selection_model = table.selectionModel()
+        if not selection_model:
+            return []
+
+        payloads: List[Any] = []
+        for index in selection_model.selectedRows():
+            item = table.item(index.row(), 0)
+            if item is None or not (item.flags() & Qt.ItemIsSelectable):
+                continue
+            payload = item.data(Qt.UserRole + 1)
+            if payload is None:
+                payload = item.data(Qt.UserRole)
+            if payload is None:
+                payload = item.text()
+            if payload not in (None, ""):
+                payloads.append(payload)
+        return payloads
+
+    def _selected_discovery_payload(self, table: QTableWidget) -> Any:
+        payloads = self._selected_discovery_items(table)
+        if not payloads:
+            return None
+        return payloads[0] if len(payloads) == 1 else payloads
+
+    @staticmethod
+    def _payload_to_clipboard_text(payload: Any) -> str:
+        if isinstance(payload, dict):
+            for key in ("url", "href", "endpoint", "path", "value"):
+                value = payload.get(key)
+                if value not in (None, ""):
+                    return str(value)
+            return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        if isinstance(payload, (list, tuple)):
+            return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        return str(payload)
+
+    def _copy_selected_discovery_item(self, table: QTableWidget):
+        payload = self._selected_discovery_payload(table)
+        if payload is None:
+            return
+        QApplication.clipboard().setText(self._payload_to_clipboard_text(payload))
+
+    def _open_selected_discovery_item(self, table: QTableWidget, group_key: str):
+        payload = self._selected_discovery_payload(table)
+        if payload is None:
+            return
+        title = f"Discovery: {self._GROUP_LABELS.get(group_key, 'Item')}"
+        if isinstance(payload, (dict, list, tuple)):
+            dialog = UniversalViewerDialog(title=title, payload=payload, parent=self)
+        else:
+            dialog = UniversalViewerDialog(title=title, content=str(payload), parent=self)
+        dialog.exec()
+
+    def _show_discovery_context_menu(
+        self,
+        table: QTableWidget,
+        group_key: str,
+        pos,
+    ):
+        clicked_item = table.itemAt(pos)
+        if clicked_item is not None and clicked_item.flags() & Qt.ItemIsSelectable:
+            if not clicked_item.isSelected():
+                table.clearSelection()
+                table.selectRow(clicked_item.row())
+
+        has_selection = bool(self._selected_discovery_items(table))
+        menu = QMenu(table)
+        copy_action = menu.addAction("Copy Selected")
+        open_action = menu.addAction("Open Selected in Viewer")
+        copy_action.setEnabled(has_selection)
+        open_action.setEnabled(has_selection)
+        copy_action.triggered.connect(lambda: self._copy_selected_discovery_item(table))
+        open_action.triggered.connect(
+            lambda: self._open_selected_discovery_item(table, group_key)
+        )
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _selected_discovery_text(editor: QPlainTextEdit) -> str:
+        return editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+
+    def _show_discovery_text_context_menu(
+        self,
+        editor: QPlainTextEdit,
+        group_key: str,
+        pos,
+    ):
+        selected_text = self._selected_discovery_text(editor)
+        menu = editor.createStandardContextMenu()
+        menu.addSeparator()
+        copy_action = menu.addAction("Copy Selected")
+        open_action = menu.addAction("Open Selected in Viewer")
+        copy_action.setEnabled(bool(selected_text))
+        open_action.setEnabled(bool(selected_text))
+        copy_action.triggered.connect(
+            lambda: QApplication.clipboard().setText(
+                self._selected_discovery_text(editor)
+            )
+        )
+        open_action.triggered.connect(
+            lambda: UniversalViewerDialog(
+                title=f"Discovery: {self._GROUP_LABELS.get(group_key, 'Item')}",
+                content=self._selected_discovery_text(editor),
+                parent=self,
+            ).exec()
+        )
+        menu.exec(editor.viewport().mapToGlobal(pos))
+
     def _extract_rows(self) -> Dict[str, List[Dict[str, Any]]]:
         """Build rows for internal/external/params views from self.discovery."""
         empty = {"internal": [], "external": [], "params": []}
@@ -598,8 +726,8 @@ class DiscoveryViewerDialog(QDialog):
                 else:
                     internal_urls.append(item)
 
-        rows_internal = [r for r in (self._build_row(u) for u in internal_urls) if r]
-        rows_external = [r for r in (self._build_row(u) for u in external_urls) if r]
+        rows_internal = self._build_rows_with_payloads(internal_urls)
+        rows_external = self._build_rows_with_payloads(external_urls)
 
         rows_internal = self._dedupe(rows_internal)
         rows_external = self._dedupe(rows_external)
@@ -618,6 +746,15 @@ class DiscoveryViewerDialog(QDialog):
             "params": rows_params,
             "high_value": self._dedupe(rows_high_value),
         }
+
+    def _build_rows_with_payloads(self, values: List[Any]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for value in values:
+            row = self._build_row(value)
+            if row:
+                self._row_payloads[id(row)] = value
+                rows.append(row)
+        return rows
 
     @staticmethod
     def _safe_list(value: Any) -> List[Any]:
