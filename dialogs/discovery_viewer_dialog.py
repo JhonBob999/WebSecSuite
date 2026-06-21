@@ -260,6 +260,7 @@ class DiscoveryViewerDialog(QDialog):
         self._fill_table(getattr(self, "table_internal", None), internal)
         self._fill_table(getattr(self, "table_external", None), external)
         self._fill_table(getattr(self, "table_high_value", None), high_value)
+        self._refresh_discovery_url_annotation_visuals()
 
     def _refresh_view(self):
         grouped = self._current_filtered_groups()
@@ -533,6 +534,56 @@ class DiscoveryViewerDialog(QDialog):
             return build_discovery_url_entity_key(self.task_id, url)
         except (TypeError, ValueError):
             return None
+
+    def _refresh_discovery_url_annotation_visual(
+        self, table: QTableWidget, row: int
+    ) -> None:
+        """Apply annotation presentation to one Discovery URL cell."""
+        item = table.item(row, 0)
+        if item is None:
+            return
+
+        full_url = str(item.data(Qt.UserRole) or item.text())
+        normal_tooltip = full_url if item.text() != full_url else ""
+        annotation: Dict[str, Any] = {}
+        entity_key = self._discovery_url_entity_key_for_row(table, row)
+        if entity_key is not None and self.annotation_store is not None:
+            annotation = self.annotation_store.get_annotation(entity_key) or {}
+
+        font = item.font()
+        font.setBold(bool(annotation.get("bookmark", False)))
+        item.setFont(font)
+
+        note = str(annotation.get("note") or "")
+        tags = annotation.get("tags") or []
+        annotation_lines: List[str] = []
+        if annotation.get("bookmark", False) or note or tags:
+            annotation_lines.append(
+                f"Bookmarked: {'yes' if annotation.get('bookmark', False) else 'no'}"
+            )
+        if note:
+            annotation_lines.extend(("Note:", note))
+        if tags:
+            annotation_lines.extend(("Tags:", ", ".join(str(tag) for tag in tags)))
+
+        if annotation_lines:
+            item.setToolTip(
+                f"URL:\n{full_url}\n\nAnnotation:\n" + "\n".join(annotation_lines)
+            )
+        else:
+            item.setToolTip(normal_tooltip)
+
+    def _refresh_discovery_url_annotation_visuals(self) -> None:
+        """Refresh annotation presentation in Discovery URL tables only."""
+        for table in (
+            getattr(self, "table_internal", None),
+            getattr(self, "table_external", None),
+            getattr(self, "table_high_value", None),
+        ):
+            if table is None:
+                continue
+            for row in range(table.rowCount()):
+                self._refresh_discovery_url_annotation_visual(table, row)
 
     def _rebuild_cache(self):
         self._rows_cache = self._extract_rows()
@@ -848,6 +899,7 @@ class DiscoveryViewerDialog(QDialog):
         )
         if accepted:
             self.annotation_store.upsert_annotation(entity_key, note=note)
+            self._refresh_discovery_url_annotation_visuals()
 
     def _toggle_discovery_url_bookmark(self, entity_key: str):
         if self.annotation_store is None:
@@ -857,10 +909,12 @@ class DiscoveryViewerDialog(QDialog):
             entity_key,
             bookmark=not bool(annotation.get("bookmark", False)),
         )
+        self._refresh_discovery_url_annotation_visuals()
 
     def _clear_discovery_url_annotation(self, entity_key: str):
         if self.annotation_store is not None:
             self.annotation_store.remove_annotation(entity_key)
+            self._refresh_discovery_url_annotation_visuals()
 
     @staticmethod
     def _selected_discovery_text(editor: QPlainTextEdit) -> str:
