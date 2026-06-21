@@ -640,6 +640,8 @@ class ScraperActions:
             discovery,
             parent=self.parent,
             add_task_callback=self._add_discovery_urls_as_tasks,
+            task_id=task_id,
+            annotation_store=getattr(self.parent, "annotation_store", None),
         ).exec()
 
     def _add_discovery_urls_as_tasks(self, urls: List[str]) -> int:

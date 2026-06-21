@@ -31,7 +31,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.metadata import AnnotationStore, build_discovery_url_entity_key
 from dialogs.results_viewer_dialog import UniversalViewerDialog
+
+
+DISCOVERY_URL_ENTITY_KEY_ROLE = Qt.UserRole + 2
 
 
 def _project_root() -> Path:
@@ -78,10 +82,14 @@ class DiscoveryViewerDialog(QDialog):
         discovery: dict,
         parent=None,
         add_task_callback: Optional[Callable[[List[str]], Any]] = None,
+        task_id=None,
+        annotation_store: Optional[AnnotationStore] = None,
     ):
         super().__init__(parent)
         self.discovery = discovery if isinstance(discovery, dict) else {}
         self._add_task_callback = add_task_callback
+        self.task_id = task_id
+        self.annotation_store = annotation_store
         self._rows_cache: Dict[str, List[Dict[str, Any]]] = {
             "internal": [], "external": [], "params": [], "high_value": [],
         }
@@ -493,6 +501,9 @@ class DiscoveryViewerDialog(QDialog):
                 Qt.UserRole + 1,
                 self._row_payloads.get(id(row_data), dict(row_data)),
             )
+            entity_key = self._build_discovery_url_entity_key(full_url)
+            if entity_key is not None:
+                url_item.setData(DISCOVERY_URL_ENTITY_KEY_ROLE, entity_key)
             if display_url != full_url:
                 url_item.setToolTip(full_url)
             table.setItem(row_idx, 0, url_item)
@@ -513,6 +524,14 @@ class DiscoveryViewerDialog(QDialog):
         for col in range(1, 5):
             table.resizeColumnToContents(col)
         table.setSortingEnabled(True)
+
+    def _build_discovery_url_entity_key(self, url: str) -> Optional[str]:
+        if self.task_id is None:
+            return None
+        try:
+            return build_discovery_url_entity_key(self.task_id, url)
+        except (TypeError, ValueError):
+            return None
 
     def _rebuild_cache(self):
         self._rows_cache = self._extract_rows()
