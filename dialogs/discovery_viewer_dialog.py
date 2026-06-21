@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, parse_qsl, urlparse
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import parse_qs, parse_qsl, urljoin, urlparse
 
 from PySide6.QtCore import Qt, QUrl, QSignalBlocker
 from PySide6.QtGui import QDesktopServices
@@ -73,9 +73,15 @@ class DiscoveryViewerDialog(QDialog):
         "account", "config", "debug",
     )
 
-    def __init__(self, discovery: dict, parent=None):
+    def __init__(
+        self,
+        discovery: dict,
+        parent=None,
+        add_task_callback: Optional[Callable[[List[str]], Any]] = None,
+    ):
         super().__init__(parent)
         self.discovery = discovery if isinstance(discovery, dict) else {}
+        self._add_task_callback = add_task_callback
         self._rows_cache: Dict[str, List[Dict[str, Any]]] = {
             "internal": [], "external": [], "params": [], "high_value": [],
         }
@@ -644,6 +650,91 @@ class DiscoveryViewerDialog(QDialog):
             dialog = UniversalViewerDialog(title=title, content=str(payload), parent=self)
         dialog.exec()
 
+    @staticmethod
+    def _absolute_http_url(value: Any, base_url: str = "") -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = urlparse(text)
+            if parsed.scheme:
+                if parsed.scheme.lower() not in ("http", "https"):
+                    return ""
+                return text if parsed.netloc else ""
+            if not base_url:
+                return ""
+            resolved = urljoin(base_url, text)
+            resolved_parsed = urlparse(resolved)
+            if resolved_parsed.scheme.lower() in ("http", "https") and resolved_parsed.netloc:
+                return resolved
+        except (TypeError, ValueError):
+            return ""
+        return ""
+
+    def _discovery_base_url(self) -> str:
+        for key in ("base_url", "url", "target_url", "origin"):
+            value = self._absolute_http_url(self.discovery.get(key))
+            if value:
+                return value
+        return ""
+
+    def _url_from_discovery_payload(self, payload: Any) -> str:
+        base_url = self._discovery_base_url()
+        if isinstance(payload, dict):
+            for base_key in ("base_url", "origin", "source_url", "page_url"):
+                payload_base = self._absolute_http_url(payload.get(base_key), base_url)
+                if payload_base:
+                    base_url = payload_base
+                    break
+            for key in ("url", "href", "endpoint", "absolute_url", "full_url", "action"):
+                if payload.get(key) not in (None, ""):
+                    url = self._absolute_http_url(payload.get(key), base_url)
+                    if url:
+                        return url
+            return ""
+        text = str(payload or "").strip()
+        if text.lower() == "no items":
+            return ""
+        parsed = urlparse(text)
+        if not parsed.scheme and not (
+            text.startswith(("/", "./", "../"))
+            or ("/" in text and not any(character.isspace() for character in text))
+        ):
+            return ""
+        return self._absolute_http_url(text, base_url)
+
+    def _add_selected_payloads_as_tasks(self, payloads: List[Any]):
+        urls: List[str] = []
+        seen = set()
+        for payload in payloads:
+            url = self._url_from_discovery_payload(payload)
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+
+        if not urls:
+            QMessageBox.information(
+                self, "Add task", "Selected item does not contain a usable URL."
+            )
+            return
+        if not callable(self._add_task_callback):
+            QMessageBox.information(
+                self, "Add task", "Adding tasks is not available from this viewer."
+            )
+            return
+
+        try:
+            result = self._add_task_callback(urls)
+        except Exception as exc:
+            QMessageBox.warning(self, "Add task", f"Could not add selected task(s): {exc}")
+            return
+        added_count = (
+            result
+            if isinstance(result, int) and not isinstance(result, bool)
+            else len(urls)
+        )
+        QMessageBox.information(self, "Add task", f"Added {added_count} task(s).")
+
     def _show_discovery_context_menu(
         self,
         table: QTableWidget,
@@ -660,11 +751,18 @@ class DiscoveryViewerDialog(QDialog):
         menu = QMenu(table)
         copy_action = menu.addAction("Copy Selected")
         open_action = menu.addAction("Open Selected in Viewer")
+        add_task_action = menu.addAction("Add Selected as Task")
         copy_action.setEnabled(has_selection)
         open_action.setEnabled(has_selection)
+        add_task_action.setEnabled(has_selection)
         copy_action.triggered.connect(lambda: self._copy_selected_discovery_item(table))
         open_action.triggered.connect(
             lambda: self._open_selected_discovery_item(table, group_key)
+        )
+        add_task_action.triggered.connect(
+            lambda: self._add_selected_payloads_as_tasks(
+                self._selected_discovery_items(table)
+            )
         )
         menu.exec(table.viewport().mapToGlobal(pos))
 
@@ -683,8 +781,10 @@ class DiscoveryViewerDialog(QDialog):
         menu.addSeparator()
         copy_action = menu.addAction("Copy Selected")
         open_action = menu.addAction("Open Selected in Viewer")
+        add_task_action = menu.addAction("Add Selected as Task")
         copy_action.setEnabled(bool(selected_text))
         open_action.setEnabled(bool(selected_text))
+        add_task_action.setEnabled(bool(selected_text))
         copy_action.triggered.connect(
             lambda: QApplication.clipboard().setText(
                 self._selected_discovery_text(editor)
@@ -696,6 +796,11 @@ class DiscoveryViewerDialog(QDialog):
                 content=self._selected_discovery_text(editor),
                 parent=self,
             ).exec()
+        )
+        add_task_action.triggered.connect(
+            lambda: self._add_selected_payloads_as_tasks(
+                [self._selected_discovery_text(editor)]
+            )
         )
         menu.exec(editor.viewport().mapToGlobal(pos))
 

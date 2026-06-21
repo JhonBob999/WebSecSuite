@@ -521,7 +521,22 @@ class ScraperActions:
         if not isinstance(discovery, dict):
             discovery = {}
 
-        DiscoveryViewerDialog(discovery, parent=self.parent).exec()
+        DiscoveryViewerDialog(
+            discovery,
+            parent=self.parent,
+            add_task_callback=self._add_discovery_urls_as_tasks,
+        ).exec()
+
+    def _add_discovery_urls_as_tasks(self, urls: List[str]) -> int:
+        add_task_row = getattr(self.parent, "add_task_row", None)
+        if not callable(add_task_row):
+            raise RuntimeError("Task creation is unavailable")
+
+        added = 0
+        for url in urls:
+            add_task_row(url)
+            added += 1
+        return added
 
     def view_forms(self):
         task_ids = self._get_selected_task_ids_from_table()
