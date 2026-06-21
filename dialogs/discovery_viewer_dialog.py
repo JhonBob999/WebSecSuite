@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, parse_qsl, urlparse
 
@@ -12,11 +13,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
     QSplitter,
     QTableWidgetItem,
     QHeaderView,
@@ -28,6 +31,13 @@ from PySide6.QtWidgets import (
 
 
 class DiscoveryViewerDialog(QDialog):
+    _GROUP_LABELS = {
+        "internal": "Internal URLs",
+        "external": "External URLs",
+        "forms": "Forms",
+        "params": "Query Params",
+        "high_value": "High-value endpoints",
+    }
     _DISCOVERY_FILTERS = (
         "All",
         "Internal only",
@@ -70,6 +80,7 @@ class DiscoveryViewerDialog(QDialog):
         self.filter_label = QLabel("Filter:", self)
         self.discovery_filter = QComboBox(self)
         self.discovery_filter.addItems(self._DISCOVERY_FILTERS)
+        self.export_view_button = QPushButton("Export View", self)
         self.cb_only_params = QCheckBox("Only with params", self)
         self.cb_hide_duplicates = QCheckBox("Hide duplicates", self)
         self.counters_label = QLabel("Internal: 0 | External: 0 | With params: 0 | Total: 0", self)
@@ -78,6 +89,7 @@ class DiscoveryViewerDialog(QDialog):
         top_bar.addWidget(self.search_edit, stretch=2)
         top_bar.addWidget(self.filter_label)
         top_bar.addWidget(self.discovery_filter)
+        top_bar.addWidget(self.export_view_button)
         top_bar.addWidget(self.cb_only_params)
         top_bar.addWidget(self.cb_hide_duplicates)
         top_bar.addWidget(self.counters_label, stretch=1)
@@ -116,6 +128,7 @@ class DiscoveryViewerDialog(QDialog):
         self.discovery_filter.currentTextChanged.connect(self._refresh_view)
         self.cb_only_params.stateChanged.connect(self._refresh_view)
         self.cb_hide_duplicates.stateChanged.connect(self._refresh_view)
+        self.export_view_button.clicked.connect(self._export_filtered_view)
         self.table_internal.itemSelectionChanged.connect(lambda: self._on_selection_changed("internal"))
         self.table_external.itemSelectionChanged.connect(lambda: self._on_selection_changed("external"))
         self.table_high_value.itemSelectionChanged.connect(lambda: self._on_selection_changed("high_value"))
@@ -203,6 +216,23 @@ class DiscoveryViewerDialog(QDialog):
         self._fill_table(getattr(self, "table_high_value", None), high_value)
 
     def _refresh_view(self):
+        grouped = self._current_filtered_groups()
+        internal = grouped["internal"]
+        external = grouped["external"]
+        params = grouped["param_rows"]
+        high_value = grouped["high_value"]
+
+        self._populate_tables({
+            "internal": internal,
+            "external": external,
+            "params": params,
+            "high_value": high_value,
+        })
+        self._render_grouped_discovery(grouped)
+        self._update_action_buttons()
+        self._update_counters(internal, external, params, high_value)
+
+    def _current_filtered_groups(self) -> Dict[str, Any]:
         base = self._rows_cache or {"internal": [], "external": [], "params": []}
         internal = list(base.get("internal", []))
         external = list(base.get("external", []))
@@ -239,19 +269,90 @@ class DiscoveryViewerDialog(QDialog):
             "external": external,
             "high_value": high_value,
         })
-        internal = grouped["internal"]
-        external = grouped["external"]
-        high_value = grouped["high_value"]
+        grouped["param_rows"] = params
+        return grouped
 
-        self._populate_tables({
-            "internal": internal,
-            "external": external,
-            "params": params,
-            "high_value": high_value,
-        })
-        self._render_grouped_discovery(grouped)
-        self._update_action_buttons()
-        self._update_counters(internal, external, params, high_value)
+    def _current_filter_label(self) -> str:
+        return self.discovery_filter.currentText() or "All"
+
+    def _export_filtered_view(self):
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Discovery Filtered View",
+            "discovery_filtered_view.json",
+            "JSON Files (*.json);;Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+
+        if not path.lower().endswith((".json", ".txt")):
+            path += ".txt" if selected_filter.startswith("Text Files") else ".json"
+
+        try:
+            data = self._build_filtered_export_data()
+            if path.lower().endswith(".txt"):
+                self._write_filtered_view_text(path, data)
+            else:
+                self._write_filtered_view_json(path, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Failed", f"Could not export filtered view:\n{exc}")
+            return
+
+        QMessageBox.information(self, "Export Complete", "Filtered discovery view exported successfully.")
+
+    def _build_filtered_export_data(self) -> Dict[str, Any]:
+        grouped = self._current_filtered_groups()
+        visible = grouped.get("visible", set())
+        groups: Dict[str, List[Any]] = {}
+
+        for key, label in self._GROUP_LABELS.items():
+            if key not in visible:
+                continue
+            if key in ("internal", "external", "high_value"):
+                items = [dict(row) for row in grouped.get(key, [])]
+            elif key == "forms":
+                items = [self._format_form(item, index) for index, item in enumerate(grouped.get(key, []), 1)]
+            else:
+                items = [
+                    {"name": str(name), "example": str(example)}
+                    for name, example in grouped.get(key, [])
+                ]
+            groups[label] = items
+
+        return {
+            "export_type": "discovery_filtered_view",
+            "filter": self._current_filter_label(),
+            "groups": groups,
+            "counts": {label: len(items) for label, items in groups.items()},
+        }
+
+    @staticmethod
+    def _write_filtered_view_json(path: str, data: Dict[str, Any]):
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def _write_filtered_view_text(cls, path: str, data: Dict[str, Any]):
+        lines = ["Discovery Filtered View", f"Filter: {data.get('filter', 'All')}", ""]
+        for label, items in data.get("groups", {}).items():
+            lines.append(f"{label} ({len(items)})")
+            if not items:
+                lines.append("No items")
+            else:
+                lines.extend(f"- {cls._format_export_text_item(label, item)}" for item in items)
+            lines.append("")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines).rstrip() + "\n")
+
+    @staticmethod
+    def _format_export_text_item(label: str, item: Any) -> str:
+        if isinstance(item, dict):
+            if label == "Query Params":
+                name = item.get("name", "")
+                example = item.get("example", "")
+                return f"{name} (Example: {example})" if example else str(name)
+            return str(item.get("url") or item)
+        return str(item).replace("\n", "\n  ")
 
     def _apply_discovery_filter(self, rows: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         selected = self.discovery_filter.currentText() or "All"
