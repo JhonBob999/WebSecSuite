@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from core.metadata import AnnotationStore
+
 
 SESSION_SCHEMA = "websecsuite.scraper.session"
 SESSION_VERSION = 1
@@ -23,8 +25,9 @@ def build_scraper_session(
     selected_task_id: str | None = None,
     current_row: int = -1,
     saved_at: str | None = None,
+    annotation_store: AnnotationStore | None = None,
 ) -> dict[str, Any]:
-    return {
+    session = {
         "schema": SESSION_SCHEMA,
         "version": SESSION_VERSION,
         "saved_at": saved_at or utc_timestamp(),
@@ -35,6 +38,19 @@ def build_scraper_session(
         },
         "tasks": [_safe_json(task) for task in tasks],
     }
+    if annotation_store is not None:
+        session["metadata"] = _safe_json(annotation_store.to_dict())
+    return session
+
+
+def extract_annotation_store(session_data: Any) -> AnnotationStore:
+    """Return session annotations, or an empty store for missing/malformed metadata."""
+    if not isinstance(session_data, Mapping):
+        return AnnotationStore()
+    try:
+        return AnnotationStore.from_dict(session_data.get("metadata"))
+    except (TypeError, ValueError):
+        return AnnotationStore()
 
 
 def save_session(path: str | Path, data: Mapping[str, Any]) -> None:

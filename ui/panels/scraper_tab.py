@@ -39,8 +39,14 @@ from core.scraper.task_manager import TaskManager
 from core.scraper.task_types import ScrapeTask
 from core.scraper import exporter
 from core.cookies import storage
+from core.metadata import AnnotationStore
 from core.scraper.task_types import TaskStatus
-from core.session_persistence import build_scraper_session, load_session, save_session
+from core.session_persistence import (
+    build_scraper_session,
+    extract_annotation_store,
+    load_session,
+    save_session,
+)
 from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
@@ -110,6 +116,7 @@ class ScraperTabController(QWidget):
 
         # Хранилище результатов задач для предпросмотра
         self.task_results: dict[str, dict] = {}
+        self.annotation_store = AnnotationStore()
 
 
         # ---- ТАБЛИЦА: единое имя контроллера self.table_ctl ----
@@ -730,6 +737,7 @@ class ScraperTabController(QWidget):
             tasks=tasks,
             selected_task_id=selected_task_id,
             current_row=current_row,
+            annotation_store=self.annotation_store,
         )
 
     def _session_task_params(self, task) -> dict:
@@ -921,6 +929,7 @@ class ScraperTabController(QWidget):
             table.setUpdatesEnabled(True)
 
         self._restore_session_selection(session)
+        self.annotation_store = extract_annotation_store(session)
         self._refresh_task_inspector_for_current()
         return loaded
 
