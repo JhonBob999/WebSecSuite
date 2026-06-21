@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -27,6 +28,16 @@ from PySide6.QtWidgets import (
 
 
 class DiscoveryViewerDialog(QDialog):
+    _DISCOVERY_FILTERS = (
+        "All",
+        "Internal only",
+        "External only",
+        "With params only",
+        "Forms only",
+        "Auth/Admin/API/Upload only",
+        "High-value only",
+    )
+    _AUTH_ADMIN_API_UPLOAD_KEYWORDS = ("auth", "login", "admin", "api", "upload")
     _HIGH_VALUE_KEYWORDS = (
         "admin", "login", "auth", "api", "upload", "file", "download",
         "redirect", "callback", "token", "reset", "password", "user",
@@ -42,6 +53,8 @@ class DiscoveryViewerDialog(QDialog):
         self._selected_url: Optional[str] = None
         self._current_details_key: Optional[str] = None
         self._details_widgets: Dict[str, Dict[str, Any]] = {}
+        self._forms_cache: List[Any] = []
+        self._query_params_cache: List[tuple[str, str]] = []
 
         self.setWindowTitle("Discovery Viewer")
         self.setMinimumSize(1000, 650)
@@ -54,12 +67,17 @@ class DiscoveryViewerDialog(QDialog):
         top_bar = QHBoxLayout()
         self.search_edit = QLineEdit(self)
         self.search_edit.setPlaceholderText("Search URL / host / path / param...")
+        self.filter_label = QLabel("Filter:", self)
+        self.discovery_filter = QComboBox(self)
+        self.discovery_filter.addItems(self._DISCOVERY_FILTERS)
         self.cb_only_params = QCheckBox("Only with params", self)
         self.cb_hide_duplicates = QCheckBox("Hide duplicates", self)
         self.counters_label = QLabel("Internal: 0 | External: 0 | With params: 0 | Total: 0", self)
         self.counters_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         top_bar.addWidget(self.search_edit, stretch=2)
+        top_bar.addWidget(self.filter_label)
+        top_bar.addWidget(self.discovery_filter)
         top_bar.addWidget(self.cb_only_params)
         top_bar.addWidget(self.cb_hide_duplicates)
         top_bar.addWidget(self.counters_label, stretch=1)
@@ -75,6 +93,10 @@ class DiscoveryViewerDialog(QDialog):
         self.tabs.addTab(self.query_params_text.parentWidget(), "Query Params (0)")
         self.tabs.addTab(self._build_tab("table_high_value"), "High-value endpoints (0)")
         main_layout.addWidget(self.tabs, stretch=1)
+        self.empty_filter_label = QLabel("No items for selected filter", self)
+        self.empty_filter_label.setAlignment(Qt.AlignCenter)
+        self.empty_filter_label.hide()
+        main_layout.addWidget(self.empty_filter_label)
 
         self._setup_tables()
         initial_rows = self._extract_rows()
@@ -91,6 +113,7 @@ class DiscoveryViewerDialog(QDialog):
 
         # Filters
         self.search_edit.textChanged.connect(self._refresh_view)
+        self.discovery_filter.currentTextChanged.connect(self._refresh_view)
         self.cb_only_params.stateChanged.connect(self._refresh_view)
         self.cb_hide_duplicates.stateChanged.connect(self._refresh_view)
         self.table_internal.itemSelectionChanged.connect(lambda: self._on_selection_changed("internal"))
@@ -211,14 +234,72 @@ class DiscoveryViewerDialog(QDialog):
             params = [r for r in params if _match(r)]
             high_value = [r for r in high_value if _match(r)]
 
+        grouped = self._apply_discovery_filter({
+            "internal": internal,
+            "external": external,
+            "high_value": high_value,
+        })
+        internal = grouped["internal"]
+        external = grouped["external"]
+        high_value = grouped["high_value"]
+
         self._populate_tables({
             "internal": internal,
             "external": external,
             "params": params,
             "high_value": high_value,
         })
+        self._render_grouped_discovery(grouped)
         self._update_action_buttons()
         self._update_counters(internal, external, params, high_value)
+
+    def _apply_discovery_filter(self, rows: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        selected = self.discovery_filter.currentText() or "All"
+        visible = {"internal", "external", "forms", "params", "high_value"}
+
+        if selected == "Internal only":
+            visible = {"internal"}
+        elif selected == "External only":
+            visible = {"external"}
+        elif selected == "With params only":
+            visible = {"internal", "external", "params", "high_value"}
+            rows = {
+                key: [row for row in rows.get(key, []) if row.get("params_count", 0) > 0]
+                for key in ("internal", "external", "high_value")
+            }
+        elif selected == "Forms only":
+            visible = {"forms"}
+        elif selected == "Auth/Admin/API/Upload only":
+            visible = {"internal", "external", "high_value"}
+            rows = {
+                key: [row for row in rows.get(key, []) if self._matches_auth_admin_api_upload(row)]
+                for key in ("internal", "external", "high_value")
+            }
+        elif selected == "High-value only":
+            visible = {"high_value"}
+
+        return {
+            "internal": list(rows.get("internal", [])) if "internal" in visible else [],
+            "external": list(rows.get("external", [])) if "external" in visible else [],
+            "high_value": list(rows.get("high_value", [])) if "high_value" in visible else [],
+            "forms": list(self._forms_cache),
+            "params": list(self._query_params_cache),
+            "visible": visible,
+        }
+
+    @classmethod
+    def _matches_auth_admin_api_upload(cls, row: Dict[str, Any]) -> bool:
+        text = " ".join(str(row.get(key, "")) for key in ("url", "host", "path")).lower()
+        return any(keyword in text for keyword in cls._AUTH_ADMIN_API_UPLOAD_KEYWORDS)
+
+    def _render_grouped_discovery(self, grouped: Dict[str, Any]):
+        visible = grouped.get("visible", set())
+        tab_keys = ("internal", "external", "forms", "params", "high_value")
+        for index, key in enumerate(tab_keys):
+            self.tabs.setTabVisible(index, key in visible)
+
+        visible_count = sum(len(grouped.get(key, [])) for key in visible)
+        self.empty_filter_label.setVisible(visible_count == 0)
 
     def _update_counters(self, internal, external, params, high_value):
         n_internal = len(internal)
@@ -228,6 +309,8 @@ class DiscoveryViewerDialog(QDialog):
         self.counters_label.setText(f"Internal: {n_internal} | External: {n_external} | With params: {n_params} | Total: {total}")
         self.tabs.setTabText(0, f"Internal URLs ({n_internal})")
         self.tabs.setTabText(1, f"External URLs ({n_external})")
+        self.tabs.setTabText(2, f"Forms ({len(self._forms_cache)})")
+        self.tabs.setTabText(3, f"Query Params ({len(self._query_params_cache)})")
         self.tabs.setTabText(4, f"High-value endpoints ({len(high_value)})")
 
     def _fill_table(self, table: QTableWidget | None, rows: List[Dict[str, Any]]):
@@ -437,10 +520,12 @@ class DiscoveryViewerDialog(QDialog):
             forms = self._safe_list(nested_forms) if nested_forms is not None else [forms_value]
         else:
             forms = self._safe_list(forms_value)
+        self._forms_cache = forms
         form_lines = [self._format_form(item, index) for index, item in enumerate(forms, 1)]
         self.forms_text.setPlainText("\n\n".join(form_lines) if form_lines else "No items")
 
         params = self._extract_query_param_examples()
+        self._query_params_cache = params
         param_lines = [
             f"{name}\n  Example: {example}" if example else name
             for name, example in params
