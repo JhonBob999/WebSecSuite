@@ -123,6 +123,7 @@ class TaskInspectorPanel(QWidget):
                 ("cand_ssrf", "SSRF"),
                 ("cand_max_conf", "Max confidence"),
                 ("cand_types", "Types present"),
+                ("cand_evidence_artifacts", "Evidence / Artifacts"),
             ],
         )
         self.sections_container.addStretch(1)
@@ -451,6 +452,32 @@ class TaskInspectorPanel(QWidget):
         self._set("cand_ssrf", self._first_non_empty(types_breakdown.get("ssrf_candidate"), default=0))
         self._set("cand_max_conf", self._first_non_empty(candidates_summary.get("max_confidence"), default=self.DASH))
         self._set("cand_types", types_present_text)
+        evidence_artifacts = {
+            key: data.get(key)
+            for key in (
+                "discovery",
+                "forms",
+                "forms_summary",
+                "fingerprint",
+                "js_recon",
+                "candidates",
+                "candidates_summary",
+                "request_recipe",
+                "validation",
+                "validation_plan",
+                "replay",
+                "replay_manifest",
+                "evidence",
+                "findings",
+                "artifacts",
+            )
+            if key in data and self._has_detail_payload(data.get(key))
+        }
+        evidence_artifacts_count = len(evidence_artifacts)
+        self._set(
+            "cand_evidence_artifacts",
+            f"{evidence_artifacts_count} sections" if evidence_artifacts_count else "none",
+        )
         self._set_explanation_detail(
             "cand_max_conf",
             "Max confidence explanation",
@@ -498,6 +525,7 @@ class TaskInspectorPanel(QWidget):
         self._set_detail("cand_lfi", "LFI candidates", self._filter_candidates(data.get("candidates"), "lfi"))
         self._set_detail("cand_ssrf", "SSRF candidates", self._filter_candidates(data.get("candidates"), "ssrf"))
         self._set_detail("cand_types", "Candidate types", types_present)
+        self._set_detail("cand_evidence_artifacts", "Evidence / Artifacts", evidence_artifacts)
 
     def _set(self, key: str, value: Any) -> None:
         label = self._fields.get(key)
@@ -612,6 +640,7 @@ class TaskInspectorPanel(QWidget):
             "fp_x_generator": "inspector_x_generator_explanation",
             "cand_max_conf": "inspector_max_confidence_explanation",
             "cand_types": "inspector_candidate_types",
+            "cand_evidence_artifacts": "inspector_evidence_artifacts",
         }
         return stems.get(field_key, "inspector_detail")
 
