@@ -518,9 +518,8 @@ class ScraperActions:
         payload = task_results.get(task_id, {}) if isinstance(task_results, dict) else {}
         discovery = payload.get("discovery") if isinstance(payload, dict) else None
 
-        if not isinstance(discovery, dict) or not discovery:
-            QMessageBox.information(self.parent, "No discovery", "Run Discover URLs first.")
-            return
+        if not isinstance(discovery, dict):
+            discovery = {}
 
         DiscoveryViewerDialog(discovery, parent=self.parent).exec()
 

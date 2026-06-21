@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 from PySide6.QtCore import Qt, QUrl, QSignalBlocker
 from PySide6.QtGui import QDesktopServices
@@ -27,10 +27,18 @@ from PySide6.QtWidgets import (
 
 
 class DiscoveryViewerDialog(QDialog):
+    _HIGH_VALUE_KEYWORDS = (
+        "admin", "login", "auth", "api", "upload", "file", "download",
+        "redirect", "callback", "token", "reset", "password", "user",
+        "account", "config", "debug",
+    )
+
     def __init__(self, discovery: dict, parent=None):
         super().__init__(parent)
-        self.discovery = discovery
-        self._rows_cache: Dict[str, List[Dict[str, Any]]] = {"internal": [], "external": [], "params": []}
+        self.discovery = discovery if isinstance(discovery, dict) else {}
+        self._rows_cache: Dict[str, List[Dict[str, Any]]] = {
+            "internal": [], "external": [], "params": [], "high_value": [],
+        }
         self._selected_url: Optional[str] = None
         self._current_details_key: Optional[str] = None
         self._details_widgets: Dict[str, Dict[str, Any]] = {}
@@ -59,15 +67,20 @@ class DiscoveryViewerDialog(QDialog):
 
         # Tabs
         self.tabs = QTabWidget(self)
-        self.tabs.addTab(self._build_tab("table_internal"), "Internal")
-        self.tabs.addTab(self._build_tab("table_external"), "External")
-        self.tabs.addTab(self._build_tab("table_params"), "With params")
+        self.tabs.addTab(self._build_tab("table_internal"), "Internal URLs (0)")
+        self.tabs.addTab(self._build_tab("table_external"), "External URLs (0)")
+        self.forms_text = self._build_text_tab()
+        self.tabs.addTab(self.forms_text.parentWidget(), "Forms (0)")
+        self.query_params_text = self._build_text_tab()
+        self.tabs.addTab(self.query_params_text.parentWidget(), "Query Params (0)")
+        self.tabs.addTab(self._build_tab("table_high_value"), "High-value endpoints (0)")
         main_layout.addWidget(self.tabs, stretch=1)
 
         self._setup_tables()
         initial_rows = self._extract_rows()
         self._populate_tables(initial_rows)
         self._rebuild_cache()
+        self._populate_summary_groups()
         self._refresh_view()
 
         # Bottom buttons
@@ -82,7 +95,7 @@ class DiscoveryViewerDialog(QDialog):
         self.cb_hide_duplicates.stateChanged.connect(self._refresh_view)
         self.table_internal.itemSelectionChanged.connect(lambda: self._on_selection_changed("internal"))
         self.table_external.itemSelectionChanged.connect(lambda: self._on_selection_changed("external"))
-        self.table_params.itemSelectionChanged.connect(lambda: self._on_selection_changed("params"))
+        self.table_high_value.itemSelectionChanged.connect(lambda: self._on_selection_changed("high_value"))
 
 
     def _build_tab(self, table_object_name: str) -> QWidget:
@@ -125,9 +138,21 @@ class DiscoveryViewerDialog(QDialog):
         }
         return tab
 
+    def _build_text_tab(self) -> QPlainTextEdit:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        text = QPlainTextEdit(tab)
+        text.setReadOnly(True)
+        layout.addWidget(text)
+        return text
+
     def _setup_tables(self):
         columns = ["URL", "Host", "Path", "Params", "Param names"]
-        tables = [getattr(self, "table_internal", None), getattr(self, "table_external", None), getattr(self, "table_params", None)]
+        tables = [
+            getattr(self, "table_internal", None),
+            getattr(self, "table_external", None),
+            getattr(self, "table_high_value", None),
+        ]
         for table in tables:
             if table is None:
                 continue
@@ -148,27 +173,30 @@ class DiscoveryViewerDialog(QDialog):
     def _populate_tables(self, rows: Dict[str, List[Dict[str, Any]]]):
         internal = rows.get("internal", []) if rows else []
         external = rows.get("external", []) if rows else []
-        params = rows.get("params", []) if rows else []
+        high_value = rows.get("high_value", []) if rows else []
 
         self._fill_table(getattr(self, "table_internal", None), internal)
         self._fill_table(getattr(self, "table_external", None), external)
-        self._fill_table(getattr(self, "table_params", None), params)
+        self._fill_table(getattr(self, "table_high_value", None), high_value)
 
     def _refresh_view(self):
         base = self._rows_cache or {"internal": [], "external": [], "params": []}
         internal = list(base.get("internal", []))
         external = list(base.get("external", []))
         params = list(base.get("params", []))
+        high_value = list(base.get("high_value", []))
 
         if self.cb_hide_duplicates.isChecked():
             internal = self._dedupe(internal)
             external = self._dedupe(external)
             params = self._dedupe(params)
+            high_value = self._dedupe(high_value)
 
         if self.cb_only_params.isChecked():
             internal = [r for r in internal if r.get("params_count", 0) > 0]
             external = [r for r in external if r.get("params_count", 0) > 0]
             params = [r for r in params if r.get("params_count", 0) > 0]
+            high_value = [r for r in high_value if r.get("params_count", 0) > 0]
 
         needle = (self.search_edit.text() or "").strip().lower()
         if needle:
@@ -181,31 +209,50 @@ class DiscoveryViewerDialog(QDialog):
             internal = [r for r in internal if _match(r)]
             external = [r for r in external if _match(r)]
             params = [r for r in params if _match(r)]
+            high_value = [r for r in high_value if _match(r)]
 
         self._populate_tables({
             "internal": internal,
             "external": external,
             "params": params,
+            "high_value": high_value,
         })
         self._update_action_buttons()
-        self._update_counters(internal, external, params)
+        self._update_counters(internal, external, params, high_value)
 
-    def _update_counters(self, internal: List[Dict[str, Any]], external: List[Dict[str, Any]], params: List[Dict[str, Any]]):
+    def _update_counters(self, internal, external, params, high_value):
         n_internal = len(internal)
         n_external = len(external)
         n_params = len(params)
         total = n_internal + n_external
         self.counters_label.setText(f"Internal: {n_internal} | External: {n_external} | With params: {n_params} | Total: {total}")
+        self.tabs.setTabText(0, f"Internal URLs ({n_internal})")
+        self.tabs.setTabText(1, f"External URLs ({n_external})")
+        self.tabs.setTabText(4, f"High-value endpoints ({len(high_value)})")
 
     def _fill_table(self, table: QTableWidget | None, rows: List[Dict[str, Any]]):
         if table is None:
             return
         table.setSortingEnabled(False)
         table.setRowCount(0)
+        if not rows:
+            table.insertRow(0)
+            empty_item = QTableWidgetItem("No items")
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsSelectable)
+            table.setItem(0, 0, empty_item)
+            table.setSpan(0, 0, 1, table.columnCount())
+            table.setSortingEnabled(True)
+            return
         for row_data in rows:
             row_idx = table.rowCount()
             table.insertRow(row_idx)
-            table.setItem(row_idx, 0, QTableWidgetItem(str(row_data.get("url", ""))))
+            full_url = str(row_data.get("url", ""))
+            display_url = full_url if len(full_url) <= 240 else full_url[:237] + "..."
+            url_item = QTableWidgetItem(display_url)
+            url_item.setData(Qt.UserRole, full_url)
+            if display_url != full_url:
+                url_item.setToolTip(full_url)
+            table.setItem(row_idx, 0, url_item)
             table.setItem(row_idx, 1, QTableWidgetItem(str(row_data.get("host", ""))))
             table.setItem(row_idx, 2, QTableWidgetItem(str(row_data.get("path", ""))))
             table.setItem(row_idx, 3, QTableWidgetItem(str(row_data.get("params_count", ""))))
@@ -231,7 +278,7 @@ class DiscoveryViewerDialog(QDialog):
         tables = {
             "internal": getattr(self, "table_internal", None),
             "external": getattr(self, "table_external", None),
-            "params": getattr(self, "table_params", None),
+            "high_value": getattr(self, "table_high_value", None),
         }
         current_table = tables.get(key)
         if current_table is None:
@@ -324,8 +371,22 @@ class DiscoveryViewerDialog(QDialog):
         if not isinstance(urls_section, dict):
             urls_section = {}
 
-        internal_urls = urls_section.get("internal") if isinstance(urls_section.get("internal"), list) else []
-        external_urls = urls_section.get("external") if isinstance(urls_section.get("external"), list) else []
+        internal_urls = self._safe_list(urls_section.get("internal"))
+        external_urls = self._safe_list(urls_section.get("external"))
+
+        if not internal_urls and not external_urls:
+            flat_urls = self._safe_list(urls_section.get("all"))
+            if not flat_urls:
+                for key in ("urls", "links", "endpoints", "internal_urls"):
+                    flat_urls.extend(self._safe_list(self.discovery.get(key)))
+            external_urls.extend(self._safe_list(self.discovery.get("external_urls")))
+            base_host = self._url_host(self.discovery.get("base_url"))
+            for item in flat_urls:
+                item_host = self._url_host(item)
+                if base_host and item_host and item_host != base_host:
+                    external_urls.append(item)
+                else:
+                    internal_urls.append(item)
 
         rows_internal = [r for r in (self._build_row(u) for u in internal_urls) if r]
         rows_external = [r for r in (self._build_row(u) for u in external_urls) if r]
@@ -336,12 +397,110 @@ class DiscoveryViewerDialog(QDialog):
         rows_params_source = rows_internal + rows_external
         rows_params = [r for r in rows_params_source if r.get("params_count", 0) > 0]
         rows_params = self._dedupe(rows_params)
+        rows_high_value = [
+            row for row in rows_params_source
+            if self._is_high_value_endpoint(row.get("url"))
+        ]
 
         return {
             "internal": rows_internal,
             "external": rows_external,
             "params": rows_params,
+            "high_value": self._dedupe(rows_high_value),
         }
+
+    @staticmethod
+    def _safe_list(value: Any) -> List[Any]:
+        if isinstance(value, (list, tuple, set)):
+            return [item for item in value if item not in (None, "")]
+        if isinstance(value, str) and value.strip():
+            return [value]
+        return []
+
+    @staticmethod
+    def _url_host(value: Any) -> str:
+        try:
+            return (urlparse(str(value or "")).hostname or "").lower()
+        except Exception:
+            return ""
+
+    def _is_high_value_endpoint(self, value: Any) -> bool:
+        text = str(value or "").lower()
+        return any(keyword in text for keyword in self._HIGH_VALUE_KEYWORDS)
+
+    def _populate_summary_groups(self):
+        forms_value = self.discovery.get("forms")
+        if forms_value is None:
+            forms_value = self.discovery.get("form_entries", self.discovery.get("form"))
+        if isinstance(forms_value, dict):
+            nested_forms = forms_value.get("forms") or forms_value.get("items")
+            forms = self._safe_list(nested_forms) if nested_forms is not None else [forms_value]
+        else:
+            forms = self._safe_list(forms_value)
+        form_lines = [self._format_form(item, index) for index, item in enumerate(forms, 1)]
+        self.forms_text.setPlainText("\n\n".join(form_lines) if form_lines else "No items")
+
+        params = self._extract_query_param_examples()
+        param_lines = [
+            f"{name}\n  Example: {example}" if example else name
+            for name, example in params
+        ]
+        self.query_params_text.setPlainText("\n\n".join(param_lines) if param_lines else "No items")
+        self.tabs.setTabText(2, f"Forms ({len(forms)})")
+        self.tabs.setTabText(3, f"Query Params ({len(params)})")
+
+    def _format_form(self, form: Any, index: int) -> str:
+        if not isinstance(form, dict):
+            return str(form)
+        action = form.get("action") or form.get("url") or "(no action)"
+        method = str(form.get("method") or "GET").upper()
+        inputs = form.get("input_names") or form.get("inputs") or form.get("params") or []
+        if isinstance(inputs, dict):
+            input_names = [str(name) for name in inputs.keys()]
+        elif isinstance(inputs, (list, tuple, set)):
+            input_names = [
+                str(item.get("name") or "") if isinstance(item, dict) else str(item)
+                for item in inputs
+            ]
+        else:
+            input_names = [str(inputs)] if inputs else []
+        names = ", ".join(name for name in input_names if name) or "No inputs"
+        return f"{index}. {method} {action}\n   Inputs: {names}"
+
+    def _extract_query_param_examples(self) -> List[tuple[str, str]]:
+        examples: Dict[str, str] = {}
+        existing = self.discovery.get("query_params")
+        if existing is None:
+            existing = self.discovery.get("query_parameters", self.discovery.get("parameters"))
+        if isinstance(existing, dict):
+            for source, values in existing.items():
+                if isinstance(values, dict):
+                    for name, value in values.items():
+                        example = f"{source} ({value})" if value not in (None, "") else str(source)
+                        examples.setdefault(str(name), example)
+                elif isinstance(values, (list, tuple, set)):
+                    for name in values:
+                        examples.setdefault(str(name), str(source))
+                elif values not in (None, ""):
+                    examples.setdefault(str(source), str(values))
+        elif isinstance(existing, (list, tuple, set)):
+            for item in existing:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("param") or item.get("key")
+                    if name:
+                        examples.setdefault(str(name), str(item.get("example") or item.get("url") or ""))
+                elif item not in (None, ""):
+                    examples.setdefault(str(item), "")
+
+        for row in self._rows_cache.get("internal", []) + self._rows_cache.get("external", []):
+            url = str(row.get("url") or "")
+            try:
+                pairs = parse_qsl(urlparse(url).query, keep_blank_values=True)
+            except Exception:
+                pairs = []
+            for name, value in pairs:
+                examples.setdefault(name, f"{url} ({value})" if value else url)
+        return sorted(examples.items(), key=lambda item: item[0].lower())
 
     def _build_row(self, full_url: Any) -> Dict[str, Any] | None:
         if not full_url:
@@ -351,7 +510,7 @@ class DiscoveryViewerDialog(QDialog):
         except Exception:
             return None
 
-        param_keys = sorted(parse_qs(parsed.query).keys())
+        param_keys = sorted({name for name, _value in parse_qsl(parsed.query, keep_blank_values=True)})
         param_names_full = ",".join(param_keys)
 
         path = parsed.path or "/"
@@ -384,7 +543,7 @@ class DiscoveryViewerDialog(QDialog):
             return ""
         row_idx = selected[0].row()
         item = table.item(row_idx, 0)
-        return item.text() if item else ""
+        return str(item.data(Qt.UserRole) or item.text()) if item else ""
 
     def _set_actions_enabled(self, enabled: bool, key: Optional[str] = None):
         for k, widgets in self._details_widgets.items():
