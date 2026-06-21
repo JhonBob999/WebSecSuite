@@ -267,7 +267,7 @@ class DiscoveryViewerDialog(QDialog):
         })
         self._render_grouped_discovery(grouped)
         self._update_action_buttons()
-        self._update_counters(internal, external, params, high_value)
+        self._update_counters(grouped)
 
     def _current_filtered_groups(self) -> Dict[str, Any]:
         base = self._rows_cache or {"internal": [], "external": [], "params": []}
@@ -449,17 +449,25 @@ class DiscoveryViewerDialog(QDialog):
         visible_count = sum(len(grouped.get(key, [])) for key in visible)
         self.empty_filter_label.setVisible(visible_count == 0)
 
-    def _update_counters(self, internal, external, params, high_value):
-        n_internal = len(internal)
-        n_external = len(external)
-        n_params = len(params)
-        total = n_internal + n_external
+    def _update_counters(self, grouped: Dict[str, Any]):
+        visible = grouped.get("visible", set())
+        n_internal = len(grouped.get("internal", [])) if "internal" in visible else 0
+        n_external = len(grouped.get("external", [])) if "external" in visible else 0
+        n_forms = len(grouped.get("forms", [])) if "forms" in visible else 0
+        n_query_params = len(grouped.get("params", [])) if "params" in visible else 0
+        n_high_value = len(grouped.get("high_value", [])) if "high_value" in visible else 0
+
+        visible_url_rows = grouped.get("internal", []) + grouped.get("external", [])
+        if not visible_url_rows and "high_value" in visible:
+            visible_url_rows = grouped.get("high_value", [])
+        n_params = len([row for row in visible_url_rows if row.get("params_count", 0) > 0])
+        total = len(visible_url_rows)
         self.counters_label.setText(f"Internal: {n_internal} | External: {n_external} | With params: {n_params} | Total: {total}")
         self.tabs.setTabText(0, f"Internal URLs ({n_internal})")
         self.tabs.setTabText(1, f"External URLs ({n_external})")
-        self.tabs.setTabText(2, f"Forms ({len(self._forms_cache)})")
-        self.tabs.setTabText(3, f"Query Params ({len(self._query_params_cache)})")
-        self.tabs.setTabText(4, f"High-value endpoints ({len(high_value)})")
+        self.tabs.setTabText(2, f"Forms ({n_forms})")
+        self.tabs.setTabText(3, f"Query Params ({n_query_params})")
+        self.tabs.setTabText(4, f"High-value endpoints ({n_high_value})")
 
     def _fill_table(self, table: QTableWidget | None, rows: List[Dict[str, Any]]):
         if table is None:
@@ -768,7 +776,8 @@ class DiscoveryViewerDialog(QDialog):
 
     @staticmethod
     def _selected_discovery_text(editor: QPlainTextEdit) -> str:
-        return editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+        selected = editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+        return "" if selected.casefold() == "no items" else selected
 
     def _show_discovery_text_context_menu(
         self,
@@ -785,18 +794,22 @@ class DiscoveryViewerDialog(QDialog):
         copy_action.setEnabled(bool(selected_text))
         open_action.setEnabled(bool(selected_text))
         add_task_action.setEnabled(bool(selected_text))
-        copy_action.triggered.connect(
-            lambda: QApplication.clipboard().setText(
-                self._selected_discovery_text(editor)
-            )
-        )
-        open_action.triggered.connect(
-            lambda: UniversalViewerDialog(
-                title=f"Discovery: {self._GROUP_LABELS.get(group_key, 'Item')}",
-                content=self._selected_discovery_text(editor),
-                parent=self,
-            ).exec()
-        )
+        def _copy_selected_text():
+            text = self._selected_discovery_text(editor)
+            if text:
+                QApplication.clipboard().setText(text)
+
+        def _open_selected_text():
+            text = self._selected_discovery_text(editor)
+            if text:
+                UniversalViewerDialog(
+                    title=f"Discovery: {self._GROUP_LABELS.get(group_key, 'Item')}",
+                    content=text,
+                    parent=self,
+                ).exec()
+
+        copy_action.triggered.connect(_copy_selected_text)
+        open_action.triggered.connect(_open_selected_text)
         add_task_action.triggered.connect(
             lambda: self._add_selected_payloads_as_tasks(
                 [self._selected_discovery_text(editor)]
@@ -959,21 +972,48 @@ class DiscoveryViewerDialog(QDialog):
     def _build_row(self, full_url: Any) -> Dict[str, Any] | None:
         if not full_url:
             return None
+        url_value = full_url
+        if isinstance(full_url, dict):
+            for key in ("url", "href", "absolute_url", "full_url", "endpoint", "path", "action", "value"):
+                value = full_url.get(key)
+                if value not in (None, ""):
+                    url_value = value
+                    break
         try:
-            parsed = urlparse(str(full_url))
+            parsed = urlparse(str(url_value))
         except Exception:
             return None
 
         param_keys = sorted({name for name, _value in parse_qsl(parsed.query, keep_blank_values=True)})
         param_names_full = ",".join(param_keys)
-
+        host = parsed.hostname or ""
         path = parsed.path or "/"
 
+        if isinstance(full_url, dict):
+            host = str(full_url.get("host") or host)
+            path = str(full_url.get("path") or path)
+            existing_names = full_url.get("param_names_full", full_url.get("param_names"))
+            if existing_names not in (None, ""):
+                param_names_full = str(existing_names)
+            elif isinstance(full_url.get("params"), dict):
+                param_names_full = ",".join(str(name) for name in full_url["params"])
+            elif isinstance(full_url.get("params"), (list, tuple, set)):
+                param_names_full = ",".join(
+                    str(item.get("name") or "") if isinstance(item, dict) else str(item)
+                    for item in full_url["params"]
+                )
+
+        params_count = len(param_keys)
+        if isinstance(full_url, dict) and full_url.get("params_count") is not None:
+            params_count = full_url.get("params_count")
+        elif param_names_full:
+            params_count = len([name for name in param_names_full.split(",") if name])
+
         return {
-            "url": str(full_url),
-            "host": parsed.hostname or "",
+            "url": str(url_value),
+            "host": host,
             "path": path,
-            "params_count": len(param_keys),
+            "params_count": params_count,
             "param_names": param_names_full,
             "param_names_full": param_names_full,
         }
