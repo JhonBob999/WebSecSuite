@@ -123,6 +123,7 @@ class TaskInspectorPanel(QWidget):
                 ("cand_ssrf", "SSRF"),
                 ("cand_max_conf", "Max confidence"),
                 ("cand_types", "Types present"),
+                ("cand_source_trace", "Candidate source trace"),
                 ("cand_evidence_artifacts", "Evidence / Artifacts"),
             ],
         )
@@ -452,6 +453,9 @@ class TaskInspectorPanel(QWidget):
         self._set("cand_ssrf", self._first_non_empty(types_breakdown.get("ssrf_candidate"), default=0))
         self._set("cand_max_conf", self._first_non_empty(candidates_summary.get("max_confidence"), default=self.DASH))
         self._set("cand_types", types_present_text)
+        candidate_source_trace = self._candidate_source_trace(data.get("candidates"), candidates_summary)
+        trace_entries = candidate_source_trace["summary"]["trace_entries"]
+        self._set("cand_source_trace", f"{trace_entries} traces" if trace_entries else "not available")
         evidence_artifacts = {
             key: data.get(key)
             for key in (
@@ -525,6 +529,20 @@ class TaskInspectorPanel(QWidget):
         self._set_detail("cand_lfi", "LFI candidates", self._filter_candidates(data.get("candidates"), "lfi"))
         self._set_detail("cand_ssrf", "SSRF candidates", self._filter_candidates(data.get("candidates"), "ssrf"))
         self._set_detail("cand_types", "Candidate types", types_present)
+        if trace_entries:
+            self._set_detail("cand_source_trace", "Candidate source trace", candidate_source_trace)
+        else:
+            self._set_detail(
+                "cand_source_trace",
+                "Candidate source trace",
+                "Candidate source trace is not available in this payload.\n"
+                "This means the current candidates do not include "
+                "source_ref/source_kind/evidence/provenance fields yet.\n"
+                "Candidate generation was not changed.",
+            )
+        self._detail_payloads["cand_source_trace"]["save_dialog_title"] = (
+            "Save Inspector Candidate Source Trace"
+        )
         self._set_detail("cand_evidence_artifacts", "Evidence / Artifacts", evidence_artifacts)
 
     def _set(self, key: str, value: Any) -> None:
@@ -574,6 +592,72 @@ class TaskInspectorPanel(QWidget):
             if keyword_lower in item_type:
                 filtered.append(item)
         return filtered
+
+    @classmethod
+    def _candidate_source_trace(
+        cls,
+        candidates: Any,
+        candidates_summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        trace_fields = (
+            "source_ref", "source_kind", "source_priority", "source", "source_url",
+            "source_id", "origin", "origin_url", "evidence", "evidence_ref",
+            "evidence_refs", "linkage", "linked_source", "linked_sources", "extractor",
+            "extraction_method", "rule_id", "pattern_id", "confidence",
+            "confidence_reason", "type", "category", "url", "endpoint", "parameter", "value",
+        )
+        provenance_fields = set(trace_fields[:21])
+        candidate_markers = provenance_fields | {
+            "type", "category", "url", "endpoint", "parameter", "value",
+        }
+
+        def collect(value: Any) -> list[Mapping[str, Any]]:
+            if isinstance(value, (list, tuple)):
+                items: list[Mapping[str, Any]] = []
+                for child in value:
+                    items.extend(collect(child))
+                return items
+            if not isinstance(value, Mapping):
+                return []
+            if candidate_markers.intersection(value):
+                return [value]
+            items = []
+            for child in value.values():
+                items.extend(collect(child))
+            return items
+
+        candidate_items = collect(candidates)
+        if not candidate_items:
+            candidate_items = collect(candidates_summary)
+
+        traces: list[dict[str, Any]] = []
+        for index, item in enumerate(candidate_items):
+            if not any(key in item and cls._has_detail_payload(item.get(key)) for key in provenance_fields):
+                continue
+            trace = {"candidate_index": index}
+            trace.update(
+                {
+                    key: item.get(key)
+                    for key in trace_fields
+                    if key in item and cls._has_detail_payload(item.get(key))
+                }
+            )
+            traces.append(trace)
+
+        total = len(candidate_items)
+        result: dict[str, Any] = {
+            "summary": {
+                "total_candidates_seen": total,
+                "trace_entries": len(traces),
+                "without_trace": max(total - len(traces), 0),
+            },
+            "traces": traces,
+        }
+        if total > len(traces):
+            result["without_trace_note"] = (
+                "Some candidates do not contain source/provenance fields in the current payload."
+            )
+        return result
 
     @classmethod
     def _existing_detail_map(cls, source: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -640,6 +724,7 @@ class TaskInspectorPanel(QWidget):
             "fp_x_generator": "inspector_x_generator_explanation",
             "cand_max_conf": "inspector_max_confidence_explanation",
             "cand_types": "inspector_candidate_types",
+            "cand_source_trace": "inspector_candidate_source_trace",
             "cand_evidence_artifacts": "inspector_evidence_artifacts",
         }
         return stems.get(field_key, "inspector_detail")
