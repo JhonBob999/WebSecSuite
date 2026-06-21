@@ -4,8 +4,9 @@ from typing import List, Optional
 import json
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QAction, QCursor
-from PySide6.QtWidgets import QMenu, QApplication
+from PySide6.QtWidgets import QMenu, QApplication, QInputDialog
 from PySide6.QtWidgets import QMessageBox
+from core.metadata import build_task_entity_key
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 from dialogs.forms_viewer_dialog import FormsViewerDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
@@ -28,6 +29,7 @@ class ScraperActions:
         self.task_manager = task_manager
         self.log_panel = log_panel
         self.export_bridge = export_bridge
+        self._context_task_id: Optional[str] = None
 
         # Готовим actions (можно переиспользовать между вызовами меню)
         self._acts = {}
@@ -40,6 +42,10 @@ class ScraperActions:
             return
 
         global_pos = table.viewport().mapToGlobal(pos)
+        clicked_row = table.rowAt(pos.y())
+        self._context_task_id = (
+            self.table_ctl.task_id_by_row(clicked_row) if clicked_row >= 0 else None
+        )
 
         menu = QMenu(table)
         A = self._acts  # кэшированные действия, которые уже работают (Selected и пр.)
@@ -56,6 +62,19 @@ class ScraperActions:
         menu.addAction(A["start_selected"])
         menu.addAction(A["stop_selected"])
         menu.addAction(A["restart_selected"])
+        menu.addSeparator()
+
+        # --- Task annotations ---
+        annotation = self._get_task_annotation(self._context_or_selected_task_id())
+        A["edit_task_note"].setEnabled(bool(self._context_or_selected_task_id()))
+        A["toggle_task_bookmark"].setEnabled(bool(self._context_or_selected_task_id()))
+        A["clear_task_annotation"].setEnabled(annotation is not None)
+        A["toggle_task_bookmark"].setText(
+            "Remove Task Bookmark" if annotation and annotation.get("bookmark") else "Bookmark Task"
+        )
+        menu.addAction(A["edit_task_note"])
+        menu.addAction(A["toggle_task_bookmark"])
+        menu.addAction(A["clear_task_annotation"])
         menu.addSeparator()
 
         # --- Data / View ---
@@ -105,7 +124,10 @@ class ScraperActions:
         if "view_forms" in A:
             A["view_forms"].setEnabled(bool(forms_available))
 
-        menu.exec(global_pos)
+        try:
+            menu.exec(global_pos)
+        finally:
+            self._context_task_id = None
 
 
     # ---------- Actions wiring ----------
@@ -119,6 +141,10 @@ class ScraperActions:
             "start_selected":   act("Start Selected",    self.start_selected),
             "stop_selected":    act("Stop Selected",     self.stop_selected),
             "restart_selected": act("Restart Selected",  self.restart_selected),
+
+            "edit_task_note": act("Add / Edit Task Note", self.edit_task_note),
+            "toggle_task_bookmark": act("Bookmark Task", self.toggle_task_bookmark),
+            "clear_task_annotation": act("Clear Task Annotation", self.clear_task_annotation),
 
             # ← теперь три "All" зовут делегаты на parent.*
             "start_all":        act("Start All",         self.start_all),
@@ -176,6 +202,58 @@ class ScraperActions:
             self.log_panel.append_line(msg)
         elif hasattr(self.parent, "append_log_line"):
             self.parent.append_log_line(msg)
+
+    def _context_or_selected_task_id(self) -> Optional[str]:
+        if self._context_task_id:
+            return self._context_task_id
+        rows = self.table_ctl.selected_rows()
+        return self.table_ctl.task_id_by_row(rows[0]) if rows else None
+
+    def _get_task_annotation(self, task_id: Optional[str]):
+        store = getattr(self.parent, "annotation_store", None)
+        if store is None or not task_id:
+            return None
+        return store.get_annotation(build_task_entity_key(task_id))
+
+    # ---------- Task annotations ----------
+    def edit_task_note(self):
+        task_id = self._context_or_selected_task_id()
+        store = getattr(self.parent, "annotation_store", None)
+        if not task_id or store is None:
+            return
+        entity_key = build_task_entity_key(task_id)
+        annotation = store.get_annotation(entity_key) or {}
+        note, accepted = QInputDialog.getMultiLineText(
+            self.parent,
+            "Task Note",
+            "Note:",
+            annotation.get("note", ""),
+        )
+        if not accepted:
+            return
+        store.upsert_annotation(entity_key, note=note)
+        self._append_log(f"[INFO] Task note updated: {task_id}")
+
+    def toggle_task_bookmark(self):
+        task_id = self._context_or_selected_task_id()
+        store = getattr(self.parent, "annotation_store", None)
+        if not task_id or store is None:
+            return
+        entity_key = build_task_entity_key(task_id)
+        annotation = store.get_annotation(entity_key) or {}
+        bookmarked = not bool(annotation.get("bookmark", False))
+        store.upsert_annotation(entity_key, bookmark=bookmarked)
+        state = "added" if bookmarked else "removed"
+        self._append_log(f"[INFO] Task bookmark {state}: {task_id}")
+
+    def clear_task_annotation(self):
+        task_id = self._context_or_selected_task_id()
+        store = getattr(self.parent, "annotation_store", None)
+        if not task_id or store is None:
+            return
+        entity_key = build_task_entity_key(task_id)
+        if store.remove_annotation(entity_key):
+            self._append_log(f"[INFO] Task annotation cleared: {task_id}")
 
     def _task_payload(self, task_id: str) -> dict:
         task_results = getattr(self.parent, "task_results", None)
