@@ -20,6 +20,7 @@ DEFAULT_WIDTHS = {
     Col.Params:  120,
 }
 ROLE_TASK_ID = Qt.UserRole + 1
+ROLE_BASE_TOOLTIP = Qt.UserRole + 3
 
 class TaskTableController:
     def __init__(self, table: QTableWidget):
@@ -224,8 +225,9 @@ class TaskTableController:
     def set_url_cell(self, row: int, url: str, title: str | None = None, task_id: str | None = None):
         it = self.ensure_item(row, Col.URL)
         it.setText(url or "")
-        if title:
-            it.setToolTip(title)
+        base_tooltip = title or url or ""
+        it.setData(ROLE_BASE_TOOLTIP, base_tooltip)
+        it.setToolTip(base_tooltip)
         if task_id:
             # пишем в оба слота (новый и старый) для совместимости
             it.setData(ROLE_TASK_ID, task_id)

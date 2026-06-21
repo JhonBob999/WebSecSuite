@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QMenu, QApplication, QInputDialog
 from PySide6.QtWidgets import QMessageBox
 from core.metadata import build_task_entity_key
 from ui.constants import Col
+from ui.table_controller import ROLE_BASE_TOOLTIP
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
 from dialogs.forms_viewer_dialog import FormsViewerDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog
@@ -242,11 +243,20 @@ class ScraperActions:
             font.setBold(bookmarked)
             item.setFont(font)
 
-            tooltip = f"URL:\n{item.text()}"
+            base_tooltip = item.data(ROLE_BASE_TOOLTIP)
+            if not isinstance(base_tooltip, str):
+                base_tooltip = item.toolTip() or item.text()
+                item.setData(ROLE_BASE_TOOLTIP, base_tooltip)
+
+            tooltip = base_tooltip
             if bookmarked or note:
-                tooltip += f"\n\nAnnotation:\nBookmarked: {'yes' if bookmarked else 'no'}"
-            if note:
-                tooltip += f"\nNote:\n{note}"
+                annotation_lines = [
+                    "Annotation:",
+                    f"Bookmarked: {'yes' if bookmarked else 'no'}",
+                ]
+                if note:
+                    annotation_lines.append(f"Note: {note}")
+                tooltip = f"{base_tooltip}\n\n" + "\n".join(annotation_lines)
             item.setToolTip(tooltip)
 
     # ---------- Task annotations ----------
