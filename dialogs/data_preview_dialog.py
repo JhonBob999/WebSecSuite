@@ -31,6 +31,7 @@ from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгене
 class DataPreviewDialog(QDialog):
     export_done = Signal(str, int)
     export_failed = Signal(str)
+    BASE_TOOLTIP_ROLE = int(Qt.ItemDataRole.UserRole) + 1
     PRESET_ALL_COLUMNS = "All columns"
     CORE_IDENTITY_COLUMNS = (
         "task_id",
@@ -296,6 +297,7 @@ class DataPreviewDialog(QDialog):
                     item.setToolTip(pretty)
                 elif len(text) > 80:
                     item.setToolTip(text)
+                item.setData(self.BASE_TOOLTIP_ROLE, item.toolTip())
 
                 if isinstance(val, (int, float)):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -518,6 +520,7 @@ class DataPreviewDialog(QDialog):
         )
         if accepted:
             self.annotation_store.upsert_annotation(entity_key, note=note)
+            self._refresh_cell_annotation_visual(row, column)
 
     def _toggle_cell_bookmark(self, row: int, column: int):
         entity_key = self._preview_field_entity_key_for_cell(row, column)
@@ -527,12 +530,64 @@ class DataPreviewDialog(QDialog):
         annotation = self.annotation_store.get_annotation(entity_key) or {}
         bookmarked = not bool(annotation.get("bookmark", False))
         self.annotation_store.upsert_annotation(entity_key, bookmark=bookmarked)
+        self._refresh_cell_annotation_visual(row, column)
 
     def _clear_cell_annotation(self, row: int, column: int):
         entity_key = self._preview_field_entity_key_for_cell(row, column)
         if entity_key is None or self.annotation_store is None:
             return
         self.annotation_store.remove_annotation(entity_key)
+        self._refresh_cell_annotation_visual(row, column)
+
+    def _refresh_cell_annotation_visual(self, row: int, column: int):
+        """Refresh bookmark and tooltip indicators for one preview cell."""
+        table = self.ui.tablePreview
+        item = table.item(row, column)
+        if item is None:
+            return
+
+        base_tooltip = item.data(self.BASE_TOOLTIP_ROLE)
+        if not isinstance(base_tooltip, str):
+            base_tooltip = ""
+
+        entity_key = self._preview_field_entity_key_for_cell(row, column)
+        annotation = None
+        if entity_key is not None and self.annotation_store is not None:
+            annotation = self.annotation_store.get_annotation(entity_key)
+
+        bookmark = bool(annotation and annotation.get("bookmark"))
+        font = item.font()
+        font.setBold(bookmark)
+        item.setFont(font)
+
+        note = annotation.get("note", "") if annotation else ""
+        tags = annotation.get("tags", []) if annotation else []
+        if not bookmark and not note and not tags:
+            item.setToolTip(base_tooltip)
+            return
+
+        annotation_lines = []
+        if bookmark:
+            annotation_lines.append("Bookmarked: yes")
+        if note:
+            annotation_lines.append(f"Note: {note}")
+        if tags:
+            annotation_lines.append(f"Tags: {', '.join(str(tag) for tag in tags)}")
+
+        tooltip_base = base_tooltip or f"Value: {item.text()}"
+        item.setToolTip(
+            f"{tooltip_base}\n\nAnnotation:\n" + "\n".join(annotation_lines)
+        )
+
+    def _refresh_annotation_visuals(self):
+        """Refresh annotation indicators for currently visible preview cells."""
+        table = self.ui.tablePreview
+        for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
+            for column in range(table.columnCount()):
+                if not table.isColumnHidden(column):
+                    self._refresh_cell_annotation_visual(row, column)
 
     def _record_index_for_table_row(self, row: int) -> int | None:
         table = self.ui.tablePreview
@@ -1012,6 +1067,7 @@ class DataPreviewDialog(QDialog):
             tbl.setColumnHidden(col, not (matches_preset and matches_search))
         tbl.setUpdatesEnabled(True)
         self._update_column_count_label()
+        self._refresh_annotation_visuals()
 
     # ---- dbl-click ----
     @Slot(int, int)
