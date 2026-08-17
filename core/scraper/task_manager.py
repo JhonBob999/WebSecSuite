@@ -3,7 +3,7 @@ from __future__ import annotations
 
 # === SECTION === Imports & Typing
 from typing import Dict, Optional, Iterable, List
-from datetime import datetime
+from datetime import datetime, timezone
 import copy
 import uuid
 
@@ -127,8 +127,8 @@ class TaskManager(QObject):
 
         # даты
         if hasattr(new_task, "created_at"):
-            # используем datetime.utcnow() из stdlib (Qt тут не нужен)
-            new_task.created_at = datetime.utcnow()
+            # используем datetime.now(timezone.utc) из stdlib (Qt тут не нужен)
+            new_task.created_at = datetime.now(timezone.utc)
 
         # клон params
         if hasattr(new_task, "params") and new_task.params is not None:
@@ -236,7 +236,7 @@ class TaskManager(QObject):
             if task:
                 task.status = TaskStatus.RUNNING
                 if task.started_at is None:
-                    task.started_at = datetime.utcnow()
+                    task.started_at = datetime.now(timezone.utc)
             self.task_status.emit(task_id, TaskStatus.RUNNING.value)
             self.task_log.emit(task_id, "INFO", "Resume requested")
 
@@ -256,7 +256,7 @@ class TaskManager(QObject):
             if task:
                 task.status = TaskStatus.RUNNING
                 if task.started_at is None:
-                    task.started_at = datetime.utcnow()
+                    task.started_at = datetime.now(timezone.utc)
             self.task_status.emit(tid, TaskStatus.RUNNING.value)
         self.task_log.emit("", "INFO", "Resume requested for all active tasks")
 
@@ -317,9 +317,9 @@ class TaskManager(QObject):
             # Не падаем и просто транслируем
         # Таймстемпы
         if task.status == TaskStatus.RUNNING and task.started_at is None:
-            task.started_at = datetime.utcnow()
+            task.started_at = datetime.now(timezone.utc)
         if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.STOPPED):
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now(timezone.utc)
         # Проксируем наружу (UI)
         self.task_status.emit(task_id, status_str)
 

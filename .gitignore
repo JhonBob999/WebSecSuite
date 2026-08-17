@@ -1,13 +1,14 @@
 __pycache__/
 *.pyc
+venv/
 .venv/
 .idea/
 .vscode/
 *build*/
 dist/
 *.pyproject.user
-*.json
-*.csv
+data/**/*.json
+data/**/*.csv
+data/**/*.xlsx
 ui/panels/__pycache__/scraper_tab.cpython-313.pyc
 error.log
-*.xlsx

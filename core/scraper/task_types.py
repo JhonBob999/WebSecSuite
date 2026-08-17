@@ -4,7 +4,7 @@ from __future__ import annotations
 # === SECTION === Imports & Typing
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import uuid
 
@@ -37,7 +37,7 @@ class ScrapeTask:
 
     # --- runtime state ---
     status: TaskStatus = TaskStatus.PENDING
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     last_error: Optional[str] = None
