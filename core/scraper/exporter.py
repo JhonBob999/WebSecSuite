@@ -9,6 +9,8 @@ from typing import Iterable, Any, Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
 
+from core.paths import project_root
+
 # === SECTION === Constants
 _HEADERS_OF_INTEREST = (
     "server",
@@ -257,12 +259,8 @@ def export_tasks(tasks: Iterable[Any], fmt: str, path: str) -> str:
     return path
 
 def default_exports_dir() -> str:
-    """
-    Returns project's default export directory: <root>/data/exports
-    __file__ → core/scraper/exporter.py → go up two levels to repo root.
-    """
-    root = Path(__file__).resolve().parents[2]
-    out = root / "data" / "exports"
+    """Returns project's default export directory: <root>/data/exports"""
+    out = project_root() / "data" / "exports"
     out.mkdir(parents=True, exist_ok=True)
     return str(out)
 

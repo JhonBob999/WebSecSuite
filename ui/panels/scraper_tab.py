@@ -35,6 +35,7 @@ from ui.panels.scraper_actions import ScraperActions
 from dialogs.data_preview_dialog import DataPreviewDialog
 from dialogs.results_viewer_dialog import ResultsViewerDialog, UniversalViewerDialog
 from .scraper_panel_ui import Ui_scraper_panel
+from core.paths import project_root
 from core.scraper.task_manager import TaskManager
 from core.scraper.task_types import ScrapeTask
 from core.scraper import exporter
@@ -796,7 +797,7 @@ class ScraperTabController(QWidget):
 
     def _ask_session_save_path(self) -> str:
         ts = QDateTime.currentDateTimeUtc().toString("yyyyMMdd_hhmmss")
-        suggested = Path("data") / "sessions" / f"scraper_session_{ts}.json"
+        suggested = project_root() / "data" / "sessions" / f"scraper_session_{ts}.json"
         suggested.parent.mkdir(parents=True, exist_ok=True)
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -828,7 +829,7 @@ class ScraperTabController(QWidget):
         QMessageBox.information(self, "Save Session", f"Session saved:\n{path}")
 
     def _ask_session_load_path(self) -> str:
-        suggested = Path("data") / "sessions"
+        suggested = project_root() / "data" / "sessions"
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load session",

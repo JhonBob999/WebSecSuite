@@ -9,10 +9,11 @@ from typing import Optional, Tuple, Dict, Any, List
 from http.cookiejar import CookieJar, Cookie
 from urllib.parse import urlparse
 
-# ========== FS utils ==========
+from core.paths import project_root
+
 # ========== FS utils ==========
 def cookies_dir() -> Path:
-    d = Path("data") / "cookies"
+    d = project_root() / "data" / "cookies"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
