@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 import json, re, os, sys
+import logging
 from pathlib import Path
 from dialogs.params_dialog_cookies_tab import CookiesTab
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox,
@@ -298,7 +301,7 @@ class ParamsDialog(QDialog):
                     # есть ли метод _mark_invalid у диалога — используем его для единого стиля
                     self._mark_invalid(self.tab_cookies.cookie_path_edit, not bool(cookie_file))
                 except Exception:
-                    pass
+                    logger.debug("Failed to mark cookie_path field invalid", exc_info=True)
                 if not cookie_file:
                     raise ValueError("Cookie mode = Custom: укажите путь к cookie-файлу.")
 

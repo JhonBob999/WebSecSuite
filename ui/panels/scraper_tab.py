@@ -1,5 +1,6 @@
 # ui/panels/scraper_tab.py
 from __future__ import annotations  # ← должен быть первым
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 from dialogs.params_dialog import ParamsDialog
@@ -52,6 +53,8 @@ from dialogs.add_task_dialog import AddTaskDialog
 from utils.context_menu import build_task_table_menu
 from core.ops import discover_urls_op
 from core.discovery.url_discovery import build_scored_classified_urls
+
+logger = logging.getLogger(__name__)
 
 # --- палитра ---
 CLR_STATUS = {
@@ -480,7 +483,7 @@ class ScraperTabController(QWidget):
                 payload["discovery"] = result
                 task.result = payload
             except Exception:
-                pass
+                logger.warning("Failed to merge discovery result into task.result", exc_info=True)
 
         urls_section = result.get("urls") if isinstance(result.get("urls"), dict) else {}
         stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
@@ -1126,7 +1129,7 @@ class ScraperTabController(QWidget):
             try:
                 self.log.append_log_line(f"[ERROR] on_task_cell_double_clicked: {e}")
             except Exception:
-                pass
+                logger.debug("Failed to log on_task_cell_double_clicked error (original: %s)", e, exc_info=True)
 
     def open_results_viewer_for_row(self, row: int):
         if row < 0 or row >= self.ui.taskTable.rowCount():
@@ -1152,7 +1155,7 @@ class ScraperTabController(QWidget):
             else:
                 os.system(f'xdg-open "{p}"')
         except Exception:
-            pass
+            logger.warning("Failed to open path in file explorer: %s", p, exc_info=True)
 
     def _shorten_url(self, url: str, max_len: int = 60) -> str:
         if len(url) <= max_len:
@@ -2606,7 +2609,7 @@ class ScraperTabController(QWidget):
                     dlg.tabs.setCurrentIndex(i)
                     break
         except Exception:
-            pass
+            logger.debug("Failed to switch params dialog to tab %r", open_tab, exc_info=True)
         
         applied_via_signal = {"hit": False}
             
@@ -2655,7 +2658,7 @@ class ScraperTabController(QWidget):
             light = {k: params.get(k) for k in ("method", "proxy", "user_agent", "timeout", "retries") if params.get(k)}
             self.set_params_cell(row, str(light) if light else "")
         except Exception:
-            pass
+            logger.debug("Failed to refresh Params cell for row %r", row, exc_info=True)
 
         # 3) Обновить ячейку Cookies (индикатор ✅/⚙ и tooltip) — независимо от Params
         try:
@@ -2665,7 +2668,7 @@ class ScraperTabController(QWidget):
                 url = getattr(t, "url", "") or ""
             self.set_cookies_cell(row, params, url)
         except Exception:
-            pass
+            logger.debug("Failed to refresh Cookies cell for row %r", row, exc_info=True)
 
         self.log.append_log_line(f"[INFO] Params updated for {task_id[:8]}")
 
@@ -2684,7 +2687,7 @@ class ScraperTabController(QWidget):
             try:
                 self.task_manager.stop_task(task_id)
             except Exception:
-                pass
+                logger.warning("Failed to stop task %r before fallback restart", task_id, exc_info=True)
 
             try:
                 self.task_manager.start_task(task_id)

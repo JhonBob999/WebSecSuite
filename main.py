@@ -1,7 +1,18 @@
+import logging
+import sys
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QCoreApplication
-import sys
+
+from core.paths import project_root
 from mainwindow import MainWindow
+
+logging.basicConfig(
+    filename=str(project_root() / "error.log"),
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -19,7 +30,7 @@ if __name__ == "__main__":
                 print(f"[SCRAPER] shutdown: stopped={summary['stopped']} "
                     f"joined={summary['joined']} left={len(summary['left'])}")
         except Exception:
-            pass
+            logger.warning("Graceful shutdown failed", exc_info=True)
 
     QCoreApplication.instance().aboutToQuit.connect(_graceful_shutdown)
     sys.exit(app.exec())

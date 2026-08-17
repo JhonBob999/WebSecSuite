@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import threading
 import hashlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,8 @@ from core.discovery.replay_groups import build_replay_groups
 from core.discovery.validation_plan import build_validation_plan, build_validator_handoff, build_validator_queue
 from core.scraper.fingerprinting import build_passive_fingerprint
 from core.discovery.parameter_intelligence import analyze_query_params
+
+logger = logging.getLogger(__name__)
 
 
 # === SECTION === Signals
@@ -59,7 +62,7 @@ class ScraperRunnable(QRunnable):
         try:
             self.signals.task_log.emit(getattr(self.task, "id", ""), "INFO", "Stop requested")
         except Exception:
-            pass
+            logger.debug("Failed to emit 'Stop requested' log signal", exc_info=True)
 
     def request_pause(self) -> None:
         if not self._is_paused:
@@ -70,7 +73,7 @@ class ScraperRunnable(QRunnable):
                 self.signals.task_status.emit(tid, "Paused")
                 self.signals.task_log.emit(tid, "INFO", "Paused")
             except Exception:
-                pass
+                logger.debug("Failed to emit pause status/log signals for task %r", tid, exc_info=True)
 
     def request_resume(self) -> None:
         if self._is_paused:
@@ -81,7 +84,7 @@ class ScraperRunnable(QRunnable):
                 self.signals.task_status.emit(tid, "Running")
                 self.signals.task_log.emit(tid, "INFO", "Resumed")
             except Exception:
-                pass
+                logger.debug("Failed to emit resume status/log signals for task %r", tid, exc_info=True)
 
     # --- Internal helpers ---
     def _check_stop(self, tid: str) -> bool:
@@ -353,7 +356,7 @@ class ScraperRunnable(QRunnable):
                 used_method = str(getattr(resp.request, "method", method) or method).upper()
                 used_request_headers = dict(getattr(resp.request, "headers", {}) or headers or {})
             except Exception:
-                pass
+                logger.debug("Failed to extract method/headers from response.request, using request values", exc_info=True)
 
             self.signals.task_progress.emit(tid, 50)
 
@@ -373,7 +376,7 @@ class ScraperRunnable(QRunnable):
                 if "html" in ct.lower():
                     forms_pack = parse_forms_from_html(resp.text or "", str(resp.url))
             except Exception:
-                pass
+                logger.warning("Forms parsing failed for %s, continuing with empty forms", tid, exc_info=True)
 
             # Cookies seen (safe for malformed cookie jars/headers)
             cookie_names: List[str] = []

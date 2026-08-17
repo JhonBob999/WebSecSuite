@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any, Mapping
 
 from core.discovery.target_binding import resolve_precise_target
+
+logger = logging.getLogger(__name__)
 
 _ARTIFACT_TYPES = (
     "xss_candidate",
@@ -64,7 +67,7 @@ def _to_status_code(value: Any) -> int:
         if isinstance(value, str) and value.strip():
             return int(value.strip())
     except Exception:
-        pass
+        logger.debug("Failed to coerce %r to a status code", value, exc_info=True)
     return 0
 
 

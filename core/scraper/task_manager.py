@@ -5,12 +5,15 @@ from __future__ import annotations
 from typing import Dict, Optional, Iterable, List
 from datetime import datetime, timezone
 import copy
+import logging
 import uuid
 
 from PySide6.QtCore import QObject, Signal, QThreadPool
 
 from .task_types import ScrapeTask, TaskStatus
 from .runnables import WorkerSignals, ScraperRunnable
+
+logger = logging.getLogger(__name__)
 
 
 # === SECTION === TaskManager (proxy signals → UI, state holder)
@@ -71,7 +74,7 @@ class TaskManager(QObject):
         try:
             self.task_log.emit(task_id, "INFO", "Task removed")
         except Exception:
-            pass
+            logger.debug("Failed to emit task_log for removed task %r", task_id, exc_info=True)
         return existed
     
     def duplicate_tasks(self, task_or_id):
@@ -135,7 +138,7 @@ class TaskManager(QObject):
             try:
                 new_task.params = copy.deepcopy(new_task.params)
             except Exception:
-                pass
+                logger.warning("Failed to deep-copy params while duplicating task %r", new_task.id, exc_info=True)
 
         # сохранить
         self._tasks[new_task.id] = new_task
@@ -144,7 +147,7 @@ class TaskManager(QObject):
         try:
             self.task_added.emit(new_task)
         except Exception:
-            pass
+            logger.debug("Failed to emit task_added for %r", new_task.id, exc_info=True)
 
         return new_task
     
@@ -275,7 +278,7 @@ class TaskManager(QObject):
             if getattr(task, "status", None) in (TaskStatus.RUNNING, TaskStatus.PAUSED):
                 self.stop_task(task_id)
         except Exception:
-            pass
+            logger.warning("Failed to stop task %r before reset", task_id, exc_info=True)
 
         task.reset_runtime()
 

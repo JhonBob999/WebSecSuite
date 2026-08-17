@@ -1,6 +1,7 @@
 # dialogs/data_preview_dialog.py
 from __future__ import annotations
 import json, os
+import logging
 from copy import deepcopy
 from ui import export_bridge as xb
 from typing import Callable
@@ -26,6 +27,8 @@ from core.metadata import build_preview_field_entity_key
 from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
+
+logger = logging.getLogger(__name__)
 
 
 class DataPreviewDialog(QDialog):
@@ -854,7 +857,7 @@ class DataPreviewDialog(QDialog):
             # если хочешь прокинуть в логи вкладки:
             if hasattr(self, "export_failed"):
                 try: self.export_failed.emit(str(e))
-                except Exception: pass
+                except Exception: logger.debug("Failed to emit export_failed signal", exc_info=True)
             return
 
         QMessageBox.information(self, "Export", f"Saved {len(records)} rows →\n{path}")
@@ -863,12 +866,12 @@ class DataPreviewDialog(QDialog):
             folder = os.path.dirname(os.path.abspath(path))
             QFileDialog.getOpenFileName(self, "Open folder", folder)  # дешёвый трюк, можно убрать
         except Exception:
-            pass
+            logger.debug("Failed to open export folder picker", exc_info=True)
 
         # если хочешь отдать в лог ScraperTab:
         if hasattr(self, "export_done"):
             try: self.export_done.emit(path, len(records))
-            except Exception: pass
+            except Exception: logger.debug("Failed to emit export_done signal", exc_info=True)
 
     def _export_rows_mode(self) -> str:
         if not hasattr(self, "comboExportRows"):

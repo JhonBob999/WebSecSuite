@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 # === SECTION === Imports & Constants
+import logging
 from pathlib import Path
 import json, re
 from typing import Dict, List, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 from ui.dialogs.add_task_dialog_ui import Ui_Dialog  # проверь имя класса в ui-модуле
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_UA = "WebSecSuite/1.0 (+https://github.com/JhonBob999/WebSecSuite)"
 PROXY_RE = re.compile(r"^(https?|socks5h?|socks5)://(?:[^@\s/]+@)?[^:\s/]+:\d{2,5}$", re.IGNORECASE)
@@ -88,7 +91,7 @@ class AddTaskDialog(QtWidgets.QDialog):
             # нормализуем ключи опционально, но не меняем регистр
             return {str(k): str(v) for k, v in obj.items()}
         except Exception:
-            pass
+            logger.debug("Headers text is not valid JSON, falling back to line syntax", exc_info=True)
 
         # Построчный Key: Value
         headers: Dict[str, str] = {}

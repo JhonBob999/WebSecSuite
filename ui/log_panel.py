@@ -1,7 +1,11 @@
+import logging
 from typing import Set, List, Tuple, Optional, Iterable
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QLineEdit, QCheckBox, QLabel, QPushButton
 from PySide6.QtGui import QKeySequence, QTextCursor, QShortcut
 from PySide6.QtCore import QDateTime, QRegularExpression
+
+logger = logging.getLogger(__name__)
+
 
 class LogPanel:
     # максимум строк, хранимых в буфере (для экспорта/поиска и т.п.)
@@ -65,7 +69,7 @@ class LogPanel:
         try:
             self._highlighter.set_search("", regex_mode=False, case_sensitive=False, whole_word=False)
         except Exception:
-            pass
+            logger.debug("Failed to initialize search highlighter", exc_info=True)
         if self._counter:
             self._counter.setText("0 / 0")
 
@@ -105,7 +109,7 @@ class LogPanel:
             # унифицированный сброс состояния поиска у хайлайтера
             self._highlighter.set_search("", regex_mode=False, case_sensitive=False, whole_word=False)
         except Exception:
-            pass
+            logger.debug("Failed to reset search highlighter", exc_info=True)
 
         self._matches.clear()
         self._match_idx = -1
@@ -273,7 +277,7 @@ class LogPanel:
                         self._counter.setText(f"{idx + 1} / {total}")
                     return
             except Exception:
-                pass
+                logger.debug("Highlighter prev_match delegation failed", exc_info=True)
 
         # 2) Фолбэк на локальные курсоры
         if not self._matches:
@@ -293,7 +297,7 @@ class LogPanel:
                         self._counter.setText(f"{idx + 1} / {total}")
                     return
             except Exception:
-                pass
+                logger.debug("Highlighter next_match delegation failed", exc_info=True)
 
         # 2) Фолбэк на локальные курсоры
         if not self._matches:
@@ -383,7 +387,7 @@ class LogPanel:
                         cur.setPosition(int(end), QTextCursor.KeepAnchor)
                         matches.append(cur)
                 except Exception:
-                    pass
+                    logger.debug("Failed to build match ranges for export", exc_info=True)
 
         if not matches:
             self.append("WARN", "No matches found to export", "LOG")
@@ -462,8 +466,8 @@ class LogPanel:
             self.text_edit.setTextCursor(cur)
             self.text_edit.ensureCursorVisible()
         except Exception:
-            pass
-        
+            logger.debug("Failed to apply match range at idx=%r", idx, exc_info=True)
+
     def _nav_step(self, step: int):
         # step: +1 = F3, -1 = Shift+F3
         try:
@@ -473,7 +477,7 @@ class LogPanel:
                 if self.counter:
                     self.counter.setText(f"{idx + 1} / {total}")
         except Exception:
-            pass
+            logger.debug("Log panel nav_step failed (step=%r)", step, exc_info=True)
 
 
     def _try_delegate_navigation(self, step: int) -> bool:

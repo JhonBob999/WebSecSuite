@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 import tempfile
 from dataclasses import is_dataclass, asdict
 from typing import Any, Iterable, Mapping
 from core.scraper.request_params import normalize_params
+
+logger = logging.getLogger(__name__)
 
 PREVIEW_RECORD_KEY_FIELD = "_preview_record_key"
 
@@ -1527,7 +1530,7 @@ def _to_int_count(value: Any, default: int = 0) -> int:
         if isinstance(value, str):
             return int(value.strip())
     except Exception:
-        pass
+        logger.debug("Failed to coerce %r to int, using default %r", value, default, exc_info=True)
     return default
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -10,6 +11,8 @@ from http.cookiejar import CookieJar, Cookie
 from urllib.parse import urlparse
 
 from core.paths import project_root
+
+logger = logging.getLogger(__name__)
 
 # ========== FS utils ==========
 def cookies_dir() -> Path:
@@ -121,7 +124,7 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
             try:
                 os.remove(tmp_path)
             except Exception:
-                pass
+                logger.warning("Failed to clean up leftover temp file %s", tmp_path, exc_info=True)
 
 # ========== Публичное API ==========
 def derive_domain_from_url(url: str) -> str:

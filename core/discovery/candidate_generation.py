@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qsl, urlparse
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_TYPES = {
     "xss_candidate",
@@ -157,7 +160,7 @@ def _has_endpoint_input_surface(endpoint_record: dict, endpoint_url: str) -> boo
         if any(name and not _is_tracking_param(name) for name, _ in parse_qsl(parsed.query or "", keep_blank_values=True)):
             return True
     except Exception:
-        pass
+        logger.debug("Failed to parse query params from %r", endpoint_url, exc_info=True)
 
     param_name = str(endpoint_record.get("param_name") or endpoint_record.get("param") or "").strip()
     if param_name:
