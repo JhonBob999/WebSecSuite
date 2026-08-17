@@ -29,6 +29,58 @@ from core.discovery.parameter_intelligence import analyze_query_params
 logger = logging.getLogger(__name__)
 
 
+def build_discovery_pipeline_artifacts(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Runs finding_artifacts -> replay_groups -> replay_manifest ->
+    validation_plan -> validator_queue -> validator_handoff over `result`
+    (using result.get("candidates"/"request_recipe"/"response_snapshot"/
+    "status_code"/"final_url"/"discovery")), writes each stage's output
+    back into `result`, and returns it.
+
+    Shared by ScraperRunnable.run()'s success path and both except branches,
+    so a request failure still produces the same result shape (with empty
+    contracts where upstream data is missing) as a successful request.
+    """
+    result["finding_artifacts"] = build_finding_artifacts(
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        status_code=result.get("status_code"),
+        final_url=result.get("final_url"),
+        discovery=result.get("discovery"),
+    )
+    result["replay_groups"] = build_replay_groups(
+        finding_artifacts=result.get("finding_artifacts"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url"),
+        discovery=result.get("discovery"),
+    )
+    result["replay_manifest"] = build_replay_manifest(
+        replay_groups=result.get("replay_groups"),
+        finding_artifacts=result.get("finding_artifacts"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url"),
+        discovery=result.get("discovery"),
+    )
+    result["validation_plan"] = build_validation_plan(
+        replay_manifest=result.get("replay_manifest"),
+        finding_artifacts=result.get("finding_artifacts"),
+        candidates=result.get("candidates"),
+        request_recipe=result.get("request_recipe"),
+        response_snapshot=result.get("response_snapshot"),
+        final_url=result.get("final_url"),
+        discovery=result.get("discovery"),
+    )
+    result["validator_queue"] = build_validator_queue(result.get("validation_plan"))
+    result["validator_handoff"] = build_validator_handoff(
+        result.get("validator_queue"),
+        result.get("validation_plan"),
+    )
+    return result
+
+
 # === SECTION === Signals
 class WorkerSignals(QObject):
     """Thread-safe события из воркера в UI."""
@@ -472,43 +524,7 @@ class ScraperRunnable(QRunnable):
                     parameter_intelligence=None,
                 )
                 result["candidates_summary"] = result["candidates"].get("summary", {})
-            result["finding_artifacts"] = build_finding_artifacts(
-                candidates=result.get("candidates"),
-                request_recipe=result.get("request_recipe"),
-                response_snapshot=result.get("response_snapshot"),
-                status_code=result.get("status_code"),
-                final_url=result.get("final_url"),
-                discovery=result.get("discovery"),
-            )
-            result["replay_groups"] = build_replay_groups(
-                finding_artifacts=result.get("finding_artifacts"),
-                request_recipe=result.get("request_recipe"),
-                response_snapshot=result.get("response_snapshot"),
-                final_url=result.get("final_url"),
-                discovery=result.get("discovery"),
-            )
-            result["replay_manifest"] = build_replay_manifest(
-                replay_groups=result.get("replay_groups"),
-                finding_artifacts=result.get("finding_artifacts"),
-                request_recipe=result.get("request_recipe"),
-                response_snapshot=result.get("response_snapshot"),
-                final_url=result.get("final_url"),
-                discovery=result.get("discovery"),
-            )
-            result["validation_plan"] = build_validation_plan(
-                replay_manifest=result.get("replay_manifest"),
-                finding_artifacts=result.get("finding_artifacts"),
-                candidates=result.get("candidates"),
-                request_recipe=result.get("request_recipe"),
-                response_snapshot=result.get("response_snapshot"),
-                final_url=result.get("final_url"),
-                discovery=result.get("discovery"),
-            )
-            result["validator_queue"] = build_validator_queue(result.get("validation_plan"))
-            result["validator_handoff"] = build_validator_handoff(
-                result.get("validator_queue"),
-                result.get("validation_plan"),
-            )
+            result = build_discovery_pipeline_artifacts(result)
 
             self.task.result = result
 
@@ -554,43 +570,7 @@ class ScraperRunnable(QRunnable):
                 ),
                 "response_snapshot": self._build_response_snapshot(),
             }
-            self.task.result["finding_artifacts"] = build_finding_artifacts(
-                candidates=self.task.result.get("candidates"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                status_code=self.task.result.get("status_code"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["replay_groups"] = build_replay_groups(
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["replay_manifest"] = build_replay_manifest(
-                replay_groups=self.task.result.get("replay_groups"),
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["validation_plan"] = build_validation_plan(
-                replay_manifest=self.task.result.get("replay_manifest"),
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                candidates=self.task.result.get("candidates"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["validator_queue"] = build_validator_queue(self.task.result.get("validation_plan"))
-            self.task.result["validator_handoff"] = build_validator_handoff(
-                self.task.result.get("validator_queue"),
-                self.task.result.get("validation_plan"),
-            )
+            self.task.result = build_discovery_pipeline_artifacts(self.task.result)
             self.signals.task_error.emit(tid, f"httpx error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         except Exception as e:
@@ -609,43 +589,7 @@ class ScraperRunnable(QRunnable):
                 ),
                 "response_snapshot": self._build_response_snapshot(),
             }
-            self.task.result["finding_artifacts"] = build_finding_artifacts(
-                candidates=self.task.result.get("candidates"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                status_code=self.task.result.get("status_code"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["replay_groups"] = build_replay_groups(
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["replay_manifest"] = build_replay_manifest(
-                replay_groups=self.task.result.get("replay_groups"),
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["validation_plan"] = build_validation_plan(
-                replay_manifest=self.task.result.get("replay_manifest"),
-                finding_artifacts=self.task.result.get("finding_artifacts"),
-                candidates=self.task.result.get("candidates"),
-                request_recipe=self.task.result.get("request_recipe"),
-                response_snapshot=self.task.result.get("response_snapshot"),
-                final_url=self.task.result.get("final_url"),
-                discovery=self.task.result.get("discovery"),
-            )
-            self.task.result["validator_queue"] = build_validator_queue(self.task.result.get("validation_plan"))
-            self.task.result["validator_handoff"] = build_validator_handoff(
-                self.task.result.get("validator_queue"),
-                self.task.result.get("validation_plan"),
-            )
+            self.task.result = build_discovery_pipeline_artifacts(self.task.result)
             self.signals.task_error.emit(tid, f"Unhandled error: {e}")
             self.signals.task_status.emit(tid, "Failed")
         finally:
