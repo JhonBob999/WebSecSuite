@@ -277,13 +277,7 @@ class TaskManager(QObject):
         except Exception:
             pass
 
-        # Обнуляем поля
-        task.status = TaskStatus.PENDING
-        task.progress = 0
-        task.result = None
-        task.error = None
-        task.started_at = None
-        task.finished_at = None
+        task.reset_runtime()
 
         self._runnables.pop(task_id, None)  # на всякий случай убрать ссылку
         self.task_reset.emit(task_id)
