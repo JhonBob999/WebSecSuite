@@ -200,7 +200,9 @@ def test_duplicate_gets_unique_custom_identity_and_rename_cannot_change_a_builti
     assert re.fullmatch(r"custom-[0-9a-f]{32}", first.profile_id)
     assert first.profile_id != second.profile_id and first.is_builtin is False
     assert first.name == "Quick Network Discovery copy" and second.name == "My copy"
-    assert replace(first, profile_id=builtin.profile_id, name=builtin.name, is_builtin=True) == builtin
+    assert first.description == second.description == "Custom Nmap TCP scan profile."
+    assert replace(first, profile_id=builtin.profile_id, name=builtin.name, is_builtin=True,
+                   description=builtin.description) == builtin
     renamed = module.rename_profile(second, "  Renamed  ")
     assert renamed.profile_id == second.profile_id and renamed.name == "Renamed"
     assert second.name == "My copy" and builtin.name == "Quick Network Discovery"
@@ -212,11 +214,20 @@ def test_duplicate_gets_unique_custom_identity_and_rename_cannot_change_a_builti
             operation()
 
 
+def test_duplicate_custom_profile_preserves_its_description():
+    module = profiles()
+    original = custom(description="Review the documented staging service.\nKeep the evidence.")
+    duplicate = module.duplicate_profile(original)
+    assert duplicate.description == original.description
+    assert duplicate.profile_id != original.profile_id and duplicate.is_builtin is False
+
+
 @pytest.mark.parametrize("value", [None, {}, "quick-network-discovery"])
 def test_model_helpers_reject_unvalidated_inputs(value):
     module = profiles()
     for operation in (lambda: module.profile_to_dict(value), lambda: module.preview_arguments(value),
-                      lambda: module.duplicate_profile(value), lambda: module.rename_profile(value, "Name")):
+                      lambda: module.duplicate_profile(value), lambda: module.rename_profile(value, "Name"),
+                      lambda: module.format_network_impact(value)):
         with pytest.raises(module.ProfileValidationError):
             operation()
 
@@ -231,9 +242,72 @@ def test_model_helpers_revalidate_accidentally_tampered_dataclass_fields(field, 
     item = custom()
     object.__setattr__(item, field, value)
     for operation in (lambda: module.profile_to_dict(item), lambda: module.preview_arguments(item),
-                      lambda: module.duplicate_profile(item), lambda: module.rename_profile(item, "Name")):
+                      lambda: module.duplicate_profile(item), lambda: module.rename_profile(item, "Name"),
+                      lambda: module.format_network_impact(item)):
         with pytest.raises(module.ProfileValidationError):
             operation()
+
+
+def test_network_impact_describes_four_selected_tcp_ports_without_version_detection():
+    impact = profiles().format_network_impact(custom(ports=(80, 443, 8080, 8443)))
+    assert re.search(r"\b4 TCP ports\b", impact)
+    assert re.search(r"service[- ]version detection\s*:?\s*disabled\b", impact, re.I)
+    assert "--max-rate 10" in impact
+    assert "limits the tcp port scan" in impact.casefold()
+    assert "--max-retries 1" in impact
+    assert re.search(r"host timeout\s*:?\s*30\s*s\b", impact, re.I)
+    assert re.search(r"overall timeout\s*:?\s*40\s*s\b", impact, re.I)
+
+
+def test_network_impact_warns_of_additional_version_probes_for_1024_tcp_ports():
+    impact = profiles().format_network_impact(custom(
+        ports=tuple(range(1, 1025)), version_detection=True,
+        host_timeout_seconds=600, execution_timeout_seconds=660,
+    ))
+    assert re.search(r"\b1024 TCP ports\b", impact)
+    assert re.search(r"service[- ]version detection\s*:?\s*enabled\b", impact, re.I)
+    assert "-sV" in impact and "additional" in impact.casefold() and "probes" in impact.casefold()
+    assert "--max-rate 10" in impact and "limits the tcp port scan" in impact.casefold()
+    assert "does not reliably cap" in impact.casefold() and "version probes" in impact.casefold()
+    assert re.search(r"host timeout\s*:?\s*600\s*s\b", impact, re.I)
+    assert re.search(r"overall timeout\s*:?\s*660\s*s\b", impact, re.I)
+
+
+@pytest.mark.parametrize("ports", [(443, 80, 80, 8080, 8081, 443), (8081, 8080, 443, 80)])
+def test_network_impact_counts_distinct_normalized_ports(ports):
+    assert re.search(r"\b4 TCP ports\b", profiles().format_network_impact(custom(ports=ports)))
+
+
+def test_network_impact_uses_current_parameters_after_editing_a_duplicate():
+    module = profiles()
+    duplicate = module.duplicate_profile(module.BUILTIN_PROFILES[0])
+    changed = replace(duplicate, ports=(22, 80, 443), max_rate=37, max_retries=3,
+                      host_timeout_seconds=47, execution_timeout_seconds=83, version_detection=True)
+    impact = module.format_network_impact(changed)
+    assert re.search(r"\b3 TCP ports\b", impact) and not re.search(r"\b4 TCP ports\b", impact)
+    assert "--max-rate 37" in impact and "--max-rate 10" not in impact
+    assert "--max-retries 3" in impact
+    assert re.search(r"host timeout\s*:?\s*47\s*s\b", impact, re.I)
+    assert re.search(r"overall timeout\s*:?\s*83\s*s\b", impact, re.I)
+    assert re.search(r"service[- ]version detection\s*:?\s*enabled\b", impact, re.I)
+
+
+def test_network_impact_ignores_legacy_stored_wording_without_mutating_the_profile_or_preview():
+    module = profiles()
+    data = serialized()
+    data.update(ports="00443,080,80,8080-8081,443", version_detection=True,
+                network_impact="Four TCP ports; no service-version probes.")
+    item = module.profile_from_dict(data)
+    before = module.profile_to_dict(item)
+    preview = module.preview_arguments(item)
+    impact = module.format_network_impact(item)
+    assert re.search(r"\b4 TCP ports\b", impact)
+    assert re.search(r"service[- ]version detection\s*:?\s*enabled\b", impact, re.I)
+    assert data["network_impact"] not in impact
+    assert impact == module.format_network_impact(replace(item, network_impact=""))
+    assert module.profile_to_dict(item) == before
+    assert module.preview_arguments(item) == preview
+    assert item.network_impact == data["network_impact"]
 
 
 def test_preview_notice_states_offline_scope_and_version_probe_rate_limit():

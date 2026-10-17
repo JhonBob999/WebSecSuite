@@ -54,6 +54,47 @@ def test_public_operation_has_exact_immutable_arguments_and_one_shot_capability(
     assert not preflight_scope(("8.8.8.8",), ScopeApproval(exact_domains=(public.PUBLIC_HOSTNAME,))).allowed
 
 
+def test_persisted_profile_edits_and_impact_leave_local_and_public_execution_unchanged(tool, observation, tmp_path):
+    from core.recon.nmap_profile_store import NmapProfileStore
+    from core.recon.nmap_profiles import BUILTIN_PROFILES, duplicate_profile, format_network_impact
+
+    path = tmp_path / "profiles.json"
+    store = NmapProfileStore(path)
+    custom = duplicate_profile(BUILTIN_PROFILES[0], "Custom service review")
+    assert custom.description == "Custom Nmap TCP scan profile."
+    store.save(custom)
+    edited = replace(
+        custom, description="User-defined service review.", ports=tuple(range(1, 1025)),
+        max_rate=25, max_retries=3, host_timeout_seconds=90,
+        execution_timeout_seconds=150, version_detection=True,
+    )
+    store.save(edited)
+    reopened = NmapProfileStore(path)
+    assert reopened.profiles == (edited,)
+    saved_bytes = path.read_bytes()
+    impact = format_network_impact(reopened.profiles[0])
+    assert "1024 TCP ports" in impact
+    assert "service version detection enabled" in impact
+    assert path.read_bytes() == saved_bytes
+
+    local = nmap.prepare_nmap_self_test(tool, confirmed=True)
+    public_spec = nmap.prepare_nmap_public_scan(tool, approval(tool, observation))
+    assert local._plan.arguments == (
+        "-sT", "-Pn", "-n", "-p", "80,443,8080,8443", "--max-retries", "1",
+        "--max-rate", "10", "--host-timeout", "30s", "--no-stylesheet", "-oX", "-", "127.0.0.1",
+    )
+    assert public_spec._plan.arguments == (
+        "-sT", "-Pn", "-n", "-p", "80,443,8080,8443", "--max-retries", "1",
+        "--max-rate", "10", "--host-timeout", "30s", "--no-stylesheet", "-oX", "-", "8.8.8.8",
+    )
+    assert local._plan.targets == ("127.0.0.1",)
+    assert public_spec._plan.targets == ("8.8.8.8",)
+    assert local._plan.timeout_ms == public_spec._plan.timeout_ms == 40000
+    policy = ExecutionPolicy()
+    policy.validate(local)
+    policy.validate(public_spec)
+
+
 @pytest.mark.parametrize("changes", [{"scope_confirmed": False}, {"confirmed": False},
     {"address": "9.9.9.9"}, {"address": "127.0.0.1"}, {"address": public.PUBLIC_HOSTNAME}])
 def test_missing_approval_or_changed_ip_cannot_prepare_execution(tool, observation, changes):

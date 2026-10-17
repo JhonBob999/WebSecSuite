@@ -164,7 +164,8 @@ def profile_to_dict(profile: NmapScanProfile) -> dict:
 def duplicate_profile(profile: NmapScanProfile, name=None) -> NmapScanProfile:
     profile = _profile(profile)
     return replace(profile, profile_id="custom-" + uuid4().hex, is_builtin=False,
-                   name=profile.name[:75] + " copy" if name is None else name)
+                   name=profile.name[:75] + " copy" if name is None else name,
+                   description="Custom Nmap TCP scan profile." if profile.is_builtin else profile.description)
 
 
 def rename_profile(profile: NmapScanProfile, name: str) -> NmapScanProfile:
@@ -172,6 +173,25 @@ def rename_profile(profile: NmapScanProfile, name: str) -> NmapScanProfile:
     if profile.is_builtin:
         raise ProfileValidationError("Duplicate a built-in profile before renaming it.")
     return replace(profile, name=name)
+
+
+def format_network_impact(profile: NmapScanProfile) -> str:
+    """Describe validated settings without trusting saved impact prose or mutating data."""
+    profile = _profile(profile)
+    count = len(profile.ports)
+    version = (
+        "service version detection enabled (-sV); additional service probes; "
+        "--max-rate does not reliably cap service-version probes."
+        if profile.version_detection else
+        "service version detection disabled; no service-version probes."
+    )
+    return (
+        f"{count} TCP {'port' if count == 1 else 'ports'}; {version} "
+        f"--max-rate {profile.max_rate} limits the TCP port scan to {profile.max_rate} probes/s. "
+        f"--max-retries {profile.max_retries} for port probes. "
+        f"Host timeout: {profile.host_timeout_seconds} s. "
+        f"Overall timeout: {profile.execution_timeout_seconds} s."
+    )
 
 
 def preview_arguments(profile: NmapScanProfile) -> tuple[str, ...]:
@@ -212,5 +232,6 @@ BUILTIN_PROFILES = (
 
 __all__ = [
     "NmapScanProfile", "ProfileValidationError", "BUILTIN_PROFILES", "PREVIEW_NOTICE", "parse_ports",
-    "format_ports", "profile_from_dict", "profile_to_dict", "duplicate_profile", "rename_profile", "preview_arguments",
+    "format_ports", "format_network_impact", "profile_from_dict", "profile_to_dict",
+    "duplicate_profile", "rename_profile", "preview_arguments",
 ]

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from core.recon.nmap_profile_store import ProfileStorageError
 from core.recon.nmap_profiles import (
     BUILTIN_PROFILES, PREVIEW_NOTICE, ProfileValidationError, duplicate_profile,
-    format_ports, preview_arguments, profile_from_dict, profile_to_dict,
+    format_network_impact, format_ports, preview_arguments, profile_from_dict, profile_to_dict,
 )
 
 
@@ -104,12 +104,16 @@ class NmapProfilesDialog(QDialog):
         ui.executionTimeoutInput = self._spin(10, 900, " s")
         ui.versionDetection = QCheckBox("Enable service version detection")
         ui.networkImpactInput = QPlainTextEdit()
+        ui.networkImpactInput.setReadOnly(True)
         ui.networkImpactInput.setMaximumHeight(70)
         ui.networkImpactInput.setTabChangesFocus(True)
         self._inputs = (
             ui.nameInput, ui.descriptionInput, ui.portsInput, ui.techniqueInput,
             ui.maxRateInput, ui.maxRetriesInput, ui.hostTimeoutInput,
-            ui.executionTimeoutInput, ui.versionDetection, ui.networkImpactInput,
+            ui.executionTimeoutInput, ui.versionDetection,
+        )
+        self._spin_inputs = (
+            ui.maxRateInput, ui.maxRetriesInput, ui.hostTimeoutInput, ui.executionTimeoutInput,
         )
         for title, widget in (
             ("Name", ui.nameInput), ("Description", ui.descriptionInput),
@@ -170,10 +174,11 @@ class NmapProfilesDialog(QDialog):
         ui.profileList.currentItemChanged.connect(self._selection_changed)
         for widget in (ui.nameInput, ui.portsInput):
             widget.textChanged.connect(self._validate)
-        for widget in (ui.descriptionInput, ui.networkImpactInput):
-            widget.textChanged.connect(self._validate)
-        for widget in (ui.maxRateInput, ui.maxRetriesInput, ui.hostTimeoutInput, ui.executionTimeoutInput):
+        ui.descriptionInput.textChanged.connect(self._validate)
+        for widget in self._spin_inputs:
             widget.valueChanged.connect(self._validate)
+            # valueChanged alone misses incomplete text that retains the old value.
+            widget.lineEdit().textChanged.connect(self._validate)
         ui.techniqueInput.currentIndexChanged.connect(self._validate)
         ui.versionDetection.toggled.connect(self._validate)
         ui.btnDuplicate.clicked.connect(lambda: self._request(self._duplicate, "duplicate a profile"))
@@ -238,7 +243,6 @@ class NmapProfilesDialog(QDialog):
         ui.hostTimeoutInput.setValue(profile.host_timeout_seconds)
         ui.executionTimeoutInput.setValue(profile.execution_timeout_seconds)
         ui.versionDetection.setChecked(profile.version_detection)
-        ui.networkImpactInput.setPlainText(profile.network_impact)
         for widget in self._inputs:
             if isinstance(widget, (QCheckBox, QComboBox)):
                 widget.setEnabled(not profile.is_builtin)
@@ -261,12 +265,12 @@ class NmapProfilesDialog(QDialog):
             "host_timeout_seconds": ui.hostTimeoutInput.value(),
             "execution_timeout_seconds": ui.executionTimeoutInput.value(),
             "version_detection": ui.versionDetection.isChecked(),
-            "network_impact": ui.networkImpactInput.toPlainText(),
         }
 
     def _dirty(self):
         return self._original is not None and not self._original.is_builtin and (
             self._is_draft() or self._field_values() != self._baseline
+            or any(not widget.hasAcceptableInput() for widget in self._spin_inputs)
         )
 
     def _is_draft(self):
@@ -277,17 +281,27 @@ class NmapProfilesDialog(QDialog):
             return
         self._valid_profile = None
         try:
+            for widget in self._spin_inputs:
+                if not widget.hasAcceptableInput():
+                    raise ProfileValidationError(
+                        f"{widget.accessibleName()} must be an integer "
+                        f"from {widget.minimum()} to {widget.maximum()}."
+                    )
             data = profile_to_dict(self._original)
+            # Keep the legacy network_impact storage field; derive only its display.
             data.update(self._field_values())
             profile = profile_from_dict(data)
             arguments = preview_arguments(profile)
+            impact = format_network_impact(profile)
         except ProfileValidationError as error:
             self.ui.validationLabel.setText(str(error))
             self.ui.preview.clear()
+            self.ui.networkImpactInput.setPlainText(f"Network impact unavailable: {error}")
         else:
             self._valid_profile = profile
             self.ui.validationLabel.clear()
             self.ui.preview.setPlainText(" ".join(arguments))
+            self.ui.networkImpactInput.setPlainText(impact)
         custom = not self._original.is_builtin
         can_save = custom and self._valid_profile is not None and self.store.writable
         self.ui.btnSave.setEnabled(can_save and self._dirty())

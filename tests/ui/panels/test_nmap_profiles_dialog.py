@@ -170,6 +170,161 @@ def test_name_and_timeout_errors_use_inline_validation(manager):
     assert store.profiles == ()
 
 
+def test_network_impact_follows_profile_selection_without_marking_edits(manager):
+    dialog, _ = manager
+    ui = dialog.ui
+    assert "4 TCP ports" in ui.networkImpactInput.toPlainText()
+    assert "disabled" in ui.networkImpactInput.toPlainText()
+    select(dialog, "deep-service-review")
+    impact = ui.networkImpactInput.toPlainText()
+    assert "1024 TCP ports" in impact
+    assert "enabled" in impact and "additional" in impact
+    assert "--max-rate" in impact and "does not reliably cap" in impact
+    select(dialog, "quick-network-discovery")
+    assert "4 TCP ports" in ui.networkImpactInput.toPlainText()
+    assert not ui.btnReset.isEnabled()
+
+
+def test_custom_impact_is_read_only_and_updates_with_ports_and_version_detection(manager):
+    dialog, _ = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    assert ui.networkImpactInput.isReadOnly()
+    assert not ui.descriptionInput.isReadOnly()
+    assert ui.descriptionInput.toPlainText() == "Custom Nmap TCP scan profile."
+    ui.descriptionInput.setPlainText("My own notes about this profile.")
+    ui.portsInput.setText("443,80,80,8080-8081")
+    assert "4 TCP ports" in ui.networkImpactInput.toPlainText()
+    ui.portsInput.setText("443,443,8443")
+    assert "2 TCP ports" in ui.networkImpactInput.toPlainText()
+    for enabled in (True, False, True):
+        ui.versionDetection.setChecked(enabled)
+        impact = ui.networkImpactInput.toPlainText()
+        assert ("enabled" if enabled else "disabled") in impact
+        assert ("additional service probes" in impact) is enabled
+        assert ("-sV" in ui.preview.toPlainText()) is enabled
+    assert ui.descriptionInput.toPlainText() == "My own notes about this profile."
+
+
+def test_network_impact_follows_rate_retries_and_timeout_edits(manager):
+    dialog, _ = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    for widget, value, expected in (
+        (ui.maxRateInput, 25, "--max-rate 25"),
+        (ui.maxRetriesInput, 3, "--max-retries 3"),
+        (ui.executionTimeoutInput, 120, "Overall timeout: 120 s"),
+        (ui.hostTimeoutInput, 90, "Host timeout: 90 s"),
+    ):
+        previous = ui.networkImpactInput.toPlainText()
+        widget.setValue(value)
+        assert expected in ui.networkImpactInput.toPlainText()
+        assert ui.networkImpactInput.toPlainText() != previous
+        assert not ui.validationLabel.text()
+
+
+@pytest.mark.parametrize("bad_ports", ["", "80,", "80-", "0", "1-1025"])
+def test_invalid_ports_replace_previous_network_impact_and_recover(manager, bad_ports):
+    dialog, _ = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    previous = ui.networkImpactInput.toPlainText()
+    ui.portsInput.setText(bad_ports)
+    impact = ui.networkImpactInput.toPlainText()
+    assert impact != previous
+    assert "Network impact unavailable:" in impact
+    assert ui.validationLabel.text() in impact
+    assert "4 TCP ports" not in impact
+    assert not ui.preview.toPlainText()
+    assert not ui.btnSave.isEnabled()
+    ui.portsInput.setText("22")
+    assert "1 TCP port;" in ui.networkImpactInput.toPlainText()
+    assert not ui.validationLabel.text()
+    assert ui.btnSave.isEnabled()
+
+
+@pytest.mark.parametrize("field", [
+    "maxRateInput", "maxRetriesInput", "hostTimeoutInput", "executionTimeoutInput",
+])
+def test_incomplete_numeric_parameter_replaces_network_impact_immediately(manager, field):
+    dialog, _ = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    ui.btnSave.click()
+    widget = getattr(ui, field)
+    previous_text = widget.lineEdit().text()
+    widget.lineEdit().setText("")
+    assert "Network impact unavailable:" in ui.networkImpactInput.toPlainText()
+    assert ui.validationLabel.text()
+    assert not ui.btnSave.isEnabled()
+    assert ui.btnReset.isEnabled()
+    widget.lineEdit().setText(previous_text)
+    assert "4 TCP ports" in ui.networkImpactInput.toPlainText()
+    assert not ui.validationLabel.text()
+    assert not ui.btnSave.isEnabled()
+
+
+def test_invalid_name_and_timeouts_replace_network_impact(manager):
+    dialog, _ = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    ui.nameInput.setText("")
+    assert "Network impact unavailable:" in ui.networkImpactInput.toPlainText()
+    ui.nameInput.setText("Valid name")
+    ui.executionTimeoutInput.setValue(30)
+    assert "Network impact unavailable:" in ui.networkImpactInput.toPlainText()
+    assert ui.validationLabel.text() in ui.networkImpactInput.toPlainText()
+    ui.executionTimeoutInput.setValue(40)
+    assert "4 TCP ports" in ui.networkImpactInput.toPlainText()
+
+
+@pytest.mark.parametrize("description", [
+    "Existing saved user notes.", "Review four common web service ports.",
+])
+def test_saved_description_and_settings_survive_manager_restart(qapp, tmp_path, description):
+    from dataclasses import replace
+    from core.recon.nmap_profiles import BUILTIN_PROFILES, duplicate_profile
+
+    dialog, store = make_dialog(tmp_path)
+    original = replace(
+        duplicate_profile(BUILTIN_PROFILES[0]), description=description,
+        network_impact="Legacy impact text claiming four ports.", ports=(22, 443),
+    )
+    store.save(original)
+    saved_bytes = store.path.read_bytes()
+    dialog.deleteLater()
+    qapp.processEvents()
+    reopened, reloaded_store = make_dialog(tmp_path)
+    try:
+        select(reopened, original.profile_id)
+        ui = reopened.ui
+        assert ui.descriptionInput.toPlainText() == description
+        assert "2 TCP ports" in ui.networkImpactInput.toPlainText()
+        assert "Legacy" not in ui.networkImpactInput.toPlainText()
+        assert not ui.btnSave.isEnabled()
+        assert not ui.btnReset.isEnabled()
+        assert reloaded_store.path.read_bytes() == saved_bytes
+        ui.portsInput.setText("1-1024")
+        ui.versionDetection.setChecked(True)
+        ui.btnSave.click()
+        assert reloaded_store.profiles[0].description == description
+        assert reloaded_store.profiles[0].network_impact == original.network_impact
+    finally:
+        reopened.deleteLater()
+        qapp.processEvents()
+    restarted, restarted_store = make_dialog(tmp_path)
+    try:
+        select(restarted, original.profile_id)
+        assert restarted.ui.descriptionInput.toPlainText() == description
+        impact = restarted.ui.networkImpactInput.toPlainText()
+        assert "1024 TCP ports" in impact and "enabled" in impact
+        assert restarted_store.profiles[0].version_detection is True
+        assert not restarted.ui.btnSave.isEnabled()
+    finally:
+        restarted.deleteLater()
+        qapp.processEvents()
+
+
 def test_unsaved_selection_reset_and_close_require_an_explicit_choice(manager, qapp):
     dialog, store = manager
     ui = dialog.ui
