@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtCore
 from PySide6.QtCore import QProcess, QSettings
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtNetwork import QDnsLookup
 from PySide6.QtWidgets import QApplication
 
 
@@ -36,6 +37,7 @@ def no_network(monkeypatch, request):
     for name in ("start", "startDetached", "execute", "open", "startCommand"):
         monkeypatch.setattr(QProcess, name, blocked)
     monkeypatch.setattr(QDesktopServices, "openUrl", blocked)
+    monkeypatch.setattr(QDnsLookup, "lookup", blocked)
     from core.recon.windows_process import WindowsJobProcess
 
     native_start = WindowsJobProcess.start

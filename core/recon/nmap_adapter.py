@@ -1,4 +1,4 @@
-"""Reviewed Windows Nmap verification and one immutable loopback scan profile.
+"""Reviewed Windows Nmap verification and narrowly approved scan profiles.
 
 No discovery or import calls execute a program. Before a bounded --version
 probe, require explicit path approval, local native-file discovery, official
@@ -14,13 +14,18 @@ import json
 import os
 from pathlib import Path
 import re
-from weakref import WeakSet
+from time import monotonic
+from weakref import WeakKeyDictionary, WeakSet
 from xml.parsers import expat
 
 from core.recon import execution_policy as policy
 from core.recon.nmap_import import MAX_XML_DEPTH, MAX_XML_ELEMENTS, MAX_XML_STRING, _xml_root, parse_nmap_xml
 from core.recon.observations import MAX_IMPORT_BYTES, ObservationBatch, ObservationImportError, EvidenceRef
 from core.recon.tool_discovery import ToolDiscoveryService, ToolDiscoveryStatus
+from core.recon.public_target import (
+    PUBLIC_HOSTNAME, PUBLIC_PROFILE, PublicTargetObservation,
+    claim_public_observation, validate_public_address, validate_public_observation,
+)
 
 
 LOCAL_TARGET = "127.0.0.1"
@@ -36,6 +41,13 @@ _TOOLS = WeakSet()
 _APPROVALS = WeakSet()
 _BOUND_APPROVALS = WeakSet()
 _PROBE_APPROVALS = WeakSet()
+_PUBLIC_APPROVALS = WeakKeyDictionary()
+PUBLIC_ARGUMENT_PREFIX = (
+    "-sT", "-Pn", "-n", "-p", "80,443,8080,8443", "--max-retries", "1",
+    "--max-rate", "10", "--host-timeout", "30s", "--no-stylesheet", "-oX", "-",
+)
+PUBLIC_TIMEOUT_MS = 40_000
+PUBLIC_APPROVAL_TTL_SECONDS = 60
 
 
 @dataclass(frozen=True, init=False, slots=True, weakref_slot=True, eq=False)
@@ -72,6 +84,77 @@ class _VersionRequest:
 @dataclass(frozen=True)
 class _SelfTestRequest:
     tool: ValidatedNmapTool
+
+
+@dataclass(frozen=True, init=False, slots=True, weakref_slot=True, eq=False)
+class PublicNmapApproval:
+    """Ephemeral per-run IP grant; never serialized or added to target scope."""
+
+    _tool: ValidatedNmapTool = field(repr=False)
+    observation: PublicTargetObservation = field(repr=False)
+    hostname: str
+    address: str
+    profile: str
+    expires_at: float
+    _program: str = field(repr=False)
+    _sha256: str = field(repr=False)
+    _arguments: tuple[str, ...] = field(repr=False)
+
+    def __init__(self):
+        raise TypeError("Public Nmap approval requires fresh DNS and explicit IP-scope confirmation.")
+
+
+@dataclass(frozen=True)
+class _PublicScanRequest:
+    tool: ValidatedNmapTool
+    approval: PublicNmapApproval
+
+
+def _public_approval_identity(approval: PublicNmapApproval) -> tuple:
+    return (approval._tool, approval.observation, approval.hostname, approval.address, approval.profile,
+            approval.expires_at, approval._program, approval._sha256, approval._arguments)
+
+
+def _validate_public_approval(approval: PublicNmapApproval) -> None:
+    if (type(approval) is not PublicNmapApproval or approval not in _PUBLIC_APPROVALS
+            or _public_approval_identity(approval) != _PUBLIC_APPROVALS[approval]):
+        raise policy.ExecutionPolicyError("An unchanged explicit public Nmap approval is required.")
+    if monotonic() >= approval.expires_at:
+        raise policy.ExecutionPolicyError("Public Nmap approval expired; preflight and confirm again.")
+    try:
+        validate_public_observation(approval.observation)
+    except ValueError as error:
+        # The supervisor handles policy errors before starting any process.
+        raise policy.ExecutionPolicyError(str(error)) from None
+    _validate_tool(approval._tool)
+    if (approval.hostname != PUBLIC_HOSTNAME or approval.observation.hostname != approval.hostname
+            or validate_public_address(approval.address) not in approval.observation.ipv4_addresses
+            or approval.profile != PUBLIC_PROFILE
+            or approval._arguments != PUBLIC_ARGUMENT_PREFIX + (approval.address,)
+            or approval._program != approval._tool.executable_path
+            or approval._program != approval._tool._candidate.executable_path
+            or approval._sha256 != approval._tool.sha256
+            or approval._sha256 != approval._tool._candidate.sha256):
+        raise policy.ExecutionPolicyError("The approved public target, profile or executable changed.")
+
+
+def approve_public_nmap(tool: ValidatedNmapTool, observation: PublicTargetObservation, *,
+                        address: str, scope_confirmed: bool, confirmed: bool) -> PublicNmapApproval:
+    _validate_tool(tool)
+    _require_safety()
+    if confirmed is not True:
+        raise policy.ExecutionPolicyError("Confirm the exact hostname, IP and public profile for this run.")
+    expiry = claim_public_observation(observation, address, scope_confirmed=scope_confirmed)
+    approval = object.__new__(PublicNmapApproval)
+    for name, value in (
+        ("_tool", tool), ("observation", observation), ("hostname", PUBLIC_HOSTNAME), ("address", address),
+        ("profile", PUBLIC_PROFILE), ("expires_at", min(expiry, monotonic() + PUBLIC_APPROVAL_TTL_SECONDS)),
+        ("_program", tool.executable_path), ("_sha256", tool.sha256),
+        ("_arguments", PUBLIC_ARGUMENT_PREFIX + (address,)),
+    ):
+        object.__setattr__(approval, name, value)
+    _PUBLIC_APPROVALS[approval] = _public_approval_identity(approval)
+    return approval
 
 
 def _process_safety() -> tuple[bool, str]:
@@ -281,13 +364,26 @@ class _SelfTestAdapter:
         return policy._AdapterPlan(request.tool.executable_path, LOCAL_ARGUMENTS, (LOCAL_TARGET,), 40000)
 
 
+class _PublicScanAdapter:
+    request_type = _PublicScanRequest
+
+    def build(self, request):
+        _validate_public_approval(request.approval)
+        if request.tool is not request.approval._tool:
+            raise policy.ExecutionPolicyError("Public approval belongs to another verified executable.")
+        approval = request.approval
+        return policy._AdapterPlan(approval._program, approval._arguments, (approval.address,), PUBLIC_TIMEOUT_MS)
+
+
 _VERSION_ADAPTER = _VersionAdapter()
 _SELF_TEST_ADAPTER = _SelfTestAdapter()
+_PUBLIC_SCAN_ADAPTER = _PublicScanAdapter()
 
 
 def _connect_adapters() -> None:
     policy._TRUSTED_ADAPTERS["nmap.version-check"] = _VERSION_ADAPTER
     policy._TRUSTED_ADAPTERS["nmap.local-self-test"] = _SELF_TEST_ADAPTER
+    policy._TRUSTED_ADAPTERS["nmap.public-quick-discovery"] = _PUBLIC_SCAN_ADAPTER
 
 
 def _validate_nmap_plan(adapter_id, adapter, plan, approval) -> None:
@@ -298,6 +394,9 @@ def _validate_nmap_plan(adapter_id, adapter, plan, approval) -> None:
     elif (adapter_id == "nmap.local-self-test" and adapter is _SELF_TEST_ADAPTER
             and type(approval) is policy.LocalSelfTestApproval and approval in _APPROVALS):
         expected = _SELF_TEST_ADAPTER.build(_SelfTestRequest(approval._tool))
+    elif (adapter_id == "nmap.public-quick-discovery" and adapter is _PUBLIC_SCAN_ADAPTER
+            and type(approval) is PublicNmapApproval and approval in _PUBLIC_APPROVALS):
+        expected = _PUBLIC_SCAN_ADAPTER.build(_PublicScanRequest(approval._tool, approval))
     else:
         raise policy.ExecutionPolicyError("A confirmation belonging to this exact Nmap operation is required.")
     if plan != expected:
@@ -348,6 +447,16 @@ def prepare_nmap_self_test(tool: ValidatedNmapTool, *, confirmed: bool, target=L
     object.__setattr__(approval, "_tool", tool)
     _APPROVALS.add(approval)
     return policy.ExecutionPolicy().prepare("nmap.local-self-test", _SelfTestRequest(tool), approval)
+
+
+def prepare_nmap_public_scan(tool: ValidatedNmapTool, approval: PublicNmapApproval) -> policy.ValidatedExecutionSpec:
+    """Prepare exactly one approved numeric target, without accepting CLI input."""
+    _require_safety()
+    _validate_public_approval(approval)
+    _connect_adapters()
+    return policy.ExecutionPolicy().prepare(
+        "nmap.public-quick-discovery", _PublicScanRequest(tool, approval), approval,
+    )
 
 
 def _normalize_local_xml(content: bytes) -> tuple[bytes, bool]:
@@ -479,4 +588,5 @@ def parse_trusted_nmap_output(content: bytes) -> ObservationBatch:
 
 
 __all__ = ["ApprovedNmapCandidate", "ValidatedNmapTool", "approve_nmap_path", "prepare_nmap_version_check",
-           "verify_nmap_version", "prepare_nmap_self_test", "parse_trusted_nmap_output", "LOCAL_TARGET", "LOCAL_PORTS"]
+           "verify_nmap_version", "prepare_nmap_self_test", "parse_trusted_nmap_output", "LOCAL_TARGET", "LOCAL_PORTS",
+           "PublicNmapApproval", "approve_public_nmap", "prepare_nmap_public_scan"]

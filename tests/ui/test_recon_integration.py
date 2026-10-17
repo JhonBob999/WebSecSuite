@@ -286,7 +286,7 @@ def test_tool_refresh_and_responsive_tab_switches_preserve_offline_workspaces(
     assert scraper.task_manager.is_idle()
     assert QThreadPool.globalInstance().maxThreadCount() == pool_limit
     assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
-        "Refresh Detection", "Choose Nmap…", "Local Self-Test", "Stop",
+        "Refresh Detection", "Public Target Preflight", "Choose Nmap…", "Local Self-Test", "Stop", "Public Scan",
     ]
     assert not recon.ui.btnNmapSelfTest.isEnabled()
     assert not recon.ui.btnStopNmap.isEnabled()

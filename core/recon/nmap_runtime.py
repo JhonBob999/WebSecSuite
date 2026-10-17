@@ -1,4 +1,4 @@
-"""Explicit Nmap setup and localhost runs through the shared Recon runtime."""
+"""Explicit Nmap setup and bounded approved runs through the shared runtime."""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ from PySide6.QtCore import QObject, Signal
 from core.recon.inventory import AssetInventory
 from core.recon.nmap_adapter import (
     approve_nmap_path, parse_trusted_nmap_output, prepare_nmap_self_test,
-    prepare_nmap_version_check, verify_nmap_version,
+    prepare_nmap_version_check, verify_nmap_version, approve_public_nmap, prepare_nmap_public_scan,
 )
+from core.recon.nmap_public_output import parse_public_nmap_output
 from core.recon.process_supervisor import JobSnapshot, JobState, ProcessSupervisor, process_safety_status
+from core.recon.public_target import PublicTargetPreflight, selected_public_hostname, validate_public_address
 
 
 class NmapRuntime(QObject):
@@ -39,6 +41,9 @@ class NmapRuntime(QObject):
         self._closing = False
         self._stop_requested = False
         self._status = "Setup required: choose and approve a local Nmap executable."
+        self.public_preflight = PublicTargetPreflight(self)
+        self.public_preflight.changed.connect(self.changed)
+        self._public_context = None
 
     @property
     def busy(self) -> bool:
@@ -51,7 +56,8 @@ class NmapRuntime(QObject):
 
     @property
     def can_run(self) -> bool:
-        return not self._closing and not self.busy and self._tool is not None and not self.safety_reason
+        return (not self._closing and not self.busy and not self.public_preflight.busy
+                and self._tool is not None and not self.safety_reason)
 
     @property
     def executable_path(self) -> str:
@@ -70,6 +76,8 @@ class NmapRuntime(QObject):
             raise ValueError("The Nmap runtime is shutting down.")
         if self.busy:
             raise ValueError("A Nmap operation is already running.")
+        if self.public_preflight.busy:
+            raise ValueError("A public DNS preflight is already running.")
         if reason := self.safety_reason:
             self._status = "HOLD: " + reason
             self.changed.emit()
@@ -79,6 +87,7 @@ class NmapRuntime(QObject):
         """Called only after explicit executable selection/approval by the user."""
         self._require_idle_safe()
         self._tool = self._candidate = None
+        self.public_preflight.clear()
         try:
             candidate = approve_nmap_path(path, confirmed=True)
             spec = prepare_nmap_version_check(candidate)
@@ -92,6 +101,37 @@ class NmapRuntime(QObject):
         self._job_id, self._phase = job_id, "verify"
         self._stop_requested = False
         self._status = "Verifying approved Nmap executable…"
+        self.changed.emit()
+        return job_id
+
+    def start_public_scan(self, selected_targets, *, address: str, scope_confirmed: bool, confirmed: bool) -> str:
+        """Consume one preflight only after explicit hostname/IP/run confirmation."""
+        self._require_idle_safe()
+        hostname = selected_public_hostname(selected_targets)
+        if confirmed is not True or scope_confirmed is not True:
+            raise ValueError("Confirm this run and that the selected public IP is within your authorized scope.")
+        if self._tool is None:
+            raise ValueError("Choose and verify an approved Nmap executable first.")
+        observation = self.public_preflight.observation
+        if (not self.public_preflight.is_fresh or observation.hostname != hostname
+                or validate_public_address(address) not in observation.ipv4_addresses):
+            raise ValueError("Select one public IPv4 from a fresh DNS preflight for the selected hostname.")
+        observation = self.public_preflight.take_observation()
+        try:
+            approval = approve_public_nmap(self._tool, observation, address=address,
+                                           scope_confirmed=scope_confirmed, confirmed=confirmed)
+            spec = prepare_nmap_public_scan(self._tool, approval)
+            job_id = self._supervisor.submit(spec)
+        except (ValueError, RuntimeError) as error:
+            self._status = f"Quick Network Discovery preflight failed: {error}"
+            self.changed.emit()
+            raise
+        # Capture immutable provenance separately from the consumed grant. UI
+        # target changes during execution cannot change this numeric target.
+        self._public_context = (observation, address)
+        self._job_id, self._phase = job_id, "public-scan"
+        self._stop_requested = False
+        self._status = f"Quick Network Discovery queued: {hostname} → {address}, TCP 80, 443, 8080, 8443."
         self.changed.emit()
         return job_id
 
@@ -116,6 +156,8 @@ class NmapRuntime(QObject):
         return job_id
 
     def stop(self) -> None:
+        if self.public_preflight.busy:
+            self.public_preflight.clear()
         if self._job_id is not None and not self._stop_requested:
             self._stop_requested = True
             self._supervisor.cancel(self._job_id)
@@ -127,6 +169,7 @@ class NmapRuntime(QObject):
     def shutdown(self, *, immediate: bool = False) -> None:
         self._closing = True
         self._stop_requested = True
+        self.public_preflight.clear()
         self._supervisor.shutdown(immediate=immediate)
         self.changed.emit()
 
@@ -134,16 +177,17 @@ class NmapRuntime(QObject):
         if snapshot.job_id != self._job_id:
             return
         if snapshot.state in (JobState.STARTING, JobState.RUNNING):
-            action = "Nmap verification" if self._phase == "verify" else "Local Self-Test"
+            action = self._action(self._phase)
             self._status = f"{action}: {snapshot.state.value.lower()}."
             self.changed.emit()
 
     def _job_finished(self, snapshot: JobSnapshot) -> None:
         if snapshot.job_id != self._job_id:
             return
-        phase, candidate = self._phase, self._candidate
+        phase, candidate, public_context = self._phase, self._candidate, self._public_context
+        self._public_context = None
         self._job_id, self._phase, self._candidate = None, "", None
-        action = "Nmap verification" if phase == "verify" else "Local Self-Test"
+        action = self._action(phase)
         if self._closing or self._stop_requested or snapshot.state == JobState.CANCELLED:
             self._status = f"{action}: cancelled. No results imported."
         elif snapshot.state == JobState.TIMED_OUT:
@@ -152,19 +196,28 @@ class NmapRuntime(QObject):
             self._status = f"{action}: failed. {snapshot.diagnostic} No results imported."
         elif snapshot.output_truncated:
             self._status = f"{action}: failed; output limit exceeded. No results imported."
+        elif phase == "public-scan" and snapshot.adapter_id != "nmap.public-quick-discovery":
+            self._status = f"{action}: failed; unexpected execution identity. No results imported."
         else:
             try:
                 if phase == "verify":
                     self._tool = verify_nmap_version(candidate, snapshot)
                     self._status = f"Nmap {self._tool.version} verified. Local Self-Test ready for confirmation."
                 else:
-                    batch = parse_trusted_nmap_output(snapshot.stdout)
+                    if phase == "public-scan":
+                        observation, address = public_context
+                        batch = parse_public_nmap_output(snapshot.stdout, observation=observation,
+                                                        address=address, run_id="nmap:public:" + snapshot.job_id)
+                        label = f"Nmap Quick Network Discovery · {observation.hostname} · {address}"
+                    else:
+                        batch = parse_trusted_nmap_output(snapshot.stdout)
+                        label = "Nmap Local Self-Test"
                     result = self._inventory.import_batch(
-                        batch, label="Nmap Local Self-Test", format_name="Nmap live XML",
+                        batch, label=label, format_name="Nmap live XML",
                     )
                     open_count = sum(item.entity_type == "service" for item in batch.observations)
                     self._status = (
-                        f"Local Self-Test succeeded: {open_count} open TCP ports · "
+                        f"{action} succeeded: {open_count} open TCP ports · "
                         f"Added: {result.added_observations} observations · Duplicates: {result.duplicates}."
                     )
                     self.inventory_changed.emit()
@@ -173,6 +226,12 @@ class NmapRuntime(QObject):
                     self._tool = None
                 self._status = f"{action} failed: {error} No results imported."
         self.changed.emit()
+
+    @staticmethod
+    def _action(phase: str) -> str:
+        if phase == "verify":
+            return "Nmap verification"
+        return "Quick Network Discovery" if phase == "public-scan" else "Local Self-Test"
 
 
 __all__ = ["NmapRuntime"]

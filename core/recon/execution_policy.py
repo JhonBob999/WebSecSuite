@@ -1,6 +1,6 @@
 """Scope decisions and one-shot capabilities for reviewed Recon adapters.
 
-Domain scope remains separate from the narrowly bound Nmap localhost self-test.
+Domain scope remains separate from narrowly bound Nmap per-operation grants.
 Discovery records, selected R1 targets and imported dictionaries grant nothing.
 """
 

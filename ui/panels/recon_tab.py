@@ -1,4 +1,4 @@
-"""Recon target management, asset inventory and confirmed local Nmap self-test."""
+"""Recon target management, asset inventory and explicitly authorized Nmap profiles."""
 
 from collections import Counter
 from types import SimpleNamespace
@@ -22,6 +22,7 @@ from dialogs.results_viewer_dialog import UniversalViewerDialog
 from ui.recon_asset_model import ReconAssetFilterProxy, ReconAssetModel
 from ui.recon_target_model import ImportIssueModel, ReconTargetModel
 from ui.recon_tool_info import TOOL_NAMES, ToolInformationView
+from ui.recon_public_nmap import NmapPublicControls
 
 
 class ReconTab(QWidget):
@@ -200,7 +201,7 @@ class ReconTab(QWidget):
         self.ui.toolManager = QGroupBox("Tool Inspector")
         tools_layout = QVBoxLayout(self.ui.toolManager)
         tools_layout.setSpacing(8)
-        self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap Local Self-Test requires setup and confirmation.")
+        self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap scans require setup and confirmation.")
         self.ui.toolDetectionStatus.setTextFormat(Qt.PlainText)
         self.ui.toolDetectionStatus.setWordWrap(True)
         self.ui.toolDetectionStatus.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -271,6 +272,7 @@ class ReconTab(QWidget):
         for button in (self.ui.btnNmapSelfTest, self.ui.btnStopNmap):
             execution.addWidget(button)
         self.ui.toolInfo.section_layouts["execution"].addWidget(self.ui.nmapExecution)
+        self.public_nmap_controls = NmapPublicControls(self)
         return self.ui.toolManager
 
     def _select_inspector_tool(self):
@@ -280,6 +282,7 @@ class ReconTab(QWidget):
         self.ui.toolDiagnostic.setText(self.ui.toolLabels[tool_id].toolTip())
         self.ui.nmapInstallation.setVisible(tool_id == "nmap")
         self.ui.nmapExecution.setVisible(tool_id == "nmap")
+        self.public_nmap_controls.set_visible(tool_id == "nmap")
         self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
 
     def _toggle_tool_inspector(self):
@@ -339,7 +342,7 @@ class ReconTab(QWidget):
             if record.tool_id == "nmap" and record.status.name == "CANDIDATE_UNVERIFIED":
                 self._nmap_candidate_path = record.executable_path or ""
         self.ui.toolDetectionStatus.setText(
-            "Detection is read-only; Nmap Local Self-Test requires setup and confirmation."
+            "Detection is read-only; Nmap scans require setup and confirmation."
         )
         self.ui.toolDiagnostic.setText(self.ui.toolLabels[self.ui.toolSelector.currentData()].toolTip())
 
@@ -351,7 +354,7 @@ class ReconTab(QWidget):
         self.ui.nmapVersionLabel.setText(f"Nmap version: {runtime.version or 'Not verified'}")
         self.ui.nmapAdapterLabel.setText(
             f"Adapter unavailable: {runtime.safety_reason}" if runtime.safety_reason else
-            "Adapter available · Local Self-Test only"
+            "Adapter available · Local Self-Test and gated Quick Network Discovery"
         )
         self.ui.nmapStatusLabel.setText(runtime.status)
         self.ui.btnChooseNmap.setEnabled(not runtime.busy)
@@ -407,7 +410,7 @@ class ReconTab(QWidget):
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(title)
         note = QLabel(
-            "Observations from local JSON, Nmap XML, confirmed localhost self-tests or completed Scraper tasks. "
+            "Observations from local JSON, Nmap XML, confirmed Nmap scans or completed Scraper tasks. "
             "Assets remain separate from imported targets; "
             "scope is unreviewed and selection does not authorize active scanning."
         )

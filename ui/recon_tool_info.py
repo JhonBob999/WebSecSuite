@@ -27,9 +27,9 @@ _SECTIONS = {
 _TOOL_INFORMATION = {
     "nmap": {
         "overview": (
-            "Discover open TCP services with the implemented Local Self-Test. "
-            "WebSecSuite supports only this fixed localhost profile; it does not "
-            "scan imported targets."
+            "Discover reachable TCP ports with Local Self-Test or Quick Network "
+            "Discovery for one explicitly approved ginandjuice.shop IPv4 address. "
+            "Reachable ports are not verified vulnerabilities."
         ),
         "installation": (
             "Choose an official signed Windows nmap.exe. Approval checks local "
@@ -38,22 +38,28 @@ _TOOL_INFORMATION = {
         ),
         "profiles": (
             "Local Self-Test: TCP connect to 127.0.0.1, ports 80, 443, 8080, 8443. "
-            "No arbitrary options, external targets, scripts, UDP, OS detection "
-            "or service-version probing."
+            "Quick Network Discovery: the same four TCP ports on one public IPv4 "
+            "from a fresh ginandjuice.shop preflight, explicitly selected and "
+            "authorized for each run. No arbitrary options, scripts, UDP, OS "
+            "detection or service-version probing."
         ),
         "network": (
-            "Local TCP connections only; DNS and host discovery are disabled. "
-            "Requested maximum: 10 probes/s, one retry. Host timeout: 30 s; "
-            "overall timeout: 40 s. Local services may log connections."
+            "Local Self-Test connects only to loopback. Public preflight resolves "
+            "DNS only on request; Public Scan connects to the approved numeric IP. "
+            "Both scans disable DNS and host discovery. Maximum: 10 probes/s, one "
+            "retry. Host timeout: 30 s; overall timeout: 40 s. Services may log "
+            "connections. Shared infrastructure requires permission for the IP."
         ),
         "execution": (
             "Requires verified Nmap, Windows process containment and fresh "
             "confirmation for each run. Stop cancels the current operation."
         ),
         "results": (
-            "Validated successful results add the loopback IP and open TCP "
-            "services to Asset Inventory and Run / Import History. Zero open "
-            "ports is valid. Existing offline Nmap XML import remains available."
+            "Validated successful results add the scanned IP and open TCP "
+            "services to Asset Inventory and Run / Import History, preserving "
+            "scan provenance and closed/filtered states. Zero open ports is valid. "
+            "DNS associations are time-specific observations, not ownership proof. "
+            "Existing offline Nmap XML import remains available."
         ),
     },
     "subfinder": {

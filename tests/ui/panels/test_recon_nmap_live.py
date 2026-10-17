@@ -8,12 +8,24 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 
+class PreflightDouble(QObject):
+    changed = Signal()
+    observation = None
+    busy = is_fresh = False
+    status = "Public target preflight required."
+    warnings = ()
+
+    def clear(self):
+        self.changed.emit()
+
+
 class RuntimeDouble(QObject):
     changed = Signal()
     inventory_changed = Signal()
 
     def __init__(self, inventory, parent=None):
         super().__init__(parent)
+        self.public_preflight = PreflightDouble(self)
         self.inventory = inventory
         self.busy = False
         self.can_run = False
@@ -89,7 +101,7 @@ def test_initialization_has_gated_local_action_without_program_execution(recon):
     assert "Process safety not validated" in recon.ui.nmapAdapterLabel.text()
     assert "Setup required" in recon.ui.nmapStatusLabel.text()
     assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
-        "Refresh Detection", "Choose Nmap…", "Local Self-Test", "Stop",
+        "Refresh Detection", "Public Target Preflight", "Choose Nmap…", "Local Self-Test", "Stop", "Public Scan",
     ]
 
 
@@ -145,7 +157,8 @@ def test_validated_runtime_enables_only_fixed_local_profile(recon):
     assert "C:/Tools/Nmap/nmap.exe" in recon.ui.nmapExecutableLabel.text()
     assert "7.95" in recon.ui.nmapVersionLabel.text()
     assert "available" in recon.ui.nmapAdapterLabel.text().lower()
-    assert "local self-test only" in recon.ui.nmapAdapterLabel.text().lower()
+    assert "local self-test" in recon.ui.nmapAdapterLabel.text().lower()
+    assert "quick network discovery" in recon.ui.nmapAdapterLabel.text().lower()
 
 
 def test_confirmation_is_explicit_and_decline_prevents_execution(recon, monkeypatch):

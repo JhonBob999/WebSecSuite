@@ -13,12 +13,24 @@ from PySide6.QtWidgets import QComboBox, QFileDialog, QMessageBox, QScrollArea, 
 from core.recon.tool_discovery import ToolDiscoveryRecord, ToolDiscoveryStatus
 
 
+class PreflightDouble(QObject):
+    changed = Signal()
+    observation = None
+    busy = is_fresh = False
+    status = "Public target preflight required."
+    warnings = ()
+
+    def clear(self):
+        self.changed.emit()
+
+
 class RuntimeDouble(QObject):
     changed = Signal()
     inventory_changed = Signal()
 
     def __init__(self, inventory, parent=None):
         super().__init__(parent)
+        self.public_preflight = PreflightDouble(self)
         self.inventory = inventory
         self.busy = self.can_run = False
         self.status = "Setup required: choose and verify nmap.exe."
@@ -243,6 +255,8 @@ def test_tool_switches_show_selected_information_and_status_without_running_anyt
         assert ui.btnChooseNmap.isVisible() == (tool_id == "nmap")
         assert ui.btnNmapSelfTest.isVisible() == (tool_id == "nmap")
         assert ui.btnStopNmap.isVisible() == (tool_id == "nmap")
+        assert ui.nmapPublicSetup.isVisible() == (tool_id == "nmap")
+        assert ui.btnNmapPublicScan.isVisible() == (tool_id == "nmap")
         ui.btnToolInspectorToggle.click()
         ui.btnToolInspectorToggle.click()
         assert recon.nmap_runtime is runtime
@@ -470,7 +484,7 @@ def test_inspector_wraps_and_scrolls_to_information_and_controls(recon, qapp, wi
     # Selecting Nmap reveals its runtime controls and changes the content height.
     # Let Qt update the scroll range before asking it to reveal a child widget.
     qapp.processEvents()
-    for button in (ui.btnChooseNmap, ui.btnNmapSelfTest, ui.btnStopNmap):
+    for button in (ui.btnNmapPreflight, ui.btnChooseNmap, ui.btnNmapSelfTest, ui.btnStopNmap, ui.btnNmapPublicScan):
         scroll.ensureWidgetVisible(button)
         qapp.processEvents()
         geometry = QRect(button.mapTo(viewport, QPoint()), button.size())
