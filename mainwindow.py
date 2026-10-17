@@ -11,6 +11,7 @@ from ui.main.ui_form import Ui_MainWindow
 
 # Подключаем ScraperTabController
 from ui.panels.scraper_tab import ScraperTabController
+from ui.panels.recon_tab import ReconTab
 
 
 class MainWindow(QMainWindow):
@@ -30,21 +31,15 @@ class MainWindow(QMainWindow):
         self.scraper_tab = ScraperTabController()
         self.ui.tabWidget.addTab(self.scraper_tab, "Scraper")
 
+        self.recon_tab = ReconTab()
+        recon_index = self.ui.tabWidget.addTab(self.recon_tab, "Recon")
+        self.ui.tabWidget.setTabToolTip(recon_index, "Offline target inventory and scope review.")
+
         # Добавляем UI shell вкладки для будущих модулей.
         self._add_placeholder_tabs()
 
     def _add_placeholder_tabs(self):
         tabs = [
-            (
-                "Recon",
-                "Discovery and recon intelligence.",
-                "Discovery, endpoint normalization and recon intelligence.",
-                [
-                    "• Endpoint normalization",
-                    "• Parameter intelligence",
-                    "• Tech / fingerprint summaries",
-                ],
-            ),
             (
                 "JS / Frontend",
                 "Frontend-focused recon and JavaScript insights.",

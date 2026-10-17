@@ -1,0 +1,1 @@
+"""Offline reconnaissance target preparation."""
