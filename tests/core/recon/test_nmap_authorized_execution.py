@@ -171,6 +171,29 @@ def test_high_impact_script_requires_extra_confirmation_and_exact_installed_file
     ExecutionPolicy().validate(api().prepare_nmap_authorized_scan(ready[0], approval))
 
 
+@pytest.mark.parametrize("script_id", ["http-auth-finder", "http-security-headers"])
+@pytest.mark.parametrize("implicit_version", [False, True])
+def test_secondary_destination_scripts_cannot_be_approved_even_with_all_confirmations(
+        ready, script_id, implicit_version):
+    tool, _ = ready
+    directory = Path(tool.executable_path).parent / "scripts"
+    category = "version" if implicit_version else "discovery"
+    with (directory / "script.db").open("a", encoding="utf-8") as stream:
+        stream.write(f'Entry {{ filename = "{script_id}.nse", categories = {{ "safe", "{category}" }} }}\n')
+    (directory / f"{script_id}.nse").write_text(
+        'description = [[Cross-scope HTTP fixture.]]\n', encoding="utf-8")
+    profile = replace(duplicate_profile(BUILTIN_PROFILES[1]),
+        script_ids=() if implicit_version else (script_id,), version_detection=implicit_version)
+    store = NmapProfileStore(Path(tool.executable_path).parent / "profiles.json")
+    store.save(profile)
+
+    with pytest.raises(ValueError, match="outside.*scope"):
+        api().authorized_arguments(tool, scope(), profile)
+    with pytest.raises(ValueError, match="outside.*scope"):
+        approve(ready, profile, profile_store=store,
+            high_impact_confirmed=True, version_nse_confirmed=True)
+
+
 @pytest.mark.parametrize("mutation", ["scope", "selected-profile", "profile", "version", "capability", "expiry", "data"])
 def test_changes_revoke_queued_approval(ready, monkeypatch, mutation):
     tool, caps = ready

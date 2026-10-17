@@ -47,6 +47,25 @@ def test_catalog_never_accepts_arbitrary_path_or_missing_script(tool):
         api().discover_scripts(tool)
 
 
+@pytest.mark.parametrize("script_id", ["http-auth-finder", "http-security-headers"])
+@pytest.mark.parametrize("categories", ['"discovery", "safe"', '"safe", "version"'])
+def test_secondary_destination_scripts_remain_catalog_only(tool, script_id, categories):
+    directory = catalog(tool)
+    (directory / "script.db").write_text(
+        f'Entry {{ filename = "{script_id}.nse", categories = {{ {categories} }} }}\n',
+        encoding="utf-8")
+    (directory / f"{script_id}.nse").write_text(
+        f'description = [[Cross-scope HTTP fixture.]]\ncategories = {{{categories}}}\n',
+        encoding="utf-8")
+
+    script, = api().discover_scripts(tool)
+    assert script.script_id == script_id  # Still available for inert inspection.
+    assert not script.supported
+    assert "outside" in script.unsupported_reason and "scope" in script.unsupported_reason
+    with pytest.raises(ValueError, match="outside.*scope"):
+        api().validate_scripts(tool, (script,))
+
+
 @pytest.mark.parametrize("arguments", [(("target", "192.0.2.1"),), (("newtargets", "true"),),
     (("user", "admin"),), (("password", "secret"),), (("command", "calc"),),
     (("http.useragent", "a,b=c"),), (("http-title.redirects", "false"),),

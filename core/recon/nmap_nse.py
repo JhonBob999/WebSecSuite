@@ -23,6 +23,7 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,99}")
 _ENTRY = re.compile(r'Entry\s*\{\s*filename\s*=\s*"([^"\r\n]+)"\s*,\s*categories\s*=\s*\{([^{}]*)\}\s*,?\s*\}', re.S)
 _HIGH_IMPACT = frozenset({"intrusive", "brute", "exploit", "dos", "fuzzer", "malware"})
 _CROSS_SCOPE = frozenset({"broadcast", "external"})
+_KNOWN_CROSS_SCOPE_IDS = frozenset({"http-auth-finder", "http-security-headers"})
 _KNOWN_HIGH_IMPACT_IDS = frozenset({"ssl-enum-ciphers", "ssl-dh-params", "http-enum", "iec61850-mms"})
 # -sV implicitly loads these installed version scripts. Unknown future version
 # scripts remain catalog-only until their target behavior has been reviewed.
@@ -39,8 +40,8 @@ VERSION_SCRIPT_IDS = frozenset({
     "wdb-version", "weblogic-t3-info", "xmpp-info",
 })
 SUPPORTED_SCRIPT_IDS = frozenset({
-    "banner", "http-title", "http-headers", "http-server-header", "http-security-headers",
-    "http-methods", "http-enum", "http-cookie-flags", "http-robots.txt", "http-auth-finder",
+    "banner", "http-title", "http-headers", "http-server-header",
+    "http-methods", "http-enum", "http-cookie-flags", "http-robots.txt",
     "ssl-cert", "ssl-date", "ssl-enum-ciphers", "ssl-dh-params", "tls-alpn", "tls-nextprotoneg",
     "ssh-hostkey", "ssh2-enum-algos", "dns-recursion", "dns-nsid",
     "ftp-anon", "ftp-syst", "smtp-commands", "smtp-ntlm-info", "pop3-capabilities",
@@ -130,10 +131,14 @@ def discover_scripts(tool) -> tuple[ScriptInfo, ...]:
         reason = "" if script_id in SUPPORTED_SCRIPT_IDS else "This installed script has not been reviewed for exact numeric target scope; catalog inspection only."
         if _CROSS_SCOPE.intersection(categories):
             reason = "Broadcast/external scripts can contact addresses outside the approved concrete scope."
+        if script_id in _KNOWN_CROSS_SCOPE_IDS:
+            # The spider's nonstandard-port check and a custom redirect callback
+            # bypass the ordinary HTTP library's destination restrictions.
+            reason = f"{script_id} can follow HTTP links or redirects outside the approved concrete scope."
         if re.search(rb"\b(?:target\s*\.\s*add|newtargets)\b", content):
             reason = "Scripts that add new scan targets are unsupported."
-        # Numeric targets and -n are mandatory for supported HTTP scripts: the
-        # installed HTTP library's default redirects then require exact host.ip.
+        # Numeric targets and -n constrain ordinary HTTP requests, not arbitrary
+        # crawler links or custom redirect callbacks; those need separate review.
         scripts.append(ScriptInfo(script_id, categories, _description(content),
             hashlib.sha256(content).hexdigest(), str(path), not bool(reason), reason))
         seen.add(script_id)
