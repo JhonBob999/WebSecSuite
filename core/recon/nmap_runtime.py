@@ -10,6 +10,9 @@ from core.recon.nmap_adapter import (
     prepare_nmap_version_check, verify_nmap_version, approve_public_nmap, prepare_nmap_public_scan,
 )
 from core.recon.nmap_public_output import parse_public_nmap_output
+from core.recon.nmap_profile_execution import (
+    approve_profile_nmap, prepare_nmap_profile_scan, validate_executable_profile,
+)
 from core.recon.process_supervisor import JobSnapshot, JobState, ProcessSupervisor, process_safety_status
 from core.recon.public_target import PublicTargetPreflight, selected_public_hostname, validate_public_address
 
@@ -35,6 +38,7 @@ class NmapRuntime(QObject):
         supervisor = self._supervisor
         self.destroyed.connect(lambda: supervisor.shutdown(immediate=True))
         self._job_id: str | None = None
+        self._submitting = False
         self._phase = ""
         self._candidate = None
         self._tool = None
@@ -44,10 +48,11 @@ class NmapRuntime(QObject):
         self.public_preflight = PublicTargetPreflight(self)
         self.public_preflight.changed.connect(self.changed)
         self._public_context = None
+        self._profile_context = None
 
     @property
     def busy(self) -> bool:
-        return self._job_id is not None
+        return self._job_id is not None or self._submitting
 
     @property
     def safety_reason(self) -> str:
@@ -104,8 +109,8 @@ class NmapRuntime(QObject):
         self.changed.emit()
         return job_id
 
-    def start_public_scan(self, selected_targets, *, address: str, scope_confirmed: bool, confirmed: bool) -> str:
-        """Consume one preflight only after explicit hostname/IP/run confirmation."""
+    def _public_run_observation(self, selected_targets, *, address, scope_confirmed, confirmed):
+        """Shared public target checks; DNS remains observation, never scope."""
         self._require_idle_safe()
         hostname = selected_public_hostname(selected_targets)
         if confirmed is not True or scope_confirmed is not True:
@@ -116,6 +121,13 @@ class NmapRuntime(QObject):
         if (not self.public_preflight.is_fresh or observation.hostname != hostname
                 or validate_public_address(address) not in observation.ipv4_addresses):
             raise ValueError("Select one public IPv4 from a fresh DNS preflight for the selected hostname.")
+        return observation
+
+    def start_public_scan(self, selected_targets, *, address: str, scope_confirmed: bool, confirmed: bool) -> str:
+        """Consume one preflight only after explicit hostname/IP/run confirmation."""
+        observation = self._public_run_observation(selected_targets, address=address,
+            scope_confirmed=scope_confirmed, confirmed=confirmed)
+        hostname = observation.hostname
         observation = self.public_preflight.take_observation()
         try:
             approval = approve_public_nmap(self._tool, observation, address=address,
@@ -133,6 +145,49 @@ class NmapRuntime(QObject):
         self._stop_requested = False
         self._status = f"Quick Network Discovery queued: {hostname} → {address}, TCP 80, 443, 8080, 8443."
         self.changed.emit()
+        return job_id
+
+    def start_profile_scan(self, selected_targets, *, profile, profile_store=None, address: str,
+                           scope_confirmed: bool, confirmed: bool) -> str:
+        """Run a saved eligible snapshot through the existing contained supervisor."""
+        self._public_run_observation(selected_targets, address=address,
+            scope_confirmed=scope_confirmed, confirmed=confirmed)
+        snapshot = validate_executable_profile(profile)
+        self._submitting = True
+        self._phase = "profile-scan"
+        self._stop_requested = False
+        try:
+            observation = self.public_preflight.take_observation()
+            if self._closing or self._stop_requested:
+                raise ValueError("Profile scan cancelled before launch.")
+            approval = approve_profile_nmap(self._tool, observation, profile=profile,
+                profile_store=profile_store, address=address,
+                scope_confirmed=scope_confirmed, confirmed=confirmed)
+            spec = prepare_nmap_profile_scan(self._tool, approval)
+            # Capture inert provenance separately from the one-shot grant.
+            snapshot = validate_executable_profile(approval.profile)
+            self._public_context = (observation, address)
+            self._profile_context = (snapshot, self._tool.version)
+            if self._closing or self._stop_requested:
+                raise ValueError("Profile scan cancelled before launch.")
+            job_id = self._supervisor.submit(spec)
+            # A queued signal can synchronously Stop/shut down and finish the
+            # job before submit returns. Never resurrect that completed job.
+            if self._phase == "profile-scan":
+                self._job_id = job_id
+                if self._closing or self._stop_requested:
+                    self._supervisor.cancel(job_id)
+                elif self._job_id is not None:
+                    self._status = f"{snapshot.name} queued: {observation.hostname} → {address}, {len(snapshot.ports)} TCP ports."
+        except (ValueError, RuntimeError) as error:
+            if self._job_id is None:
+                self._phase = ""
+                self._public_context = self._profile_context = None
+            self._status = f"Profile scan preflight failed: {error}"
+            raise
+        finally:
+            self._submitting = False
+            self.changed.emit()
         return job_id
 
     def start_self_test(self, *, confirmed: bool, target: str = "127.0.0.1") -> str:
@@ -158,11 +213,12 @@ class NmapRuntime(QObject):
     def stop(self) -> None:
         if self.public_preflight.busy:
             self.public_preflight.clear()
-        if self._job_id is not None and not self._stop_requested:
+        if self.busy and not self._stop_requested:
             self._stop_requested = True
-            self._supervisor.cancel(self._job_id)
+            if self._job_id is not None:
+                self._supervisor.cancel(self._job_id)
             # cancel() may finish a queued job synchronously.
-            if self.busy:
+            if self.busy and self._phase:
                 self._status = "Stopping Nmap…"
                 self.changed.emit()
 
@@ -174,6 +230,11 @@ class NmapRuntime(QObject):
         self.changed.emit()
 
     def _job_changed(self, snapshot: JobSnapshot) -> None:
+        if (self._submitting and self._phase == "profile-scan" and self._job_id is None
+                and snapshot.adapter_id == "nmap.public-profile" and snapshot.state == JobState.QUEUED):
+            self._job_id = snapshot.job_id
+            if self._stop_requested or self._closing:
+                self._supervisor.cancel(snapshot.job_id)
         if snapshot.job_id != self._job_id:
             return
         if snapshot.state in (JobState.STARTING, JobState.RUNNING):
@@ -185,7 +246,9 @@ class NmapRuntime(QObject):
         if snapshot.job_id != self._job_id:
             return
         phase, candidate, public_context = self._phase, self._candidate, self._public_context
+        profile_context = self._profile_context
         self._public_context = None
+        self._profile_context = None
         self._job_id, self._phase, self._candidate = None, "", None
         action = self._action(phase)
         if self._closing or self._stop_requested or snapshot.state == JobState.CANCELLED:
@@ -198,13 +261,22 @@ class NmapRuntime(QObject):
             self._status = f"{action}: failed; output limit exceeded. No results imported."
         elif phase == "public-scan" and snapshot.adapter_id != "nmap.public-quick-discovery":
             self._status = f"{action}: failed; unexpected execution identity. No results imported."
+        elif phase == "profile-scan" and snapshot.adapter_id != "nmap.public-profile":
+            self._status = f"{action}: failed; unexpected execution identity. No results imported."
         else:
             try:
                 if phase == "verify":
                     self._tool = verify_nmap_version(candidate, snapshot)
                     self._status = f"Nmap {self._tool.version} verified. Local Self-Test ready for confirmation."
                 else:
-                    if phase == "public-scan":
+                    if phase == "profile-scan":
+                        observation, address = public_context
+                        profile, version = profile_context
+                        batch = parse_public_nmap_output(snapshot.stdout, observation=observation,
+                            address=address, run_id="nmap:public:" + snapshot.job_id,
+                            profile=profile, executable_version=version)
+                        label = f"Nmap {profile.name} · {observation.hostname} · {address}"
+                    elif phase == "public-scan":
                         observation, address = public_context
                         batch = parse_public_nmap_output(snapshot.stdout, observation=observation,
                                                         address=address, run_id="nmap:public:" + snapshot.job_id)
@@ -231,6 +303,8 @@ class NmapRuntime(QObject):
     def _action(phase: str) -> str:
         if phase == "verify":
             return "Nmap verification"
+        if phase == "profile-scan":
+            return "Nmap profile scan"
         return "Quick Network Discovery" if phase == "public-scan" else "Local Self-Test"
 
 

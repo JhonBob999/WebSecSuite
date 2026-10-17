@@ -82,6 +82,7 @@ class RuntimeDouble(QObject):
         self.version = "7.95"
         self.safety_reason = ""
         self.executions = []
+        self.profile_executions = []
         self.start_error = None
 
     def start_public_scan(self, selected_targets, *, address, scope_confirmed, confirmed):
@@ -97,6 +98,18 @@ class RuntimeDouble(QObject):
     def approve_executable(self, path):
         pass
 
+    def start_profile_scan(self, selected_targets, *, profile, profile_store,
+                           address, scope_confirmed, confirmed):
+        if self.start_error:
+            raise self.start_error
+        self.profile_executions.append((selected_targets, profile, profile_store,
+                                        address, scope_confirmed, confirmed))
+        self.public_preflight.clear()
+        self.busy, self.can_run = True, False
+        self.status = "Selected profile running."
+        self.changed.emit()
+        return "profile-run-1"
+
     def start_self_test(self, **kwargs):
         pass
 
@@ -108,10 +121,12 @@ class RuntimeDouble(QObject):
 
 
 @pytest.fixture
-def recon(qapp, monkeypatch):
+def recon(qapp, monkeypatch, tmp_path):
     from ui.panels import recon_tab
+    from core.recon.nmap_profile_store import NmapProfileStore
 
     monkeypatch.setattr(recon_tab, "NmapRuntime", RuntimeDouble)
+    monkeypatch.setattr(recon_tab, "NmapProfileStore", lambda: NmapProfileStore(tmp_path / "profiles.json"))
     panel = recon_tab.ReconTab()
     panel.resize(1366, 768)
     panel.show()
@@ -336,3 +351,182 @@ def test_public_preflight_wraps_in_narrow_inspector_and_actions_remain_reachable
         qapp.processEvents()
         rectangle = QRect(action.mapTo(scroll.viewport(), QPoint()), action.size())
         assert scroll.viewport().rect().contains(rectangle)
+
+
+def select_profile(recon, profile_id="web-services"):
+    combo = recon.ui.nmapProfileSelector
+    index = combo.findData(profile_id)
+    assert index >= 0
+    combo.setCurrentIndex(index)
+
+
+def saved_custom(recon, **changes):
+    from dataclasses import replace
+    from core.recon.nmap_profiles import BUILTIN_PROFILES, duplicate_profile
+
+    profile = replace(duplicate_profile(BUILTIN_PROFILES[1]), name="Saved bounded custom", **changes)
+    recon.nmap_profile_store.save(profile)
+    recon.public_nmap_controls.reload_profiles()
+    return profile
+
+
+def ready_profile(recon, profile_id="web-services"):
+    preflight(recon)
+    select_profile(recon, profile_id)
+    approve_ip(recon)
+
+
+def test_profile_selector_summary_and_eligibility_stay_offline(recon):
+    ui = recon.ui
+    assert ui.nmapProfileSelector.count() == 4
+    assert not ui.btnNmapRunProfile.isEnabled()
+    assert "Public Scan" in ui.nmapProfileEligibility.text()
+    select_profile(recon)
+    text = ui.nmapProfileSummary.text()
+    for expected in ("Web Services", "eight common", "8", "80,443,8000,8080-8081,8443,8888,9443",
+                     "TCP connect", "10", "1", "45 s", "60 s", "disabled", "Network impact"):
+        assert expected in text
+    assert "Eligible" in ui.nmapProfileEligibility.text()
+    assert not ui.btnNmapRunProfile.isEnabled()
+    assert recon.nmap_runtime.profile_executions == []
+    assert recon.nmap_runtime.public_preflight.starts == []
+
+
+@pytest.mark.parametrize("profile_id", ["standard-tcp", "deep-service-review"])
+def test_configuration_only_presets_are_explained_and_disabled(recon, profile_id):
+    ready_profile(recon, profile_id)
+    assert not recon.ui.btnNmapRunProfile.isEnabled()
+    assert "Not executable in R7B-1" in recon.ui.nmapProfileEligibility.text()
+    assert recon.ui.btnNmapPublicScan.isEnabled()  # Legacy Quick action remains independent.
+
+
+@pytest.mark.parametrize("changes", [{"ports": tuple(range(1, 18))}, {"version_detection": True},
+                                      {"max_rate": 11}, {"max_retries": 2},
+                                      {"host_timeout_seconds": 61, "execution_timeout_seconds": 80},
+                                      {"execution_timeout_seconds": 91}])
+def test_saved_ineligible_profiles_remain_listed_and_editable(recon, changes):
+    profile = saved_custom(recon, **changes)
+    ready_profile(recon, profile.profile_id)
+    assert recon.ui.nmapProfileSelector.currentText() == profile.name
+    assert not recon.ui.btnNmapRunProfile.isEnabled()
+    assert "Not executable in R7B-1" in recon.ui.nmapProfileEligibility.text()
+    assert recon.nmap_profile_store.profiles == (profile,)
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_confirmed_profile_uses_exact_selected_snapshot_once(recon, monkeypatch, custom):
+    profile = saved_custom(recon) if custom else None
+    ready_profile(recon, profile.profile_id if custom else "web-services")
+    prompts = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: prompts.append(args) or QMessageBox.Yes)
+    recon.ui.btnNmapRunProfile.click()
+    assert len(recon.nmap_runtime.profile_executions) == 1
+    targets, snapshot, store, address, scope, confirmed = recon.nmap_runtime.profile_executions[0]
+    assert targets == ("ginandjuice.shop",)
+    assert snapshot.profile_id == (profile.profile_id if custom else "web-services")
+    assert store is recon.nmap_profile_store
+    assert (address, scope, confirmed) == ("8.8.8.8", True, True)
+    assert prompts[0][-1] == QMessageBox.No
+    for expected in ("ginandjuice.shop", "8.8.8.8", snapshot.name, "8", "45 s", "60 s",
+                     "Network impact", "authorized scanning scope"):
+        assert expected in prompts[0][2]
+    assert not recon.ui.nmapPublicScope.isChecked()
+    assert not recon.ui.btnNmapRunProfile.isEnabled()
+    assert recon.ui.btnStopNmap.isEnabled()
+    assert recon.nmap_runtime.executions == []
+
+
+def test_profile_decline_clears_scope_and_does_not_run(recon, monkeypatch):
+    ready_profile(recon)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
+    recon.ui.btnNmapRunProfile.click()
+    assert not recon.ui.nmapPublicScope.isChecked()
+    assert recon.nmap_runtime.profile_executions == []
+
+
+@pytest.mark.parametrize("change", ["profile", "profile-and-back", "ip", "ip-and-back",
+                                    "target", "dns-expired", "dns-replaced"])
+def test_changed_profile_confirmation_is_never_accepted(recon, monkeypatch, change):
+    ready_profile(recon)
+
+    def change_then_confirm(*args):
+        if change.startswith("profile"):
+            select_profile(recon, "quick-network-discovery")
+            if change.endswith("and-back"):
+                select_profile(recon)
+        elif change.startswith("ip"):
+            recon.ui.nmapPublicIp.setCurrentIndex(2)
+            if change.endswith("and-back"):
+                recon.ui.nmapPublicIp.setCurrentIndex(1)
+        elif change == "target":
+            recon.target_model.set_all_selected(False)
+        elif change == "dns-expired":
+            recon.nmap_runtime.public_preflight.is_fresh = False
+        else:
+            recon.nmap_runtime.public_preflight.finish()
+        recon.ui.nmapPublicScope.setChecked(True)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", change_then_confirm)
+    recon.ui.btnNmapRunProfile.click()
+    assert recon.nmap_runtime.profile_executions == []
+    assert not recon.ui.nmapPublicScope.isChecked()
+    assert "changed or expired" in recon.ui.nmapPublicStatus.text()
+
+
+@pytest.mark.parametrize("change", ["modify", "delete", "corrupt"])
+def test_persisted_custom_change_during_confirmation_rejects_run(recon, monkeypatch, change):
+    from dataclasses import replace
+    from core.recon.nmap_profile_store import NmapProfileStore
+
+    profile = saved_custom(recon)
+    ready_profile(recon, profile.profile_id)
+
+    def change_then_confirm(*args):
+        disk_store = NmapProfileStore(recon.nmap_profile_store.path)
+        if change == "modify":
+            disk_store.save(replace(profile, max_rate=9))
+        elif change == "delete":
+            disk_store.delete(profile.profile_id)
+        else:
+            disk_store.path.write_text("{}", encoding="utf-8")
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", change_then_confirm)
+    recon.ui.btnNmapRunProfile.click()
+    assert recon.nmap_runtime.profile_executions == []
+    assert not recon.ui.nmapPublicScope.isChecked()
+    assert "changed" in recon.ui.nmapPublicStatus.text()
+
+
+def test_manager_save_refreshes_selector_without_starting_scan(recon, qapp):
+    recon.ui.btnManageNmapProfiles.click()
+    manager = recon._nmap_profiles_dialog
+    manager.ui.btnDuplicate.click()
+    manager.ui.nameInput.setText("Saved from manager")
+    manager.ui.btnSave.click()
+    qapp.processEvents()
+    profile = recon.nmap_profile_store.profiles[0]
+    assert recon.ui.nmapProfileSelector.findData(profile.profile_id) >= 0
+    assert recon.nmap_runtime.profile_executions == []
+    assert recon.nmap_runtime.executions == []
+    manager.close()
+
+
+def test_profile_controls_hide_with_tool_and_wrap_in_narrow_inspector(recon, qapp):
+    ready_profile(recon)
+    ui, scroll = recon.ui, recon.ui.toolInspectorScroll
+    ui.reconSplitter.moveSplitter(ui.reconSplitter.width() - 206, 1)
+    qapp.processEvents()
+    assert not scroll.horizontalScrollBar().isVisible()
+    for label in (ui.nmapProfileSummary, ui.nmapProfileEligibility):
+        assert label.textFormat() == Qt.PlainText
+        assert label.wordWrap()
+        assert label.height() >= label.heightForWidth(label.width())
+    scroll.ensureWidgetVisible(ui.btnNmapRunProfile)
+    qapp.processEvents()
+    rectangle = QRect(ui.btnNmapRunProfile.mapTo(scroll.viewport(), QPoint()), ui.btnNmapRunProfile.size())
+    assert scroll.viewport().rect().contains(rectangle)
+    ui.toolSelector.setCurrentIndex(ui.toolSelector.findData("subfinder"))
+    assert not ui.nmapProfileSetup.isVisible()
+    assert not ui.btnNmapRunProfile.isVisible()

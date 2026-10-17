@@ -27,8 +27,9 @@ _SECTIONS = {
 _TOOL_INFORMATION = {
     "nmap": {
         "overview": (
-            "Discover reachable TCP ports with Local Self-Test or Quick Network "
-            "Discovery for one explicitly approved ginandjuice.shop IPv4 address. "
+            "Discover reachable TCP ports with Local Self-Test, Quick Network "
+            "Discovery, Web Services or a bounded saved Custom profile for one "
+            "explicitly approved ginandjuice.shop IPv4 address. "
             "Reachable ports are not verified vulnerabilities."
         ),
         "installation": (
@@ -42,14 +43,18 @@ _TOOL_INFORMATION = {
             "from a fresh ginandjuice.shop preflight, explicitly selected and "
             "authorized for each run. No arbitrary options, scripts, UDP, OS "
             "detection or service-version probing in these executable actions. "
-            "Manage Scan Profiles offers immutable presets and saved custom "
-            "configuration only; new profiles require R7B before execution."
+            "Run Selected Profile supports Web Services and saved Custom profiles "
+            "with 1–16 TCP ports, no version detection, rate 1–10 probes/s, "
+            "0–1 retries, host timeout 5–60 s and overall timeout 10–90 s "
+            "exceeding the host timeout. Standard TCP and Deep Service Review "
+            "are not executable in R7B-1. Manage Scan Profiles remains an offline editor."
         ),
         "network": (
             "Local Self-Test connects only to loopback. Public preflight resolves "
             "DNS only on request; Public Scan connects to the approved numeric IP. "
-            "Both scans disable DNS and host discovery. Maximum: 10 probes/s, one "
-            "retry. Host timeout: 30 s; overall timeout: 40 s. Services may log "
+            "All scans disable DNS and host discovery. Maximum: 10 probes/s, one "
+            "retry. Quick and Local: 30 s host / 40 s overall; selected profiles "
+            "show their exact bounds before execution. Services may log "
             "connections. Shared infrastructure requires permission for the IP."
         ),
         "execution": (

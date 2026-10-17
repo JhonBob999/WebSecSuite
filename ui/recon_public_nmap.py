@@ -7,6 +7,9 @@ from PySide6.QtWidgets import (
 )
 
 from core.recon.targets import normalize_hostname
+from core.recon.nmap_profile_execution import execution_reasons, validate_executable_profile
+from core.recon.nmap_profile_store import NmapProfileStore
+from core.recon.nmap_profiles import format_network_impact, format_ports
 
 
 class NmapPublicControls(QObject):
@@ -19,7 +22,10 @@ class NmapPublicControls(QObject):
         self._preflight = self._runtime.public_preflight
         self._selected = self._selected_targets()
         self._shown_observation = None
+        self._confirmation_revision = 0
+        self._profiles = {}
         self._build_ui()
+        self.reload_profiles()
         recon.target_model.inventoryChanged.connect(self._targets_changed)
         self._preflight.changed.connect(self._preflight_changed)
         self._runtime.changed.connect(self.refresh_runtime)
@@ -37,6 +43,21 @@ class NmapPublicControls(QObject):
 
     def _build_ui(self):
         ui = self._recon.ui
+        ui.nmapProfileSetup = QWidget()
+        profiles = QVBoxLayout(ui.nmapProfileSetup)
+        profiles.setContentsMargins(0, 0, 0, 0)
+        profiles.addWidget(self._label("Scan Profile"))
+        ui.nmapProfileSelector = QComboBox()
+        ui.nmapProfileSelector.setAccessibleName("Nmap scan profile")
+        ui.nmapProfileSelector.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        ui.nmapProfileSelector.setMinimumWidth(0)
+        ui.nmapProfileSelector.currentIndexChanged.connect(self._profile_changed)
+        profiles.addWidget(ui.nmapProfileSelector)
+        ui.nmapProfileSummary = self._label()
+        profiles.addWidget(ui.nmapProfileSummary)
+        ui.nmapProfileEligibility = self._label()
+        profiles.addWidget(ui.nmapProfileEligibility)
+        ui.toolInfo.section_layouts["profiles"].addWidget(ui.nmapProfileSetup)
         ui.nmapPublicSetup = QWidget()
         layout = QVBoxLayout(ui.nmapPublicSetup)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -77,13 +98,65 @@ class NmapPublicControls(QObject):
         ui.btnNmapPublicScan.setToolTip("Confirm Quick Network Discovery for exactly one approved IPv4 address.")
         ui.btnNmapPublicScan.clicked.connect(self._confirm_scan)
         ui.toolInfo.section_layouts["execution"].addWidget(ui.btnNmapPublicScan)
+        ui.btnNmapRunProfile = QPushButton("Run Selected Profile…")
+        ui.btnNmapRunProfile.setToolTip("Confirm the selected bounded profile for exactly one authorized public IPv4.")
+        ui.btnNmapRunProfile.clicked.connect(self._confirm_profile_scan)
+        ui.toolInfo.section_layouts["execution"].addWidget(ui.btnNmapRunProfile)
         ui.nmapPublicSummary = self._label()
         ui.toolInfo.section_layouts["results"].addWidget(ui.nmapPublicSummary)
 
     def set_visible(self, visible):
         ui = self._recon.ui
-        for widget in (ui.nmapPublicSetup, ui.btnNmapPublicScan, ui.nmapPublicSummary):
+        for widget in (ui.nmapPublicSetup, ui.btnNmapPublicScan, ui.nmapPublicSummary,
+                       ui.nmapProfileSetup, ui.btnNmapRunProfile):
             widget.setVisible(visible)
+
+    def reload_profiles(self):
+        """Refresh saved configuration only; never select an IP or start a run."""
+        combo = self._recon.ui.nmapProfileSelector
+        selected_id = combo.currentData()
+        self._profiles = {profile.profile_id: profile for profile in self._recon.nmap_profile_store.all_profiles}
+        with QSignalBlocker(combo):
+            combo.clear()
+            for profile in self._profiles.values():
+                combo.addItem(profile.name, profile.profile_id)
+                combo.setItemData(combo.count() - 1, profile.description, Qt.ToolTipRole)
+            index = combo.findData(selected_id)
+            combo.setCurrentIndex(max(0, index))
+        self._profile_changed()
+
+    def _selected_profile(self):
+        return self._profiles.get(self._recon.ui.nmapProfileSelector.currentData())
+
+    def _profile_changed(self):
+        self._confirmation_revision += 1
+        ui, profile = self._recon.ui, self._selected_profile()
+        ui.nmapPublicScope.setChecked(False)
+        if profile is None:
+            ui.nmapProfileSummary.setText("Select a saved scan profile.")
+            ui.nmapProfileEligibility.setText("Not executable in R7B-1: no selected profile.")
+        else:
+            ui.nmapProfileSummary.setText(
+                f"Name: {profile.name}\n{profile.description}\n"
+                f"TCP ports ({len(profile.ports)}): {format_ports(profile.ports)}\n"
+                f"Technique: TCP connect (-sT)\n"
+                f"Maximum rate: {profile.max_rate} probes/s; retries: {profile.max_retries}\n"
+                f"Host timeout: {profile.host_timeout_seconds} s; "
+                f"overall timeout: {profile.execution_timeout_seconds} s\n"
+                f"Version detection: {'enabled' if profile.version_detection else 'disabled'}\n"
+                f"Network impact: {format_network_impact(profile)}"
+            )
+            reasons = execution_reasons(profile)
+            if profile.profile_id == "quick-network-discovery":
+                text = "Use the existing Public Scan action for Quick Network Discovery."
+            elif reasons:
+                text = " ".join(reasons)
+                if "Not executable in R7B-1" not in text:
+                    text = "Not executable in R7B-1: " + text
+            else:
+                text = "Eligible in R7B-1. Fresh DNS, selected IP scope and per-run confirmation are required."
+            ui.nmapProfileEligibility.setText(text)
+        self.refresh_runtime()
 
     def _selected_targets(self):
         model = self._recon.target_model
@@ -107,6 +180,7 @@ class NmapPublicControls(QObject):
         selected = self._selected_targets()
         if selected != self._selected:
             self._selected = selected
+            self._confirmation_revision += 1
             self._recon.ui.nmapPublicScope.setChecked(False)
             self._preflight.clear()
         self.refresh_runtime()
@@ -115,6 +189,7 @@ class NmapPublicControls(QObject):
         ui, observation = self._recon.ui, self._preflight.observation
         if observation is not self._shown_observation:
             self._shown_observation = observation
+            self._confirmation_revision += 1
             ui.nmapPublicScope.setChecked(False)
             with QSignalBlocker(ui.nmapPublicIp):
                 ui.nmapPublicIp.clear()
@@ -140,6 +215,7 @@ class NmapPublicControls(QObject):
         self.refresh_runtime()
 
     def _ip_changed(self):
+        self._confirmation_revision += 1
         self._recon.ui.nmapPublicScope.setChecked(False)
         self.refresh_runtime()
 
@@ -171,6 +247,11 @@ class NmapPublicControls(QObject):
             else "Scope authorization: required for the exact selected IP"
         )
         ui.btnNmapPublicScan.setEnabled(self._can_scan())
+        profile = self._selected_profile()
+        eligible = bool(profile is not None and profile.profile_id != "quick-network-discovery"
+                        and not execution_reasons(profile))
+        ui.nmapProfileSelector.setEnabled(not runtime.busy)
+        ui.btnNmapRunProfile.setEnabled(eligible and self._can_scan())
         ui.nmapPublicSummary.setText("Execution / final results: " + runtime.status)
 
     def _start_preflight(self):
@@ -189,6 +270,8 @@ class NmapPublicControls(QObject):
         ui = self._recon.ui
         observation = self._preflight.observation
         address = ui.nmapPublicIp.currentData()
+        revision = self._confirmation_revision
+        selected = self._selected_targets()
         answer = QMessageBox.question(
             self._recon, "Confirm Nmap Public Scan",
             f"Target: {observation.hostname}\nSelected IP: {address}\n"
@@ -206,6 +289,7 @@ class NmapPublicControls(QObject):
         unchanged = (
             self._can_scan() and self._preflight.observation is observation
             and ui.nmapPublicIp.currentData() == address
+            and self._confirmation_revision == revision and self._selected_targets() == selected
         )
         ui.nmapPublicScope.setChecked(False)
         if answer != QMessageBox.Yes:
@@ -220,6 +304,68 @@ class NmapPublicControls(QObject):
             )
         except (ValueError, RuntimeError) as error:
             ui.nmapPublicStatus.setText(f"Public Scan rejected: {error}")
+        self.refresh_runtime()
+
+    def _saved_profile_unchanged(self, profile):
+        if profile.is_builtin:
+            return
+        store = NmapProfileStore(self._recon.nmap_profile_store.path)
+        if store.load_error or not any(saved == profile for saved in store.profiles):
+            raise ValueError("Saved profile changed or became unavailable; reopen the application and review it again.")
+
+    def _confirm_profile_scan(self):
+        ui = self._recon.ui
+        if not ui.btnNmapRunProfile.isEnabled() or not self._can_scan():
+            return
+        try:
+            # This fresh frozen snapshot, rather than any preview text, is the
+            # entire profile approved by the confirmation below.
+            profile = validate_executable_profile(self._selected_profile())
+            self._saved_profile_unchanged(profile)
+        except ValueError as error:
+            ui.nmapPublicScope.setChecked(False)
+            ui.nmapPublicStatus.setText(f"Selected Profile rejected: {error}")
+            self.refresh_runtime()
+            return
+        observation = self._preflight.observation
+        address = ui.nmapPublicIp.currentData()
+        selected = self._selected_targets()
+        revision = self._confirmation_revision
+        answer = QMessageBox.question(
+            self._recon, "Confirm Nmap Scan Profile",
+            f"Target: {observation.hostname}\nSelected IP: {address}\n"
+            f"Profile: {profile.name}\nTCP ports ({len(profile.ports)}): {format_ports(profile.ports)}\n"
+            "Technique: TCP connect (-sT); no DNS or host discovery\n"
+            f"Maximum rate: {profile.max_rate} probes/s; retries: {profile.max_retries}\n"
+            f"Host timeout: {profile.host_timeout_seconds} s; "
+            f"overall timeout: {profile.execution_timeout_seconds} s\n"
+            "Version detection: disabled\n\n"
+            f"Network impact: {format_network_impact(profile)} "
+            "Active TCP connections may be logged and infrastructure may be shared. "
+            "Reachable TCP ports are not verified vulnerabilities.\n\n"
+            "I confirm that this exact IP is within my authorized scanning scope. Run this scan?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        unchanged = (
+            self._can_scan() and self._confirmation_revision == revision
+            and self._selected_targets() == selected and self._selected_profile() == profile
+            and self._preflight.observation is observation and ui.nmapPublicIp.currentData() == address
+        )
+        ui.nmapPublicScope.setChecked(False)
+        if answer != QMessageBox.Yes:
+            return
+        if not unchanged:
+            ui.nmapPublicStatus.setText("Target, IP, profile or preflight changed or expired; review this run again.")
+            self.refresh_runtime()
+            return
+        try:
+            self._saved_profile_unchanged(profile)
+            self._runtime.start_profile_scan(
+                selected, profile=profile, profile_store=self._recon.nmap_profile_store,
+                address=address, scope_confirmed=True, confirmed=True,
+            )
+        except (ValueError, RuntimeError) as error:
+            ui.nmapPublicStatus.setText(f"Selected Profile rejected: {error}")
         self.refresh_runtime()
 
 

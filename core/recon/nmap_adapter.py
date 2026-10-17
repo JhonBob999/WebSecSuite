@@ -388,6 +388,10 @@ def _connect_adapters() -> None:
 
 def _validate_nmap_plan(adapter_id, adapter, plan, approval) -> None:
     _require_safety()
+    if adapter_id == "nmap.public-profile":
+        from core.recon.nmap_profile_execution import _validate_profile_plan
+        _validate_profile_plan(adapter, plan, approval)
+        return
     if (adapter_id == "nmap.version-check" and adapter is _VERSION_ADAPTER
             and type(approval) is _ProbeApproval and approval in _PROBE_APPROVALS):
         expected = _VERSION_ADAPTER.build(_VersionRequest(approval.candidate))

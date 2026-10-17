@@ -305,6 +305,7 @@ class ReconTab(QWidget):
         if self._nmap_profiles_dialog is None:
             self._nmap_profiles_dialog = NmapProfilesDialog(self.nmap_profile_store, self)
             self._nmap_profiles_dialog.setModal(True)
+            self._nmap_profiles_dialog.profilesChanged.connect(self.public_nmap_controls.reload_profiles)
         self._nmap_profiles_dialog.show()
         self._nmap_profiles_dialog.raise_()
         self._nmap_profiles_dialog.activateWindow()

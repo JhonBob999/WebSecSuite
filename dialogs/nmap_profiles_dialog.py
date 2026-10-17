@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
@@ -18,6 +18,8 @@ from core.recon.nmap_profiles import (
 
 class NmapProfilesDialog(QDialog):
     """Edit validated configuration without changing any executable profile."""
+
+    profilesChanged = Signal()
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -55,8 +57,8 @@ class NmapProfilesDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(10)
         ui.configurationNotice = self._label(
-            "Configuration-only · Profiles here are not runnable in R7A. "
-            "The existing Quick Network Discovery action and Local Self-Test keep their current settings. "
+            "Configuration-only editor · Run eligible Web Services and bounded saved Custom profiles "
+            "from Tool Inspector. The existing Quick Network Discovery action and Local Self-Test keep their current settings. "
             "Selecting or saving a profile grants no authorization and starts no scan."
         )
         root.addWidget(ui.configurationNotice)
@@ -125,8 +127,8 @@ class NmapProfilesDialog(QDialog):
             widget.setAccessibleName(title)
             form.addRow(title, widget)
         ui.versionNotice = self._label(
-            "Service version detection sends additional probes and requires a separate "
-            "execution safety review in R7B. Nmap --max-rate does not constrain every "
+            "Service version detection is not executable in R7B-1. It sends additional "
+            "probes; Nmap --max-rate does not constrain every "
             "service-version probe."
         )
         layout.addWidget(ui.versionNotice)
@@ -249,8 +251,8 @@ class NmapProfilesDialog(QDialog):
             else:
                 widget.setReadOnly(profile.is_builtin)
         ui.profileKind.setText(
-            "Built-in · Read-only. Duplicate to edit. · Configuration-only"
-            if profile.is_builtin else "Custom · Editable · Configuration-only"
+            "Built-in · Read-only. Duplicate to edit."
+            if profile.is_builtin else "Custom · Editable · Execution eligibility is checked in Tool Inspector."
         )
         self._baseline = self._field_values()
         self._loading = False
@@ -377,6 +379,7 @@ class NmapProfilesDialog(QDialog):
         self._set_storage_notice("")
         self._cancel_pending()
         self._rebuild_list(profile.profile_id)
+        self.profilesChanged.emit()
         return True
 
     def _delete(self):
@@ -389,6 +392,7 @@ class NmapProfilesDialog(QDialog):
             return
         self._set_storage_notice("")
         self._rebuild_list(BUILTIN_PROFILES[0].profile_id)
+        self.profilesChanged.emit()
 
     def _set_storage_notice(self, message):
         self.ui.storageNotice.setText(message)
