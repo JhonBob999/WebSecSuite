@@ -1,9 +1,7 @@
-"""Offline scope decisions and capabilities for trusted future Recon adapters.
+"""Scope decisions and one-shot capabilities for reviewed Recon adapters.
 
-R4 intentionally has no registered adapters. Discovery records, selected R1
-targets and imported dictionaries cannot issue execution capabilities. Adding
-an adapter requires application code review, including reliable child-process
-containment before live scanner execution can be enabled.
+Domain scope remains separate from the narrowly bound Nmap localhost self-test.
+Discovery records, selected R1 targets and imported dictionaries grant nothing.
 """
 
 from __future__ import annotations
@@ -59,6 +57,20 @@ class ScopeDecision:
     reason: str = ""
 
 
+@dataclass(frozen=True, init=False, slots=True, weakref_slot=True, eq=False)
+class LocalSelfTestApproval:
+    """Opaque per-run confirmation, usable only by the fixed Nmap adapter.
+
+    This is deliberately not a ScopeApproval and never authorizes R1 targets.
+    Only nmap_adapter's confirmation factory can issue an accepted instance.
+    """
+
+    _tool: object = field(repr=False)
+
+    def __init__(self):
+        raise TypeError("Local self-test confirmation is issued by the Nmap adapter.")
+
+
 def _within(hostname: str, exact: tuple[str, ...], ranges: tuple[str, ...]) -> bool:
     return hostname in exact or any(hostname.endswith("." + root) for root in ranges)
 
@@ -97,8 +109,8 @@ class _TrustedAdapter(Protocol):
     def build(self, request: object) -> _AdapterPlan: ...
 
 
-# No public registration API and no scanner builders/adapters in R4. Tests use
-# controlled, offline adapter doubles by replacing entries in this private map.
+# No public registration API. The fixed Nmap adapter registers privately only
+# when its application helper is used; discovery never registers or runs it.
 _TRUSTED_ADAPTERS: dict[str, _TrustedAdapter] = {}
 _SPEC_SEAL = object()
 _SHELL_NAMES = {"cmd", "powershell", "pwsh", "sh", "bash", "zsh", "dash", "csh"}
@@ -114,7 +126,7 @@ class ValidatedExecutionSpec:
 
     adapter_id: str
     _plan: _AdapterPlan = field(repr=False)
-    _approval: ScopeApproval = field(repr=False)
+    _approval: object = field(repr=False)
     _adapter: object = field(repr=False)
     _seal: object = field(repr=False)
 
@@ -127,14 +139,20 @@ class ValidatedExecutionSpec:
 _ISSUED_SPECS: WeakKeyDictionary[ValidatedExecutionSpec, bool] = WeakKeyDictionary()
 
 
-def _validate_plan(plan: _AdapterPlan, approval: ScopeApproval) -> _AdapterPlan:
+def _validate_plan(plan: _AdapterPlan, approval: object, *, adapter_id=None, adapter=None) -> _AdapterPlan:
     if type(plan) is not _AdapterPlan:
         raise ExecutionPolicyError("Trusted adapter did not return a typed plan.")
-    decision = preflight_scope(plan.targets, approval)
-    if not decision.allowed:
-        raise ExecutionPolicyError(decision.reason)
-    if type(plan.targets) is not tuple or plan.targets != decision.targets:
-        raise ExecutionPolicyError("Adapter targets must be canonical hostname identities.")
+    if type(approval) is ScopeApproval:
+        decision = preflight_scope(plan.targets, approval)
+        if not decision.allowed:
+            raise ExecutionPolicyError(decision.reason)
+        if type(plan.targets) is not tuple or plan.targets != decision.targets:
+            raise ExecutionPolicyError("Adapter targets must be canonical hostname identities.")
+    else:
+        # The Nmap module checks exact adapter, approval type/identity, fixed
+        # profile, executable hash and containment. No generic scope bypass.
+        from core.recon.nmap_adapter import _validate_nmap_plan
+        _validate_nmap_plan(adapter_id, adapter, plan, approval)
     if type(plan.arguments) is not tuple or any(
         not isinstance(argument, str) or "\x00" in argument for argument in plan.arguments
     ):
@@ -164,19 +182,22 @@ def _validate_plan(plan: _AdapterPlan, approval: ScopeApproval) -> _AdapterPlan:
 class ExecutionPolicy:
     """Issue capabilities only from reviewed application adapters and scope grants."""
 
-    def prepare(self, adapter_id: str, request: object, approval: ScopeApproval) -> ValidatedExecutionSpec:
+    def prepare(self, adapter_id: str, request: object, approval: object) -> ValidatedExecutionSpec:
         adapter = _TRUSTED_ADAPTERS.get(adapter_id) if type(adapter_id) is str else None
         if adapter is None:
             raise ExecutionPolicyError("No trusted adapter is connected; R4 live execution is disabled.")
         if type(request) is not adapter.request_type:
             raise ExecutionPolicyError("A typed request belonging to the trusted adapter is required.")
         try:
-            plan = _validate_plan(adapter.build(request), approval)
+            plan = _validate_plan(adapter.build(request), approval, adapter_id=adapter_id, adapter=adapter)
         except ExecutionPolicyError:
             raise
         except Exception:
             # Adapter exceptions can contain credentials/arguments; never echo them.
             raise ExecutionPolicyError("Trusted adapter could not prepare an execution plan.") from None
+        if type(approval) is not ScopeApproval:
+            from core.recon.nmap_adapter import _bind_nmap_approval
+            _bind_nmap_approval(approval)
         spec = object.__new__(ValidatedExecutionSpec)
         for name, value in (
             ("adapter_id", adapter_id), ("_plan", plan), ("_approval", approval),
@@ -193,7 +214,7 @@ class ExecutionPolicy:
             raise ExecutionPolicyError("A validated application execution specification is required.")
         if _TRUSTED_ADAPTERS.get(spec.adapter_id) is not spec._adapter:
             raise ExecutionPolicyError("The trusted adapter is no longer connected.")
-        if _validate_plan(spec._plan, spec._approval) != spec._plan:
+        if _validate_plan(spec._plan, spec._approval, adapter_id=spec.adapter_id, adapter=spec._adapter) != spec._plan:
             raise ExecutionPolicyError("The validated executable identity changed.")
 
     def _claim(self, spec: ValidatedExecutionSpec) -> None:

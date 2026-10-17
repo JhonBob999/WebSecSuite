@@ -1,14 +1,10 @@
 """Asynchronous, single-process Recon lifecycle with bounded in-memory output.
 
-Only capabilities from execution_policy are accepted. R4's adapter registry is
-empty, so this infrastructure cannot launch a live scanner. It is independent
+Only capabilities from execution_policy are accepted. It is independent
 of ScraperTaskManager and never changes the global thread pool.
 
-Cancellation controls the direct QProcess only. Windows Job Object containment
-has deliberately not been implemented: assigning a Job after started() races
-children created before assignment, and PySide6's QProcess API does not expose
-the Windows create-process modifier needed for a suspended/contained launch.
-Reliable, tested tree containment is a gate for enabling future live adapters.
+Windows uses a suspended native launch assigned to a private kill-on-close Job
+Object before user code can run. Other platforms retain the QProcess backend.
 Retain this QObject until shutdown_finished; shutdown never blocks the GUI.
 """
 
@@ -17,11 +13,16 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
+import os
 from uuid import uuid4
 
 from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer, Signal
 
 from core.recon.execution_policy import ExecutionPolicy, ExecutionPolicyError, ValidatedExecutionSpec
+from core.recon.windows_process import WindowsJobProcess, process_safety_status
+
+
+_QT_PROCESS = QProcess
 
 
 class JobState(str, Enum):
@@ -66,7 +67,7 @@ class _Job:
     stderr_truncated: bool = False
     exit_code: int | None = None
     diagnostic: str = "Queued for execution."
-    process: QProcess | None = field(default=None, repr=False)
+    process: QProcess | WindowsJobProcess | None = field(default=None, repr=False)
     timeout: QTimer | None = field(default=None, repr=False)
     grace: QTimer | None = field(default=None, repr=False)
     pending_terminal: JobState | None = None
@@ -76,7 +77,7 @@ class _Job:
 
 
 class ProcessSupervisor(QObject):
-    """Own one QProcess at a time; all methods run on the owning Qt thread.
+    """Own one contained process at a time; methods run on the owning Qt thread.
 
     The output budget is combined stdout + stderr per job. Both the queued-job
     count and completed history are bounded. Snapshots contain raw bounded
@@ -145,11 +146,12 @@ class ProcessSupervisor(QObject):
         return True
 
     def shutdown(self, *, immediate: bool = False) -> None:
-        """Cancel queued jobs and stop the direct process without a blocking wait.
+        """Cancel queued jobs and stop the process tree without a blocking wait.
 
         Call before quitting to allow terminate() + the grace timer to run.
         aboutToQuit uses immediate kill because Qt may not deliver more timers.
-        Neither path promises cleanup of descendants or a synchronous OS exit.
+        Windows also closes the kill-on-close job before the event loop ends.
+        On other platforms termination still controls the direct process only.
         """
         self._closing = True
         for job_id in tuple(self._queue):
@@ -159,6 +161,8 @@ class ProcessSupervisor(QObject):
             self.cancel(job.job_id)
             if immediate and self._active is job:
                 self._kill(job)
+                if isinstance(job.process, WindowsJobProcess):
+                    job.process.close_job()
         self._check_shutdown()
 
     def _about_to_quit(self) -> None:
@@ -181,10 +185,15 @@ class ProcessSupervisor(QObject):
             self._complete(job, JobState.FAILED, "Execution preflight is no longer valid.")
             return
         try:
-            process = job.process = QProcess(self)
+            # Preserve injected QProcess doubles and the cross-platform backend.
+            # A real Windows launch never falls back to uncontained QProcess.
+            factory = WindowsJobProcess if os.name == "nt" and QProcess is _QT_PROCESS else QProcess
+            process = job.process = factory(self)
             process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
             process.setProgram(job.spec._plan.program)
             process.setArguments(list(job.spec._plan.arguments))
+            if isinstance(process, WindowsJobProcess):
+                process.setPreflightValidator(lambda: self._policy.validate(job.spec))
             process.started.connect(lambda: self._started(job))
             process.finished.connect(lambda code, status: self._finished(job, code, status))
             process.errorOccurred.connect(lambda error: self._error(job, error))

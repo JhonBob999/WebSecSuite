@@ -1,4 +1,4 @@
-"""Offline Recon target management and imported observation inventory."""
+"""Recon target management, asset inventory and confirmed local Nmap self-test."""
 
 from collections import Counter
 from types import SimpleNamespace
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.recon.inventory import AssetInventory
+from core.recon.nmap_runtime import NmapRuntime
 from core.recon.observations import ObservationImportError
 from core.recon.tool_discovery import ToolDiscoveryService
 from core.recon.targets import (
@@ -33,6 +34,8 @@ class ReconTab(QWidget):
         self.asset_proxy = ReconAssetFilterProxy(self)
         self.asset_proxy.setSourceModel(self.asset_model)
         self.tool_discovery = ToolDiscoveryService()
+        self.nmap_runtime = NmapRuntime(self.asset_inventory, self)
+        self._nmap_candidate_path = ""
         self._build_ui()
         self.target_model.inventoryChanged.connect(self._update_counts)
         self.target_model.editRejected.connect(self.ui.statusLabel.setText)
@@ -58,9 +61,15 @@ class ReconTab(QWidget):
         self.ui.btnAssetDetails.clicked.connect(self._open_asset_details)
         self.ui.assetTable.doubleClicked.connect(self._open_asset_details)
         self.ui.btnRefreshDetection.clicked.connect(self._refresh_tool_detection)
+        self.ui.btnChooseNmap.clicked.connect(self._choose_nmap_executable)
+        self.ui.btnNmapSelfTest.clicked.connect(self._confirm_nmap_self_test)
+        self.ui.btnStopNmap.clicked.connect(self.nmap_runtime.stop)
+        self.nmap_runtime.changed.connect(self._refresh_nmap_runtime)
+        self.nmap_runtime.inventory_changed.connect(self._refresh_asset_inventory)
         self._update_counts()
         self._update_asset_counts()
         self._refresh_tool_detection()
+        self._refresh_nmap_runtime()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -162,8 +171,9 @@ class ReconTab(QWidget):
         tools_layout = QVBoxLayout(self.ui.toolManager)
         tools_layout.setSpacing(2)
         header = QHBoxLayout()
-        self.ui.toolDetectionStatus = QLabel("Detection is read-only; tool execution unavailable in R4.")
+        self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap Local Self-Test requires setup and confirmation.")
         self.ui.toolDetectionStatus.setTextFormat(Qt.PlainText)
+        self.ui.toolDetectionStatus.setWordWrap(True)
         header.addWidget(self.ui.toolDetectionStatus, 1)
         self.ui.btnRefreshDetection = QPushButton("Refresh Detection")
         self.ui.btnRefreshDetection.setToolTip("Inspect local executable paths without running programs.")
@@ -178,12 +188,41 @@ class ReconTab(QWidget):
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.ui.toolLabels[tool_id] = label
             tools_layout.addWidget(label)
-        state = QLabel("Compatibility unverified · adapter not connected · execution disabled (all tools).")
+            if tool_id == "nmap":
+                self.ui.nmapExecutableLabel = QLabel()
+                self.ui.nmapVersionLabel = QLabel()
+                self.ui.nmapAdapterLabel = QLabel()
+                self.ui.nmapStatusLabel = QLabel()
+                for detail in (self.ui.nmapExecutableLabel, self.ui.nmapVersionLabel,
+                               self.ui.nmapAdapterLabel, self.ui.nmapStatusLabel):
+                    detail.setTextFormat(Qt.PlainText)
+                    detail.setWordWrap(True)
+                    detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                    tools_layout.addWidget(detail)
+                actions = QHBoxLayout()
+                self.ui.btnChooseNmap = QPushButton("Choose Nmap…")
+                self.ui.btnChooseNmap.setToolTip(
+                    "Approve a local nmap.exe path for a contained version check."
+                )
+                self.ui.btnNmapSelfTest = QPushButton("Local Self-Test")
+                self.ui.btnNmapSelfTest.setEnabled(False)
+                self.ui.btnStopNmap = QPushButton("Stop")
+                self.ui.btnStopNmap.setEnabled(False)
+                for button in (self.ui.btnChooseNmap, self.ui.btnNmapSelfTest, self.ui.btnStopNmap):
+                    actions.addWidget(button)
+                actions.addStretch(1)
+                tools_layout.addLayout(actions)
+        state = QLabel(
+            "Subfinder, ProjectDiscovery httpx and FFUF: compatibility unverified · "
+            "adapter not connected · execution disabled."
+        )
+        state.setTextFormat(Qt.PlainText)
         state.setWordWrap(True)
         tools_layout.addWidget(state)
         return self.ui.toolManager
 
     def _refresh_tool_detection(self):
+        self._nmap_candidate_path = ""
         statuses = {
             "NOT_FOUND": "Not found",
             "CANDIDATE_UNVERIFIED": "Candidate found, not verified",
@@ -204,7 +243,66 @@ class ReconTab(QWidget):
             path = f" · {record.executable_path}" if record.executable_path else ""
             label.setText(f"{record.display_name} — {statuses[record.status.name]}{path}")
             label.setToolTip(record.diagnostic)
-        self.ui.toolDetectionStatus.setText("Detection is read-only; tool execution unavailable in R4.")
+            if record.tool_id == "nmap" and record.status.name == "CANDIDATE_UNVERIFIED":
+                self._nmap_candidate_path = record.executable_path or ""
+        self.ui.toolDetectionStatus.setText(
+            "Detection is read-only; Nmap Local Self-Test requires setup and confirmation."
+        )
+
+    def _refresh_nmap_runtime(self):
+        runtime = self.nmap_runtime
+        self.ui.nmapExecutableLabel.setText(
+            f"Validated executable: {runtime.executable_path or 'Not validated'}"
+        )
+        self.ui.nmapVersionLabel.setText(f"Nmap version: {runtime.version or 'Not verified'}")
+        self.ui.nmapAdapterLabel.setText(
+            f"Adapter unavailable: {runtime.safety_reason}" if runtime.safety_reason else
+            "Adapter available · Local Self-Test only"
+        )
+        self.ui.nmapStatusLabel.setText(runtime.status)
+        self.ui.btnChooseNmap.setEnabled(not runtime.busy)
+        self.ui.btnNmapSelfTest.setEnabled(runtime.can_run and not runtime.busy)
+        self.ui.btnNmapSelfTest.setToolTip(
+            runtime.safety_reason or "Confirm a TCP connect self-test on 127.0.0.1 only."
+        )
+        self.ui.btnStopNmap.setEnabled(runtime.busy)
+
+    def _choose_nmap_executable(self):
+        if self.nmap_runtime.busy:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose Nmap executable for verification",
+            self.nmap_runtime.executable_path or self._nmap_candidate_path,
+            "Nmap executable (nmap.exe)",
+        )
+        if path:
+            try:
+                self.nmap_runtime.approve_executable(path)
+            except (ValueError, RuntimeError) as exc:
+                self._refresh_nmap_runtime()
+                self.ui.nmapStatusLabel.setText(f"Verification rejected: {exc}")
+
+    def _confirm_nmap_self_test(self):
+        if not self.nmap_runtime.can_run or self.nmap_runtime.busy:
+            return
+        if QMessageBox.question(
+            self, "Confirm Nmap Local Self-Test",
+            "Target: 127.0.0.1\nPorts: 80, 443, 8080, 8443\n"
+            "Technique: TCP connect\n"
+            "Possible effect: local TCP connections to the selected ports.\n"
+            "No external targets involved.\n\nRun this Local Self-Test?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            self.nmap_runtime.start_self_test(confirmed=True, target="127.0.0.1")
+        except (ValueError, RuntimeError) as exc:
+            self._refresh_nmap_runtime()
+            self.ui.nmapStatusLabel.setText(f"Local Self-Test rejected: {exc}")
+
+    def closeEvent(self, event):
+        self.nmap_runtime.shutdown(immediate=True)
+        super().closeEvent(event)
 
     def _build_asset_inventory(self):
         page = QWidget()
@@ -215,7 +313,8 @@ class ReconTab(QWidget):
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(title)
         note = QLabel(
-            "Offline observations from local JSON, Nmap XML or completed Scraper tasks. Assets remain separate from imported targets; "
+            "Observations from local JSON, Nmap XML, confirmed localhost self-tests or completed Scraper tasks. "
+            "Assets remain separate from imported targets; "
             "scope is unreviewed and selection does not authorize active scanning."
         )
         note.setWordWrap(True)
@@ -235,7 +334,7 @@ class ReconTab(QWidget):
         layout.addLayout(actions)
 
         history = QHBoxLayout()
-        history.addWidget(QLabel("Import History"))
+        history.addWidget(QLabel("Run / Import History"))
         self.ui.importHistory = QComboBox()
         self.ui.importHistory.setAccessibleName("Asset import history")
         self.ui.importHistory.addItem("All Assets", "")

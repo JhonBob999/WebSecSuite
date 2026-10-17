@@ -2,6 +2,7 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -13,8 +14,12 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "native_local_process: allow only the harmless local Windows process fixture")
+
+
 @pytest.fixture(autouse=True)
-def no_network(monkeypatch):
+def no_network(monkeypatch, request):
     def blocked(*args, **kwargs):
         raise AssertionError("Tests must stay offline and must not launch external processes")
 
@@ -31,6 +36,22 @@ def no_network(monkeypatch):
     for name in ("start", "startDetached", "execute", "open", "startCommand"):
         monkeypatch.setattr(QProcess, name, blocked)
     monkeypatch.setattr(QDesktopServices, "openUrl", blocked)
+    from core.recon.windows_process import WindowsJobProcess
+
+    native_start = WindowsJobProcess.start
+    if request.node.get_closest_marker("native_local_process") is None:
+        monkeypatch.setattr(WindowsJobProcess, "start", blocked)
+    else:
+        # The explicit integration opt-in cannot launch a scanner or arbitrary
+        # executable; sockets, subprocess, shell and QProcess stay prohibited.
+        fixture = Path(__file__).resolve().parent / "fixtures" / "recon_process.py"
+
+        def local_fixture_only(process):
+            assert Path(process._program).resolve() == Path(sys.executable).resolve()
+            assert process._arguments[:2] == ["-u", str(fixture)]
+            return native_start(process)
+
+        monkeypatch.setattr(WindowsJobProcess, "start", local_fixture_only)
 
 
 @pytest.fixture(scope="session")

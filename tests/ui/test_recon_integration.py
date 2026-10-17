@@ -55,7 +55,8 @@ def test_recon_replaces_only_its_placeholder_and_starts_empty(recon_window, qapp
     visible_text = " ".join(
         label.text() for label in recon.findChildren(QLabel) if label.isVisible()
     ).lower()
-    assert "unavailable" in visible_text
+    assert "setup required" in visible_text
+    assert not recon.ui.btnNmapSelfTest.isEnabled()
     assert window.scraper_tab.ui.taskTable.rowCount() == 0
     assert window.scraper_tab.task_manager.get_all_tasks() == []
     assert window.scraper_tab.task_manager.is_idle()
@@ -284,4 +285,8 @@ def test_tool_refresh_and_responsive_tab_switches_preserve_offline_workspaces(
     assert scraper.task_results[task_id] == payload
     assert scraper.task_manager.is_idle()
     assert QThreadPool.globalInstance().maxThreadCount() == pool_limit
-    assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == ["Refresh Detection"]
+    assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
+        "Refresh Detection", "Choose Nmap…", "Local Self-Test", "Stop",
+    ]
+    assert not recon.ui.btnNmapSelfTest.isEnabled()
+    assert not recon.ui.btnStopNmap.isEnabled()

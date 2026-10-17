@@ -119,7 +119,7 @@ def test_clear_requires_confirmation_and_remove_uses_checkboxes(recon, monkeypat
     assert recon.target_model.rowCount() == recon.target_model.selected_count == 0
 
 
-def test_tool_manager_has_detection_and_no_run_controls(recon):
+def test_tool_manager_keeps_other_tools_detection_only_and_gates_local_nmap(recon):
     from PySide6.QtWidgets import QLabel, QPushButton
 
     labels = "\n".join(label.text() for label in recon.findChildren(QLabel))
@@ -131,6 +131,9 @@ def test_tool_manager_has_detection_and_no_run_controls(recon):
     assert "execution disabled" in labels.lower()
     assert "authorization" in labels.lower()
     assert "discovered assets" in labels.lower()
+    assert recon.ui.btnNmapSelfTest.text() == "Local Self-Test"
+    assert not recon.ui.btnNmapSelfTest.isEnabled()
+    assert not recon.ui.btnStopNmap.isEnabled()
     assert not any(button.text().lower() in {"run", "scan", "start"}
                    for button in recon.findChildren(QPushButton))
 
