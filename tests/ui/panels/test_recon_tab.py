@@ -126,9 +126,14 @@ def test_tool_manager_keeps_other_tools_detection_only_and_gates_local_nmap(reco
     for name in ("Subfinder", "ProjectDiscovery httpx", "Nmap", "FFUF"):
         assert name in labels
     assert recon.ui.btnRefreshDetection.text() == "Refresh Detection"
-    assert "compatibility unverified" in labels.lower()
-    assert "adapter not connected" in labels.lower()
-    assert "execution disabled" in labels.lower()
+    for tool_id in ("subfinder", "httpx", "ffuf"):
+        recon.ui.toolSelector.setCurrentIndex(recon.ui.toolSelector.findData(tool_id))
+        information = "\n".join(label.text() for label in recon.ui.toolInfo.labels.values()).lower()
+        assert "compatibility unverified" in information
+        assert "adapter not connected" in information
+        assert "execution disabled" in information
+        assert recon.ui.nmapExecution.isHidden()
+    recon.ui.toolSelector.setCurrentIndex(recon.ui.toolSelector.findData("nmap"))
     assert "authorization" in labels.lower()
     assert "discovered assets" in labels.lower()
     assert recon.ui.btnNmapSelfTest.text() == "Local Self-Test"

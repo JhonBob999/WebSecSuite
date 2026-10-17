@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 from PySide6.QtCore import QModelIndex, QSignalBlocker, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QApplication, QComboBox, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
-    QTableView, QTabWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTableView, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core.recon.inventory import AssetInventory
@@ -21,6 +21,7 @@ from core.recon.targets import (
 from dialogs.results_viewer_dialog import UniversalViewerDialog
 from ui.recon_asset_model import ReconAssetFilterProxy, ReconAssetModel
 from ui.recon_target_model import ImportIssueModel, ReconTargetModel
+from ui.recon_tool_info import TOOL_NAMES, ToolInformationView
 
 
 class ReconTab(QWidget):
@@ -36,6 +37,7 @@ class ReconTab(QWidget):
         self.tool_discovery = ToolDiscoveryService()
         self.nmap_runtime = NmapRuntime(self.asset_inventory, self)
         self._nmap_candidate_path = ""
+        self._tool_inspector_width = 340
         self._build_ui()
         self.target_model.inventoryChanged.connect(self._update_counts)
         self.target_model.editRejected.connect(self.ui.statusLabel.setText)
@@ -61,6 +63,9 @@ class ReconTab(QWidget):
         self.ui.btnAssetDetails.clicked.connect(self._open_asset_details)
         self.ui.assetTable.doubleClicked.connect(self._open_asset_details)
         self.ui.btnRefreshDetection.clicked.connect(self._refresh_tool_detection)
+        self.ui.btnToolInspectorToggle.clicked.connect(self._toggle_tool_inspector)
+        self.ui.btnToggleInvalidTargets.clicked.connect(self._toggle_invalid_targets)
+        self.ui.toolSelector.currentIndexChanged.connect(self._select_inspector_tool)
         self.ui.btnChooseNmap.clicked.connect(self._choose_nmap_executable)
         self.ui.btnNmapSelfTest.clicked.connect(self._confirm_nmap_self_test)
         self.ui.btnStopNmap.clicked.connect(self.nmap_runtime.stop)
@@ -74,8 +79,19 @@ class ReconTab(QWidget):
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        toolbar = QHBoxLayout()
+        toolbar.addStretch(1)
+        self.ui.btnToolInspectorToggle = QPushButton("Hide Tool Inspector")
+        self.ui.btnToolInspectorToggle.setAccessibleName("Hide Tool Inspector")
+        self.ui.btnToolInspectorToggle.setToolTip("Hide or restore the shared Recon tool panel.")
+        toolbar.addWidget(self.ui.btnToolInspectorToggle)
+        root.addLayout(toolbar)
+        self.ui.reconSplitter = QSplitter(Qt.Horizontal)
+        self.ui.reconSplitter.setChildrenCollapsible(False)
+        self.ui.reconSplitter.setHandleWidth(6)
         self.ui.reconPages = QTabWidget()
-        root.addWidget(self.ui.reconPages)
+        self.ui.reconSplitter.addWidget(self.ui.reconPages)
+        root.addWidget(self.ui.reconSplitter, 1)
         target_page = QWidget()
         self.ui.reconPages.addTab(target_page, "Target Manager")
         layout = QVBoxLayout(target_page)
@@ -145,6 +161,17 @@ class ReconTab(QWidget):
 
         self.ui.importSummary = QLabel("Added: 0 · Duplicates: 0 · Invalid: 0")
         layout.addWidget(self.ui.importSummary)
+        invalid_header = QHBoxLayout()
+        self.ui.invalidCountLabel = QLabel("Invalid Targets: 0")
+        self.ui.invalidCountLabel.hide()
+        self.ui.btnToggleInvalidTargets = QPushButton("Hide Invalid Targets")
+        self.ui.btnToggleInvalidTargets.setAccessibleName("Hide Invalid Targets")
+        self.ui.btnToggleInvalidTargets.setToolTip("Hide or show rejected rows from the last import.")
+        self.ui.btnToggleInvalidTargets.hide()
+        invalid_header.addWidget(self.ui.invalidCountLabel)
+        invalid_header.addStretch(1)
+        invalid_header.addWidget(self.ui.btnToggleInvalidTargets)
+        layout.addLayout(invalid_header)
         self.ui.issueTable = QTableView()
         self.ui.issueTable.setAccessibleName("Rejected rows from last import")
         self.ui.issueTable.setModel(self.issue_model)
@@ -163,63 +190,128 @@ class ReconTab(QWidget):
         self.ui.statusLabel.setWordWrap(True)
         layout.addWidget(self.ui.statusLabel)
 
-        layout.addWidget(self._build_tool_manager())
         self._build_asset_inventory()
+        self.ui.reconSplitter.addWidget(self._build_tool_manager())
+        self.ui.reconSplitter.setStretchFactor(0, 1)
+        self.ui.reconSplitter.setStretchFactor(1, 0)
+        self.ui.reconSplitter.setSizes([1000, self._tool_inspector_width])
 
     def _build_tool_manager(self):
-        self.ui.toolManager = QGroupBox("Tool Manager")
+        self.ui.toolManager = QGroupBox("Tool Inspector")
         tools_layout = QVBoxLayout(self.ui.toolManager)
-        tools_layout.setSpacing(2)
-        header = QHBoxLayout()
+        tools_layout.setSpacing(8)
         self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap Local Self-Test requires setup and confirmation.")
         self.ui.toolDetectionStatus.setTextFormat(Qt.PlainText)
         self.ui.toolDetectionStatus.setWordWrap(True)
-        header.addWidget(self.ui.toolDetectionStatus, 1)
+        self.ui.toolDetectionStatus.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        tools_layout.addWidget(self.ui.toolDetectionStatus)
         self.ui.btnRefreshDetection = QPushButton("Refresh Detection")
         self.ui.btnRefreshDetection.setToolTip("Inspect local executable paths without running programs.")
-        header.addWidget(self.ui.btnRefreshDetection)
-        tools_layout.addLayout(header)
+        tools_layout.addWidget(self.ui.btnRefreshDetection)
+        self.ui.toolSelector = QComboBox()
+        self.ui.toolSelector.setAccessibleName("Tool Inspector tool")
+        self.ui.toolSelector.setToolTip("Choose a tool to review its information and available controls.")
+        self.ui.toolSelector.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        for tool_id, name in TOOL_NAMES.items():
+            self.ui.toolSelector.addItem(name, tool_id)
+        tools_layout.addWidget(self.ui.toolSelector)
+        self.ui.toolInspectorScroll = QScrollArea()
+        self.ui.toolInspectorScroll.setAccessibleName("Tool Inspector details")
+        self.ui.toolInspectorScroll.setWidgetResizable(True)
+        self.ui.toolInspectorScroll.setFrameShape(QFrame.NoFrame)
+        self.ui.toolInfo = ToolInformationView()
+        self.ui.toolInspectorScroll.setWidget(self.ui.toolInfo)
+        tools_layout.addWidget(self.ui.toolInspectorScroll, 1)
+        self.ui.toolStatusStack = QStackedWidget()
+        self.ui.toolInfo.section_layouts["installation"].addWidget(self.ui.toolStatusStack)
         self.ui.toolLabels = {}
-        for tool_id, name in (("subfinder", "Subfinder"), ("httpx", "ProjectDiscovery httpx"),
-                              ("nmap", "Nmap"), ("ffuf", "FFUF")):
+        for tool_id, name in TOOL_NAMES.items():
             label = QLabel(f"{name} — Not detected")
             label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             self.ui.toolLabels[tool_id] = label
-            tools_layout.addWidget(label)
-            if tool_id == "nmap":
-                self.ui.nmapExecutableLabel = QLabel()
-                self.ui.nmapVersionLabel = QLabel()
-                self.ui.nmapAdapterLabel = QLabel()
-                self.ui.nmapStatusLabel = QLabel()
-                for detail in (self.ui.nmapExecutableLabel, self.ui.nmapVersionLabel,
-                               self.ui.nmapAdapterLabel, self.ui.nmapStatusLabel):
-                    detail.setTextFormat(Qt.PlainText)
-                    detail.setWordWrap(True)
-                    detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                    tools_layout.addWidget(detail)
-                actions = QHBoxLayout()
-                self.ui.btnChooseNmap = QPushButton("Choose Nmap…")
-                self.ui.btnChooseNmap.setToolTip(
-                    "Approve a local nmap.exe path for a contained version check."
-                )
-                self.ui.btnNmapSelfTest = QPushButton("Local Self-Test")
-                self.ui.btnNmapSelfTest.setEnabled(False)
-                self.ui.btnStopNmap = QPushButton("Stop")
-                self.ui.btnStopNmap.setEnabled(False)
-                for button in (self.ui.btnChooseNmap, self.ui.btnNmapSelfTest, self.ui.btnStopNmap):
-                    actions.addWidget(button)
-                actions.addStretch(1)
-                tools_layout.addLayout(actions)
-        state = QLabel(
-            "Subfinder, ProjectDiscovery httpx and FFUF: compatibility unverified · "
-            "adapter not connected · execution disabled."
-        )
-        state.setTextFormat(Qt.PlainText)
-        state.setWordWrap(True)
-        tools_layout.addWidget(state)
+            self.ui.toolStatusStack.addWidget(label)
+        self.ui.toolDiagnostic = QLabel()
+        self.ui.toolDiagnostic.setTextFormat(Qt.PlainText)
+        self.ui.toolDiagnostic.setWordWrap(True)
+        self.ui.toolDiagnostic.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.ui.toolDiagnostic.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.ui.toolInfo.section_layouts["installation"].addWidget(self.ui.toolDiagnostic)
+        self.ui.nmapInstallation = QWidget()
+        installation = QVBoxLayout(self.ui.nmapInstallation)
+        installation.setContentsMargins(0, 0, 0, 0)
+        self.ui.nmapExecutableLabel = QLabel()
+        self.ui.nmapVersionLabel = QLabel()
+        self.ui.nmapAdapterLabel = QLabel()
+        for detail in (self.ui.nmapExecutableLabel, self.ui.nmapVersionLabel, self.ui.nmapAdapterLabel):
+            detail.setTextFormat(Qt.PlainText)
+            detail.setWordWrap(True)
+            detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            installation.addWidget(detail)
+        self.ui.toolInfo.section_layouts["installation"].addWidget(self.ui.nmapInstallation)
+        self.ui.nmapExecution = QWidget()
+        execution = QVBoxLayout(self.ui.nmapExecution)
+        execution.setContentsMargins(0, 0, 0, 0)
+        self.ui.nmapStatusLabel = QLabel()
+        self.ui.nmapStatusLabel.setTextFormat(Qt.PlainText)
+        self.ui.nmapStatusLabel.setWordWrap(True)
+        self.ui.nmapStatusLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.ui.nmapStatusLabel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        execution.addWidget(self.ui.nmapStatusLabel)
+        self.ui.btnChooseNmap = QPushButton("Choose Nmap…")
+        self.ui.btnChooseNmap.setToolTip("Approve a local nmap.exe path for a contained version check.")
+        execution.addWidget(self.ui.btnChooseNmap)
+        self.ui.btnNmapSelfTest = QPushButton("Local Self-Test")
+        self.ui.btnNmapSelfTest.setEnabled(False)
+        self.ui.btnStopNmap = QPushButton("Stop")
+        self.ui.btnStopNmap.setEnabled(False)
+        for button in (self.ui.btnNmapSelfTest, self.ui.btnStopNmap):
+            execution.addWidget(button)
+        self.ui.toolInfo.section_layouts["execution"].addWidget(self.ui.nmapExecution)
         return self.ui.toolManager
+
+    def _select_inspector_tool(self):
+        tool_id = self.ui.toolSelector.currentData()
+        self.ui.toolInfo.set_tool(tool_id)
+        self.ui.toolStatusStack.setCurrentWidget(self.ui.toolLabels[tool_id])
+        self.ui.toolDiagnostic.setText(self.ui.toolLabels[tool_id].toolTip())
+        self.ui.nmapInstallation.setVisible(tool_id == "nmap")
+        self.ui.nmapExecution.setVisible(tool_id == "nmap")
+        self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
+
+    def _toggle_tool_inspector(self):
+        splitter = self.ui.reconSplitter
+        if not self.ui.toolManager.isHidden():
+            width = splitter.sizes()[1]
+            if width > 0:
+                self._tool_inspector_width = width
+            self.ui.toolManager.hide()
+            splitter.setSizes([1, 0])
+            text = "Show Tool Inspector"
+        else:
+            self.ui.toolManager.show()
+            available = splitter.width() - splitter.handleWidth()
+            width = self._tool_inspector_width
+            splitter.setSizes([max(1, available - width), width])
+            text = "Hide Tool Inspector"
+        self.ui.btnToolInspectorToggle.setText(text)
+        self.ui.btnToolInspectorToggle.setAccessibleName(text)
+
+    def _update_invalid_targets_visibility(self, visible):
+        count = self.issue_model.rowCount()
+        self.ui.invalidCountLabel.setText(f"Invalid Targets: {count}")
+        self.ui.invalidCountLabel.setVisible(bool(count))
+        self.ui.btnToggleInvalidTargets.setVisible(bool(count))
+        self.ui.issueTable.setVisible(bool(count) and visible)
+        text = "Hide Invalid Targets" if count and visible else "Show Invalid Targets"
+        self.ui.btnToggleInvalidTargets.setText(text)
+        self.ui.btnToggleInvalidTargets.setAccessibleName(text)
+
+    def _toggle_invalid_targets(self):
+        self._update_invalid_targets_visibility(self.ui.issueTable.isHidden())
 
     def _refresh_tool_detection(self):
         self._nmap_candidate_path = ""
@@ -237,6 +329,7 @@ class ReconTab(QWidget):
                 name = label.text().split(" — ", 1)[0]
                 label.setText(f"{name} — Detection unavailable")
                 label.setToolTip("Local executable paths could not be inspected. No program was run.")
+            self.ui.toolDiagnostic.setText(self.ui.toolLabels[self.ui.toolSelector.currentData()].toolTip())
             return
         for record in records:
             label = self.ui.toolLabels[record.tool_id]
@@ -248,6 +341,7 @@ class ReconTab(QWidget):
         self.ui.toolDetectionStatus.setText(
             "Detection is read-only; Nmap Local Self-Test requires setup and confirmation."
         )
+        self.ui.toolDiagnostic.setText(self.ui.toolLabels[self.ui.toolSelector.currentData()].toolTip())
 
     def _refresh_nmap_runtime(self):
         runtime = self.nmap_runtime
@@ -647,7 +741,7 @@ class ReconTab(QWidget):
     def _show_report(self, report):
         report = self.target_model.add_report(report)
         self.issue_model.set_issues(report.issues)
-        self.ui.issueTable.setVisible(bool(report.issues))
+        self._update_invalid_targets_visibility(bool(report.issues))
         self.ui.importSummary.setText(
             f"Added: {len(report.targets)} · Duplicates: {report.duplicates} · Invalid: {len(report.issues)}"
         )
@@ -702,6 +796,6 @@ class ReconTab(QWidget):
         ) == QMessageBox.Yes:
             self.target_model.clear()
             self.issue_model.set_issues([])
-            self.ui.issueTable.hide()
+            self._update_invalid_targets_visibility(False)
             self.ui.importSummary.setText("Added: 0 · Duplicates: 0 · Invalid: 0")
             self.ui.statusLabel.setText("Target list cleared.")
