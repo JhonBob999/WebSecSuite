@@ -7,6 +7,7 @@ from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QMenu, QApplication, QInputDialog
 from PySide6.QtWidgets import QMessageBox
 from core.metadata import build_task_entity_key
+from core.recon.scraper_handoff import hostname_from_http_url
 from ui.constants import Col
 from ui.table_controller import ROLE_BASE_TOOLTIP
 from dialogs.discovery_viewer_dialog import DiscoveryViewerDialog
@@ -50,6 +51,7 @@ class ScraperActions:
         )
 
         menu = QMenu(table)
+        menu.setToolTipsVisible(True)
         A = self._acts  # кэшированные действия, которые уже работают (Selected и пр.)
         has_selection = bool(self._get_selected_task_ids_from_table())
         has_results = self._has_selected_results()
@@ -93,6 +95,13 @@ class ScraperActions:
         menu.addAction(A["view_forms"])
         menu.addAction(A["view_headers"])
         menu.addAction(A["view_cookies"])
+        menu.addSeparator()
+
+        # Resolve the clicked task by its stored identity, independently of sort
+        # order and selection. Only sanitized values cross the tab boundary.
+        self._update_recon_handoff_actions()
+        menu.addAction(A["send_recon_target"])
+        menu.addAction(A["send_recon_inventory"])
         menu.addSeparator()
 
         # --- Other ---
@@ -166,6 +175,8 @@ class ScraperActions:
             "view_forms":      act("View Forms",         self.view_forms),
             "view_headers":     act("View Headers…",     self.view_headers),
             "view_cookies":     act("View Cookies…",     self.view_cookies),
+            "send_recon_target": act("Send to Recon Target Manager", self.send_to_recon_target_manager),
+            "send_recon_inventory": act("Send to Recon Asset Inventory", self.send_to_recon_asset_inventory),
 
             "export_selected":  act("Export Selected…",  self.export_selected),
             "export_completed": act("Export Completed…", self.export_completed),
@@ -210,6 +221,31 @@ class ScraperActions:
             return self._context_task_id
         rows = self.table_ctl.selected_rows()
         return self.table_ctl.task_id_by_row(rows[0]) if rows else None
+
+    def _update_recon_handoff_actions(self):
+        task_id = self._context_or_selected_task_id()
+        task = self.task_manager.get_task(task_id) if task_id else None
+        for key, validate in (
+            ("send_recon_target", lambda: hostname_from_http_url(getattr(task, "url", None))),
+            ("send_recon_inventory", lambda: self.parent._build_recon_inventory_handoff(task_id)),
+        ):
+            action = self._acts[key]
+            try:
+                validate()
+            except ValueError as error:
+                action.setEnabled(False)
+                action.setToolTip(str(error))
+                action.setStatusTip(str(error))
+            else:
+                action.setEnabled(True)
+                action.setToolTip("Send the hostname to Recon without starting a scan.")
+                action.setStatusTip(action.toolTip())
+
+    def send_to_recon_target_manager(self):
+        return self.parent.send_task_to_recon_target(self._context_or_selected_task_id())
+
+    def send_to_recon_asset_inventory(self):
+        return self.parent.send_task_to_recon_inventory(self._context_or_selected_task_id())
 
     def _get_task_annotation(self, task_id: Optional[str]):
         store = getattr(self.parent, "annotation_store", None)

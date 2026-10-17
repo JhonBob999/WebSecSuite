@@ -8,7 +8,7 @@ from functools import partial
 from copy import deepcopy
 from datetime import datetime
 import os, json, httpx, subprocess, re
-from PySide6.QtCore import Qt, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
+from PySide6.QtCore import Qt, Signal, Slot, QSettings, QUrl, QPoint, QTimer, QDateTime
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor, QFont , QDesktopServices, QGuiApplication, QAction
 from PySide6.QtWidgets import (
     QWidget,
@@ -43,6 +43,7 @@ from core.scraper.task_types import ScrapeTask
 from core.scraper import exporter
 from core.cookies import storage
 from core.metadata import AnnotationStore
+from core.recon.scraper_handoff import build_scraper_observation_batch, hostname_from_http_url
 from core.scraper.task_types import TaskStatus
 from core.session_persistence import (
     build_scraper_session,
@@ -106,6 +107,9 @@ def code_text(http_code: int) -> str:
 
 
 class ScraperTabController(QWidget):
+    reconTargetRequested = Signal(str)
+    reconObservationRequested = Signal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -227,6 +231,31 @@ class ScraperTabController(QWidget):
         # Остальные внутренние подключения
         self._init_ui_connections()
         self._refresh_task_inspector_for_current()
+
+    def send_task_to_recon_target(self, task_id: str | None) -> bool:
+        task = self.task_manager.get_task(task_id) if task_id else None
+        try:
+            hostname = hostname_from_http_url(getattr(task, "url", None))
+        except ValueError as error:
+            QMessageBox.information(self, "Recon handoff", str(error))
+            return False
+        self.reconTargetRequested.emit(hostname)
+        return True
+
+    def send_task_to_recon_inventory(self, task_id: str | None) -> bool:
+        try:
+            batch = self._build_recon_inventory_handoff(task_id)
+        except ValueError as error:
+            QMessageBox.information(self, "Recon handoff", str(error))
+            return False
+        self.reconObservationRequested.emit(batch)
+        return True
+
+    def _build_recon_inventory_handoff(self, task_id: str | None):
+        if task_id and self.task_manager.is_running(task_id):
+            raise ValueError("Wait for the active task to finish with a completed HTTP response.")
+        task = self.task_manager.get_task(task_id) if task_id else None
+        return build_scraper_observation_batch(task)
 
     def _apply_responsive_main_layout(self) -> None:
         """Минимально перестраивает главный layout на основе существующих виджетов."""

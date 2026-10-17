@@ -95,6 +95,7 @@ class ReconAssetFilterProxy(QSortFilterProxyModel):
         self._search = ""
         self._entity_type = ""
         self._source = ""
+        self._import_identities = None
         self.setSortRole(ReconAssetModel.SortRole)
         self.setDynamicSortFilter(True)
 
@@ -110,6 +111,11 @@ class ReconAssetFilterProxy(QSortFilterProxyModel):
         self._source = source
         self.invalidateFilter()
 
+    def set_import_observations(self, identities=None):
+        """Filter by immutable observation identities; None selects All Assets."""
+        self._import_identities = None if identities is None else frozenset(identities)
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row, source_parent):
         model = self.sourceModel()
         if model is None or source_parent.isValid():
@@ -119,7 +125,12 @@ class ReconAssetFilterProxy(QSortFilterProxyModel):
             return False
         if self._entity_type and asset.entity_type != self._entity_type:
             return False
-        if self._source and self._source not in asset.sources:
+        if self._import_identities is not None:
+            if not any(item.identity in self._import_identities and
+                       (not self._source or item.source == self._source)
+                       for item in asset.observations):
+                return False
+        elif self._source and self._source not in asset.sources:
             return False
         return not self._search or self._search in model.data(
             model.index(source_row, 0), ReconAssetModel.SearchRole,

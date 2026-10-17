@@ -1,11 +1,12 @@
 """Offline Recon target management and imported observation inventory."""
 
+from collections import Counter
 from types import SimpleNamespace
 
 from PySide6.QtCore import QModelIndex, QSignalBlocker, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QAbstractItemView, QApplication, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QTableView, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -49,6 +50,10 @@ class ReconTab(QWidget):
         self.ui.assetSearch.textChanged.connect(self._apply_asset_filters)
         self.ui.assetTypeFilter.currentIndexChanged.connect(self._apply_asset_filters)
         self.ui.sourceFilter.currentIndexChanged.connect(self._apply_asset_filters)
+        self.ui.importHistory.currentIndexChanged.connect(self._apply_asset_filters)
+        self.ui.btnResetFilters.clicked.connect(self._reset_asset_filters)
+        self.ui.btnResetView.clicked.connect(self._reset_asset_view)
+        self.ui.assetTable.customContextMenuRequested.connect(self._show_asset_context_menu)
         self.ui.assetTable.selectionModel().selectionChanged.connect(self._update_asset_details_button)
         self.ui.btnAssetDetails.clicked.connect(self._open_asset_details)
         self.ui.assetTable.doubleClicked.connect(self._open_asset_details)
@@ -210,7 +215,7 @@ class ReconTab(QWidget):
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(title)
         note = QLabel(
-            "Offline observations from local JSON or Nmap XML files. Assets remain separate from imported targets; "
+            "Offline observations from local JSON, Nmap XML or completed Scraper tasks. Assets remain separate from imported targets; "
             "scope is unreviewed and selection does not authorize active scanning."
         )
         note.setWordWrap(True)
@@ -228,6 +233,19 @@ class ReconTab(QWidget):
         self.ui.assetCountLabel = QLabel()
         actions.addWidget(self.ui.assetCountLabel)
         layout.addLayout(actions)
+
+        history = QHBoxLayout()
+        history.addWidget(QLabel("Import History"))
+        self.ui.importHistory = QComboBox()
+        self.ui.importHistory.setAccessibleName("Asset import history")
+        self.ui.importHistory.addItem("All Assets", "")
+        history.addWidget(self.ui.importHistory, 1)
+        self.ui.btnResetFilters = QPushButton("Reset Filters")
+        self.ui.btnResetView = QPushButton("Reset View")
+        self.ui.btnResetView.setToolTip("Clear filters and sorting; restore inventory order.")
+        history.addWidget(self.ui.btnResetFilters)
+        history.addWidget(self.ui.btnResetView)
+        layout.addLayout(history)
 
         filters = QHBoxLayout()
         self.ui.assetSearch = QLineEdit()
@@ -253,6 +271,7 @@ class ReconTab(QWidget):
         self.ui.assetTable.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.ui.assetTable.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.ui.assetTable.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.ui.assetTable.setContextMenuPolicy(Qt.CustomContextMenu)
         self.ui.assetTable.setAlternatingRowColors(True)
         self.ui.assetTable.setWordWrap(False)
         self.ui.assetTable.verticalHeader().setDefaultSectionSize(26)
@@ -283,10 +302,7 @@ class ReconTab(QWidget):
         except ObservationImportError as exc:
             self.ui.assetStatusLabel.setText(f"Import failed: {exc}")
             return False
-        self._clear_asset_selection()
-        self.asset_model.set_assets(self.asset_inventory.assets)
-        self._refresh_asset_sources()
-        self._update_asset_counts()
+        self._refresh_asset_inventory()
         self.ui.assetStatusLabel.setText(
             f"Added: {result.added_observations} · Duplicates: {result.duplicates} · "
             f"Assets: {result.total_assets}"
@@ -313,15 +329,50 @@ class ReconTab(QWidget):
             item.entity_key for item in self.asset_inventory.observations
             if item.identity not in previous_identities and item.entity_key in previous_keys
         }
-        self._clear_asset_selection()
-        self.asset_model.set_assets(self.asset_inventory.assets)
-        self._refresh_asset_sources()
-        self._update_asset_counts()
+        self._refresh_asset_inventory()
         self.ui.assetStatusLabel.setText(
             f"Added: {result.added_observations} observations · Duplicates: {result.duplicates} observations · "
             f"New assets: {result.total_assets - len(previous_keys)} · Merged assets: {len(merged_keys)}"
         )
         return True
+
+    def _refresh_asset_inventory(self):
+        self._clear_asset_selection()
+        self.asset_model.set_assets(self.asset_inventory.assets)
+        self._refresh_asset_sources()
+        self._refresh_import_history()
+        self._apply_asset_filters()
+
+    def _history_labels(self):
+        entries = self.asset_inventory.import_history
+        labels = {item.import_id: (item.label if item.label == item.format_name
+                                  else f"{item.label} · {item.format_name}") for item in entries}
+        counts = Counter(labels.values())
+        return {item.import_id: (
+            f"{labels[item.import_id]} · {item.run_id[:32]} "
+            f"[{item.import_id.rsplit(':', 1)[-1][:8]}]"
+            if counts[labels[item.import_id]] > 1 else labels[item.import_id]
+        ) for item in entries}
+
+    def _refresh_import_history(self):
+        selected = self.ui.importHistory.currentData() or ""
+        labels = self._history_labels()
+        with QSignalBlocker(self.ui.importHistory):
+            self.ui.importHistory.clear()
+            self.ui.importHistory.addItem("All Assets", "")
+            for entry in self.asset_inventory.import_history:
+                self.ui.importHistory.addItem(labels[entry.import_id], entry.import_id)
+                self.ui.importHistory.setItemData(
+                    self.ui.importHistory.count() - 1,
+                    f"Run: {entry.run_id}\n{entry.asset_count} assets / "
+                    f"{entry.observation_count} observations\nImport: {entry.import_id}", Qt.ToolTipRole,
+                )
+            self.ui.importHistory.setCurrentIndex(max(0, self.ui.importHistory.findData(selected)))
+
+    def _selected_import(self):
+        identity = self.ui.importHistory.currentData()
+        return next((item for item in self.asset_inventory.import_history
+                     if item.import_id == identity), None)
 
     def _refresh_asset_sources(self):
         selected_source = self.ui.sourceFilter.currentData() or ""
@@ -340,7 +391,23 @@ class ReconTab(QWidget):
         self.asset_proxy.set_search_text(self.ui.assetSearch.text())
         self.asset_proxy.set_entity_type(self.ui.assetTypeFilter.currentData() or "")
         self.asset_proxy.set_source(self.ui.sourceFilter.currentData() or "")
+        entry = self._selected_import()
+        self.asset_proxy.set_import_observations(entry.observation_identities if entry else None)
         self._update_asset_counts()
+
+    def _reset_asset_filters(self):
+        for widget in (self.ui.assetSearch, self.ui.assetTypeFilter,
+                       self.ui.sourceFilter, self.ui.importHistory):
+            with QSignalBlocker(widget):
+                if widget is self.ui.assetSearch:
+                    widget.clear()
+                else:
+                    widget.setCurrentIndex(0)
+        self._apply_asset_filters()
+
+    def _reset_asset_view(self):
+        self._reset_asset_filters()
+        self.ui.assetTable.sortByColumn(-1, Qt.AscendingOrder)
 
     def _clear_asset_selection(self):
         self.ui.assetTable.clearSelection()
@@ -348,8 +415,11 @@ class ReconTab(QWidget):
         self._update_asset_details_button()
 
     def _update_asset_counts(self):
+        entry = self._selected_import()
+        counts = (f"Import: {entry.asset_count} assets / {entry.observation_count} observations"
+                  if entry else f"Observations: {len(self.asset_inventory.observations)}")
         self.ui.assetCountLabel.setText(
-            f"Total: {self.asset_model.rowCount()} · Filtered: {self.asset_proxy.rowCount()}"
+            f"Total: {self.asset_model.rowCount()} · {counts} · Filtered: {self.asset_proxy.rowCount()}"
         )
 
     def _update_asset_details_button(self, *_args):
@@ -361,14 +431,111 @@ class ReconTab(QWidget):
             if not selected:
                 return
             index = selected[0]
+        asset = self._asset_for_index(index)
+        if asset is not None:
+            self._show_asset_details(asset)
+
+    def _asset_for_index(self, index):
+        if not index.isValid() or index.model() is not self.asset_proxy:
+            return None
         source_index = self.asset_proxy.mapToSource(index)
         asset = self.asset_model.asset_at(source_index.row()) if source_index.isValid() else None
-        if asset is None:
-            return
+        return asset
+
+    def _show_asset_details(self, asset):
         UniversalViewerDialog(
             title=f"Recon asset: {asset.value}", payload=asset.to_dict(), parent=self,
             show_summary=False, default_save_stem="recon_asset",
         ).exec()
+
+    def _show_asset_context_menu(self, position):
+        menu = self._asset_context_menu(self.ui.assetTable.indexAt(position))
+        if menu is not None:
+            try:
+                menu.exec(self.ui.assetTable.viewport().mapToGlobal(position))
+            finally:
+                menu.deleteLater()
+
+    def _choose_asset_filter(self, combo, value):
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _asset_context_menu(self, index):
+        """Capture the immutable clicked asset before opening any menu."""
+        asset = self._asset_for_index(index)
+        if asset is None:
+            return None
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        menu.addAction("Open Asset Details", lambda: self._show_asset_details(asset))
+        menu.addAction("Copy Asset Identity", lambda: QApplication.clipboard().setText(asset.entity_key))
+        menu.addAction("Filter by Type", lambda: self._choose_asset_filter(
+            self.ui.assetTypeFilter, asset.entity_type,
+        ))
+        sources = menu.addMenu("Filter by Source")
+        for source in asset.sources:
+            sources.addAction(source, lambda checked=False, value=source: self._choose_asset_filter(
+                self.ui.sourceFilter, value,
+            ))
+        provenance = menu.addMenu("Show related Import / Provenance")
+        entries = tuple(item for item in self.asset_inventory.import_history
+                        if asset.entity_key in item.entity_keys)
+        provenance.addAction("Open Provenance", lambda: self._show_asset_provenance(asset, entries))
+        labels = self._history_labels()
+        for entry in entries:
+            provenance.addAction(labels[entry.import_id], lambda checked=False, value=entry.import_id:
+                                 self._choose_asset_filter(self.ui.importHistory, value))
+        target = menu.addAction("Add to Target Manager")
+        try:
+            hostname = normalize_hostname(asset.value)
+        except ValueError as exc:
+            target.setEnabled(False)
+            target.setToolTip(f"R1 accepts hostnames only. {exc}")
+        else:
+            target.triggered.connect(lambda: self._add_recon_hostname(hostname, "Asset Inventory"))
+        return menu
+
+    def _show_asset_provenance(self, asset, entries):
+        payload = {
+            "entity_key": asset.entity_key,
+            "imports": [{"import_id": item.import_id, "label": item.label,
+                         "format": item.format_name, "run_id": item.run_id,
+                         "asset_count": item.asset_count, "observation_count": item.observation_count}
+                        for item in entries],
+            "observations": [item.to_dict() for item in asset.observations],
+        }
+        UniversalViewerDialog(
+            title=f"Recon provenance: {asset.value}", payload=payload, parent=self,
+            show_summary=False, default_save_stem="recon_provenance",
+        ).exec()
+
+    def _add_recon_hostname(self, hostname, source):
+        try:
+            hostname = normalize_hostname(hostname)
+        except ValueError as exc:
+            self.ui.statusLabel.setText(f"Transfer rejected: {exc}")
+            return False
+        self._show_report(ImportReport(targets=[TargetRecord(hostname, source)]))
+        return True
+
+    def receive_target_hostname(self, hostname):
+        """Receive only a hostname from the Scraper signal, reusing R1 validation."""
+        return self._add_recon_hostname(hostname, "Scraper")
+
+    def receive_scraper_observations(self, batch):
+        """Receive a bounded factual batch through the shared atomic inventory."""
+        try:
+            result = self.asset_inventory.import_batch(batch, label="Scraper", format_name="Scraper")
+        except (ObservationImportError, ValueError) as exc:
+            self.ui.assetStatusLabel.setText(f"Transfer rejected: {exc}")
+            return False
+        self._refresh_asset_inventory()
+        self.ui.assetStatusLabel.setText(
+            f"Scraper · Added: {result.added_observations} · Duplicates: {result.duplicates} · "
+            "Scope remains unreviewed."
+        )
+        return True
 
     def _update_counts(self):
         total, selected = self.target_model.rowCount(), self.target_model.selected_count

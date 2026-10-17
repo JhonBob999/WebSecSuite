@@ -34,6 +34,8 @@ class MainWindow(QMainWindow):
         self.recon_tab = ReconTab()
         recon_index = self.ui.tabWidget.addTab(self.recon_tab, "Recon")
         self.ui.tabWidget.setTabToolTip(recon_index, "Offline target inventory and scope review.")
+        self.scraper_tab.reconTargetRequested.connect(self.recon_tab.receive_target_hostname)
+        self.scraper_tab.reconObservationRequested.connect(self.recon_tab.receive_scraper_observations)
 
         # Добавляем UI shell вкладки для будущих модулей.
         self._add_placeholder_tabs()
