@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="https://example.invalid/untrusted.xsl" type="text/xsl"?>
+<!-- Synthetic documentation addresses only. No scan was executed. -->
+<nmaprun scanner="nmap" version="7.95" start="1767225600" startstr="2026-01-01 00:00:00 UTC" args="untrusted; never execute">
+  <host starttime="1767225601" endtime="1767225610">
+    <status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/>
+    <address addr="00:00:5E:00:53:01" addrtype="mac"/>
+    <hostnames>
+      <hostname name="API.Example.test." type="PTR"/>
+      <hostname name="www.example.test" type="user"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9.9" extrainfo="synthetic" conf="10" method="probed"/></port>
+      <port protocol="tcp" portid="443"><state state="open"/><service name="http" product="Synthetic server" version="1.2" tunnel="ssl" conf="7"/></port>
+      <port protocol="udp" portid="443"><state state="open"/><service name="quic" conf="3"/></port>
+      <port protocol="tcp" portid="80"><state state="closed"/></port>
+      <port protocol="tcp" portid="8080"><state state="filtered"/></port>
+      <port protocol="udp" portid="161"><state state="open|filtered"/><service name="snmp"/></port>
+      <port protocol="tcp" portid="8443"><state state="unknown"/></port>
+      <extraports state="filtered" count="995"/>
+    </ports>
+    <hostscript><script id="synthetic-vuln" output="CVE-2099-0000; launch.exe; https://example.invalid/"/></hostscript>
+  </host>
+  <host>
+    <status state="up"/>
+    <address addr="2001:0DB8:0:0::10" addrtype="ipv6"/>
+    <ports><port protocol="tcp" portid="443"><state state="open"/></port></ports>
+  </host>
+  <host><status state="down"/><address addr="198.51.100.20" addrtype="ipv4"/></host>
+  <host><address addr="203.0.113.30" addrtype="ipv4"/></host>
+  <runstats><finished time="1767225612" timestr="2026-01-01 00:00:12 UTC" elapsed="12.0" exit="success"/></runstats>
+</nmaprun>

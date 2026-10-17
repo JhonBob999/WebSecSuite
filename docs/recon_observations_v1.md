@@ -116,3 +116,7 @@ else:
 `import_json(text)` has the same result contract. `assets` is an immutable tuple sorted by `entity_key`; `observations` is an immutable tuple sorted by source identity. Assets and observations are frozen values. Their `to_dict()` methods return independent, JSON-safe details, including complete normalized observations and evidence. `Observation.to_dict()` includes `run_id`, `id`, `source`, `type`, `entity_key`, normalized `value` (or service `host`, `transport`, `port`), optional `service_name` and `confidence`, and an `evidence` array. `parse_observations_json(text)` and `read_observations_file(path)` are also available without an inventory.
 
 The synthetic fixture contains seven observations representing six assets: two hostnames, IPv4, IPv6, TCP/443, and UDP/443. `example.com` has two observations from separate sources. All fixture addresses and evidence are synthetic.
+
+Recon R3 also supports [offline Nmap XML import](recon_nmap_xml.md) through a
+separate adapter that validates into this same v1 contract. The native JSON format
+and its import behavior are unchanged.

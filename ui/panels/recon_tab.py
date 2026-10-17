@@ -43,6 +43,7 @@ class ReconTab(QWidget):
         self.ui.btnRemoveSelected.clicked.connect(self.target_model.remove_selected)
         self.ui.btnClearTargets.clicked.connect(self._confirm_clear)
         self.ui.btnImportObservations.clicked.connect(self._pick_observations_file)
+        self.ui.btnImportNmap.clicked.connect(self._pick_nmap_file)
         self.ui.assetSearch.textChanged.connect(self._apply_asset_filters)
         self.ui.assetTypeFilter.currentIndexChanged.connect(self._apply_asset_filters)
         self.ui.sourceFilter.currentIndexChanged.connect(self._apply_asset_filters)
@@ -161,7 +162,7 @@ class ReconTab(QWidget):
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         layout.addWidget(title)
         note = QLabel(
-            "Offline observations from local JSON files. Assets remain separate from imported targets; "
+            "Offline observations from local JSON or Nmap XML files. Assets remain separate from imported targets; "
             "scope is unreviewed and selection does not authorize active scanning."
         )
         note.setWordWrap(True)
@@ -169,9 +170,11 @@ class ReconTab(QWidget):
 
         actions = QHBoxLayout()
         self.ui.btnImportObservations = QPushButton("Import Observations JSON…")
+        self.ui.btnImportNmap = QPushButton("Import Nmap XML…")
         self.ui.btnAssetDetails = QPushButton("Details")
         self.ui.btnAssetDetails.setEnabled(False)
         actions.addWidget(self.ui.btnImportObservations)
+        actions.addWidget(self.ui.btnImportNmap)
         actions.addWidget(self.ui.btnAssetDetails)
         actions.addStretch(1)
         self.ui.assetCountLabel = QLabel()
@@ -239,6 +242,36 @@ class ReconTab(QWidget):
         self.ui.assetStatusLabel.setText(
             f"Added: {result.added_observations} · Duplicates: {result.duplicates} · "
             f"Assets: {result.total_assets}"
+        )
+        return True
+
+    def _pick_nmap_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Nmap XML", "", "XML files (*.xml)",
+        )
+        if path:
+            self.import_nmap_file(path)
+
+    def import_nmap_file(self, path):
+        """Merge a local report using the same atomic inventory and offline viewer."""
+        previous_keys = {asset.entity_key for asset in self.asset_inventory.assets}
+        previous_identities = {item.identity for item in self.asset_inventory.observations}
+        try:
+            result = self.asset_inventory.import_nmap_file(path)
+        except ObservationImportError as exc:
+            self.ui.assetStatusLabel.setText(f"Import failed: {exc}")
+            return False
+        merged_keys = {
+            item.entity_key for item in self.asset_inventory.observations
+            if item.identity not in previous_identities and item.entity_key in previous_keys
+        }
+        self._clear_asset_selection()
+        self.asset_model.set_assets(self.asset_inventory.assets)
+        self._refresh_asset_sources()
+        self._update_asset_counts()
+        self.ui.assetStatusLabel.setText(
+            f"Added: {result.added_observations} observations · Duplicates: {result.duplicates} observations · "
+            f"New assets: {result.total_assets - len(previous_keys)} · Merged assets: {len(merged_keys)}"
         )
         return True
 

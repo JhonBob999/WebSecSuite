@@ -200,3 +200,43 @@ def test_offline_asset_inventory_preserves_targets_scraper_and_full_viewer_paylo
     assert scraper.task_manager.is_idle()
     scraper.open_results_viewer_for_row(0)
     assert viewed[-1] == payload
+
+
+def test_offline_nmap_import_preserves_scraper_results_and_unreviewed_targets(
+    recon_window, qapp, monkeypatch,
+):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from dialogs.results_viewer_dialog import UniversalViewerDialog
+
+    window = recon_window
+    recon, scraper = window.recon_tab, window.scraper_tab
+    scraper.add_task_row("https://scraper.example.test")
+    task_id = scraper.table_ctl.task_id_by_row(0)
+    payload = {"url": "https://scraper.example.test", "status_code": 200,
+               "custom": {"preserve": "offline Nmap import"}}
+    scraper.on_task_result(task_id, payload)
+    window.ui.tabWidget.setCurrentWidget(recon)
+    recon.ui.manualInput.setText("keep.example.test")
+    recon.ui.btnAddTarget.click()
+    recon.ui.btnSelectAll.click()
+    recon.ui.reconPages.setCurrentIndex(1)
+    qapp.processEvents()
+    assert recon.ui.btnImportNmap.isVisible()
+    fixture = Path(__file__).parents[1] / "fixtures" / "nmap" / "recon.xml"
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(fixture), ""))
+    recon.ui.btnImportNmap.click()
+    assert recon.asset_model.rowCount() > 0
+    assert recon.ui.sourceFilter.findData("nmap") > 0
+    assert recon.target_model.rowCount() == recon.target_model.selected_count == 1
+    assert recon.target_model.data(recon.target_model.index(0, recon.target_model.SCOPE)) == "Unreviewed"
+    assert scraper.ui.taskTable.rowCount() == 1
+    assert scraper.table_ctl.task_id_by_row(0) == task_id
+    assert scraper.task_results[task_id] == payload
+    assert scraper.task_manager.is_idle()
+    viewed = []
+    monkeypatch.setattr(UniversalViewerDialog, "exec", lambda dialog: viewed.append(dialog._payload))
+    scraper.open_results_viewer_for_row(0)
+    assert viewed == [payload]

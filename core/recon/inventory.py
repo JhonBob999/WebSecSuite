@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.recon.nmap_import import parse_nmap_xml, read_nmap_file
 from core.recon.observations import (
     Observation, ObservationBatch, ObservationImportError,
     parse_observations_json, read_observations_file,
@@ -80,6 +81,12 @@ class AssetInventory:
 
     def import_file(self, path: str | Path) -> InventoryImportResult:
         return self._import_batch(read_observations_file(path))
+
+    def import_nmap_xml(self, content: bytes | str) -> InventoryImportResult:
+        return self._import_batch(parse_nmap_xml(content))
+
+    def import_nmap_file(self, path: str | Path) -> InventoryImportResult:
+        return self._import_batch(read_nmap_file(path))
 
     def _import_batch(self, batch: ObservationBatch) -> InventoryImportResult:
         planned = self._by_identity.copy()

@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<!DOCTYPE nmaprun [<!ENTITY xxe SYSTEM "https://example.invalid/secret">]>
+<nmaprun scanner="nmap"><host><hostnames><hostname name="&xxe;"/></hostnames></host></nmaprun>
