@@ -240,3 +240,48 @@ def test_offline_nmap_import_preserves_scraper_results_and_unreviewed_targets(
     monkeypatch.setattr(UniversalViewerDialog, "exec", lambda dialog: viewed.append(dialog._payload))
     scraper.open_results_viewer_for_row(0)
     assert viewed == [payload]
+
+
+def test_tool_refresh_and_responsive_tab_switches_preserve_offline_workspaces(
+    recon_window, qapp, monkeypatch,
+):
+    from pathlib import Path
+
+    from PySide6.QtCore import QThreadPool, QTimer
+    from PySide6.QtWidgets import QPushButton
+
+    window = recon_window
+    recon, scraper = window.recon_tab, window.scraper_tab
+    recon.ui.manualInput.setText("scope.example.test")
+    recon.ui.btnAddTarget.click()
+    recon.ui.btnSelectAll.click()
+    fixtures = Path(__file__).parents[1] / "fixtures"
+    assert recon.import_observations_file(fixtures / "recon_observations_v1.json")
+    assert recon.import_nmap_file(fixtures / "nmap" / "recon.xml")
+    assets = tuple(recon.asset_inventory.observations)
+    scraper.add_task_row("https://scraper.example.test")
+    task_id = scraper.table_ctl.task_id_by_row(0)
+    payload = {"url": "https://scraper.example.test", "custom": "retained during detection"}
+    scraper.on_task_result(task_id, payload)
+    pool_limit = QThreadPool.globalInstance().maxThreadCount()
+    refreshed = []
+    discover = recon.tool_discovery.discover
+    monkeypatch.setattr(recon.tool_discovery, "discover", lambda: refreshed.append(True) or discover())
+    events = []
+    for page in (0, 1, 0):
+        window.ui.tabWidget.setCurrentWidget(recon)
+        recon.ui.reconPages.setCurrentIndex(page)
+        QTimer.singleShot(0, lambda: events.append(True))
+        recon.ui.btnRefreshDetection.click()
+        qapp.processEvents()
+        window.ui.tabWidget.setCurrentWidget(scraper)
+        qapp.processEvents()
+        assert scraper.isVisible()
+    assert len(events) == len(refreshed) == 3
+    assert tuple(recon.asset_inventory.observations) == assets
+    assert recon.target_model.rowCount() == recon.target_model.selected_count == 1
+    assert recon.target_model.data(recon.target_model.index(0, recon.target_model.SCOPE)) == "Unreviewed"
+    assert scraper.task_results[task_id] == payload
+    assert scraper.task_manager.is_idle()
+    assert QThreadPool.globalInstance().maxThreadCount() == pool_limit
+    assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == ["Refresh Detection"]

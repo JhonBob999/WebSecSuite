@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from core.recon.inventory import AssetInventory
 from core.recon.observations import ObservationImportError
+from core.recon.tool_discovery import ToolDiscoveryService
 from core.recon.targets import (
     ImportIssue, ImportReport, TargetRecord, csv_columns, normalize_hostname,
     parse_text, read_target_file, read_target_text,
@@ -30,6 +31,7 @@ class ReconTab(QWidget):
         self.asset_model = ReconAssetModel(self)
         self.asset_proxy = ReconAssetFilterProxy(self)
         self.asset_proxy.setSourceModel(self.asset_model)
+        self.tool_discovery = ToolDiscoveryService()
         self._build_ui()
         self.target_model.inventoryChanged.connect(self._update_counts)
         self.target_model.editRejected.connect(self.ui.statusLabel.setText)
@@ -50,8 +52,10 @@ class ReconTab(QWidget):
         self.ui.assetTable.selectionModel().selectionChanged.connect(self._update_asset_details_button)
         self.ui.btnAssetDetails.clicked.connect(self._open_asset_details)
         self.ui.assetTable.doubleClicked.connect(self._open_asset_details)
+        self.ui.btnRefreshDetection.clicked.connect(self._refresh_tool_detection)
         self._update_counts()
         self._update_asset_counts()
+        self._refresh_tool_detection()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -145,13 +149,57 @@ class ReconTab(QWidget):
         self.ui.statusLabel.setWordWrap(True)
         layout.addWidget(self.ui.statusLabel)
 
-        tools = QGroupBox("Tool Manager · future integration")
-        tools_layout = QVBoxLayout(tools)
-        tools_layout.setSpacing(2)
-        for name in ("Subfinder", "ProjectDiscovery httpx", "Nmap", "FFUF"):
-            tools_layout.addWidget(QLabel(f"{name} — Unavailable / not connected"))
-        layout.addWidget(tools)
+        layout.addWidget(self._build_tool_manager())
         self._build_asset_inventory()
+
+    def _build_tool_manager(self):
+        self.ui.toolManager = QGroupBox("Tool Manager")
+        tools_layout = QVBoxLayout(self.ui.toolManager)
+        tools_layout.setSpacing(2)
+        header = QHBoxLayout()
+        self.ui.toolDetectionStatus = QLabel("Detection is read-only; tool execution unavailable in R4.")
+        self.ui.toolDetectionStatus.setTextFormat(Qt.PlainText)
+        header.addWidget(self.ui.toolDetectionStatus, 1)
+        self.ui.btnRefreshDetection = QPushButton("Refresh Detection")
+        self.ui.btnRefreshDetection.setToolTip("Inspect local executable paths without running programs.")
+        header.addWidget(self.ui.btnRefreshDetection)
+        tools_layout.addLayout(header)
+        self.ui.toolLabels = {}
+        for tool_id, name in (("subfinder", "Subfinder"), ("httpx", "ProjectDiscovery httpx"),
+                              ("nmap", "Nmap"), ("ffuf", "FFUF")):
+            label = QLabel(f"{name} — Not detected")
+            label.setTextFormat(Qt.PlainText)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self.ui.toolLabels[tool_id] = label
+            tools_layout.addWidget(label)
+        state = QLabel("Compatibility unverified · adapter not connected · execution disabled (all tools).")
+        state.setWordWrap(True)
+        tools_layout.addWidget(state)
+        return self.ui.toolManager
+
+    def _refresh_tool_detection(self):
+        statuses = {
+            "NOT_FOUND": "Not found",
+            "CANDIDATE_UNVERIFIED": "Candidate found, not verified",
+            "INVALID_CANDIDATE": "Invalid candidate",
+            "NAME_COLLISION": "Name collision",
+        }
+        try:
+            records = self.tool_discovery.discover()
+        except OSError:
+            self.ui.toolDetectionStatus.setText("Detection unavailable; execution disabled.")
+            for label in self.ui.toolLabels.values():
+                name = label.text().split(" — ", 1)[0]
+                label.setText(f"{name} — Detection unavailable")
+                label.setToolTip("Local executable paths could not be inspected. No program was run.")
+            return
+        for record in records:
+            label = self.ui.toolLabels[record.tool_id]
+            path = f" · {record.executable_path}" if record.executable_path else ""
+            label.setText(f"{record.display_name} — {statuses[record.status.name]}{path}")
+            label.setToolTip(record.diagnostic)
+        self.ui.toolDetectionStatus.setText("Detection is read-only; tool execution unavailable in R4.")
 
     def _build_asset_inventory(self):
         page = QWidget()

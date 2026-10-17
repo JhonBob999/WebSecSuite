@@ -119,13 +119,60 @@ def test_clear_requires_confirmation_and_remove_uses_checkboxes(recon, monkeypat
     assert recon.target_model.rowCount() == recon.target_model.selected_count == 0
 
 
-def test_tool_manager_has_only_unavailable_tools_and_no_run_controls(recon):
+def test_tool_manager_has_detection_and_no_run_controls(recon):
     from PySide6.QtWidgets import QLabel, QPushButton
 
     labels = "\n".join(label.text() for label in recon.findChildren(QLabel))
     for name in ("Subfinder", "ProjectDiscovery httpx", "Nmap", "FFUF"):
-        assert f"{name} — Unavailable / not connected" in labels
+        assert name in labels
+    assert recon.ui.btnRefreshDetection.text() == "Refresh Detection"
+    assert "compatibility unverified" in labels.lower()
+    assert "adapter not connected" in labels.lower()
+    assert "execution disabled" in labels.lower()
     assert "authorization" in labels.lower()
     assert "discovered assets" in labels.lower()
     assert not any(button.text().lower() in {"run", "scan", "start"}
                    for button in recon.findChildren(QPushButton))
+
+
+def test_tool_detection_refresh_shows_read_only_results_without_changing_targets(recon):
+    from types import SimpleNamespace
+
+    calls = []
+    records = tuple(SimpleNamespace(
+        tool_id=tool_id, display_name=name,
+        status=SimpleNamespace(name=status), executable_path=path,
+        diagnostic=diagnostic,
+    ) for tool_id, name, status, path, diagnostic in (
+        ("subfinder", "Subfinder", "NOT_FOUND", None, "No executable found."),
+        ("httpx", "ProjectDiscovery httpx", "NAME_COLLISION", None, "Python HTTPX launcher found."),
+        ("nmap", "Nmap", "CANDIDATE_UNVERIFIED", "C:/Tools/Nmap/nmap.exe", "Version checks deferred."),
+        ("ffuf", "FFUF", "INVALID_CANDIDATE", None, "Candidate is not an executable."),
+    ))
+    recon.tool_discovery = SimpleNamespace(discover=lambda: calls.append(True) or records)
+    recon.ui.manualInput.setText("keep.example.test")
+    recon.ui.btnAddTarget.click()
+    recon.ui.btnSelectAll.click()
+    recon.ui.btnRefreshDetection.click()
+    assert calls == [True]
+    assert "Not found" in recon.ui.toolLabels["subfinder"].text()
+    assert "Name collision" in recon.ui.toolLabels["httpx"].text()
+    assert "Candidate found, not verified" in recon.ui.toolLabels["nmap"].text()
+    assert "C:/Tools/Nmap/nmap.exe" in recon.ui.toolLabels["nmap"].text()
+    assert "Invalid candidate" in recon.ui.toolLabels["ffuf"].text()
+    assert "Python HTTPX" in recon.ui.toolLabels["httpx"].toolTip()
+    assert recon.target_model.rowCount() == recon.target_model.selected_count == 1
+    assert recon.target_model.data(recon.target_model.index(0, recon.target_model.SCOPE)) == "Unreviewed"
+
+
+def test_tool_detection_refresh_error_has_no_raw_exception_or_stale_candidate(recon):
+    from types import SimpleNamespace
+
+    def unavailable():
+        raise OSError("secret-token")
+
+    recon.tool_discovery = SimpleNamespace(discover=unavailable)
+    recon.ui.btnRefreshDetection.click()
+    assert "Detection unavailable" in recon.ui.toolDetectionStatus.text()
+    assert "secret-token" not in recon.ui.toolDetectionStatus.text()
+    assert all("Detection unavailable" in label.text() for label in recon.ui.toolLabels.values())
