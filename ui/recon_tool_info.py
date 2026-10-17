@@ -41,7 +41,9 @@ _TOOL_INFORMATION = {
             "Quick Network Discovery: the same four TCP ports on one public IPv4 "
             "from a fresh ginandjuice.shop preflight, explicitly selected and "
             "authorized for each run. No arbitrary options, scripts, UDP, OS "
-            "detection or service-version probing."
+            "detection or service-version probing in these executable actions. "
+            "Manage Scan Profiles offers immutable presets and saved custom "
+            "configuration only; new profiles require R7B before execution."
         ),
         "network": (
             "Local Self-Test connects only to loopback. Public preflight resolves "

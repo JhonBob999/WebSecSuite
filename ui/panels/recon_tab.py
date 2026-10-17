@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.recon.inventory import AssetInventory
+from core.recon.nmap_profile_store import NmapProfileStore
 from core.recon.nmap_runtime import NmapRuntime
 from core.recon.subfinder_runtime import SubfinderRuntime
 from core.recon.observations import ObservationImportError
@@ -20,6 +21,7 @@ from core.recon.targets import (
     parse_text, read_target_file, read_target_text,
 )
 from dialogs.results_viewer_dialog import UniversalViewerDialog
+from dialogs.nmap_profiles_dialog import NmapProfilesDialog
 from ui.recon_asset_model import ReconAssetFilterProxy, ReconAssetModel
 from ui.recon_target_model import ImportIssueModel, ReconTargetModel
 from ui.recon_tool_info import TOOL_NAMES, ToolInformationView
@@ -38,6 +40,8 @@ class ReconTab(QWidget):
         self.asset_proxy = ReconAssetFilterProxy(self)
         self.asset_proxy.setSourceModel(self.asset_model)
         self.tool_discovery = ToolDiscoveryService()
+        self.nmap_profile_store = NmapProfileStore()
+        self._nmap_profiles_dialog = None
         self.nmap_runtime = NmapRuntime(self.asset_inventory, self)
         self.subfinder_runtime = SubfinderRuntime(self.asset_inventory, self)
         self._nmap_candidate_path = ""
@@ -71,6 +75,7 @@ class ReconTab(QWidget):
         self.ui.btnToggleInvalidTargets.clicked.connect(self._toggle_invalid_targets)
         self.ui.toolSelector.currentIndexChanged.connect(self._select_inspector_tool)
         self.ui.btnChooseNmap.clicked.connect(self._choose_nmap_executable)
+        self.ui.btnManageNmapProfiles.clicked.connect(self._open_nmap_profiles)
         self.ui.btnNmapSelfTest.clicked.connect(self._confirm_nmap_self_test)
         self.ui.btnStopNmap.clicked.connect(self.nmap_runtime.stop)
         self.nmap_runtime.changed.connect(self._refresh_nmap_runtime)
@@ -257,6 +262,9 @@ class ReconTab(QWidget):
             detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             installation.addWidget(detail)
         self.ui.toolInfo.section_layouts["installation"].addWidget(self.ui.nmapInstallation)
+        self.ui.btnManageNmapProfiles = QPushButton("Manage Scan Profiles…")
+        self.ui.btnManageNmapProfiles.setToolTip("Edit offline Nmap configuration; starts no scans.")
+        self.ui.toolInfo.section_layouts["profiles"].addWidget(self.ui.btnManageNmapProfiles)
         self.ui.nmapExecution = QWidget()
         execution = QVBoxLayout(self.ui.nmapExecution)
         execution.setContentsMargins(0, 0, 0, 0)
@@ -288,9 +296,18 @@ class ReconTab(QWidget):
         self.ui.toolDiagnostic.setText(self.ui.toolLabels[tool_id].toolTip())
         self.ui.nmapInstallation.setVisible(tool_id == "nmap")
         self.ui.nmapExecution.setVisible(tool_id == "nmap")
+        self.ui.btnManageNmapProfiles.setVisible(tool_id == "nmap")
         self.public_nmap_controls.set_visible(tool_id == "nmap")
         self.subfinder_controls.set_visible(tool_id == "subfinder")
         self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
+
+    def _open_nmap_profiles(self):
+        if self._nmap_profiles_dialog is None:
+            self._nmap_profiles_dialog = NmapProfilesDialog(self.nmap_profile_store, self)
+            self._nmap_profiles_dialog.setModal(True)
+        self._nmap_profiles_dialog.show()
+        self._nmap_profiles_dialog.raise_()
+        self._nmap_profiles_dialog.activateWindow()
 
     def _toggle_tool_inspector(self):
         splitter = self.ui.reconSplitter

@@ -102,7 +102,7 @@ def test_initialization_has_gated_local_action_without_program_execution(recon):
     assert "Setup required" in recon.ui.nmapStatusLabel.text()
     assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
         "Refresh Detection", "Choose Subfinder…", "Choose official archive…",
-        "Verify / approve executable", "Public Target Preflight", "Choose Nmap…",
+        "Verify / approve executable", "Manage Scan Profiles…", "Public Target Preflight", "Choose Nmap…",
         "Local Self-Test", "Stop", "Public Scan", "Run Passive Discovery", "Stop Subfinder",
         "Run / Import History",
     ]
