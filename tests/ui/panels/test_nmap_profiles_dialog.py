@@ -541,7 +541,7 @@ def test_profile_startup_and_editing_never_start_threads_or_runtimes(qapp, tmp_p
     window = MainWindow()
     try:
         window.show()
-        window.ui.tabWidget.setCurrentWidget(window.recon_tab)
+        window.ui.tabWidget.setCurrentWidget(window.tools_tab)
         qapp.processEvents()
         recon = window.recon_tab
         assert recon.nmap_profile_store.profiles[0].name == "Startup custom"
@@ -567,7 +567,8 @@ def test_profile_startup_and_editing_never_start_threads_or_runtimes(qapp, tmp_p
         for tool_id in ("subfinder", "httpx", "ffuf", "nmap"):
             ui.toolSelector.setCurrentIndex(ui.toolSelector.findData(tool_id))
             qapp.processEvents()
-            assert ui.btnManageNmapProfiles.isVisible() == (tool_id == "nmap")
+            assert ui.btnManageNmapProfiles.isVisible()
+            assert window.tools_tab.isAncestorOf(ui.btnManageNmapProfiles)
         assert not recon.nmap_runtime.busy
         assert not recon.subfinder_runtime.busy
         assert window.scraper_tab.task_manager.is_idle()

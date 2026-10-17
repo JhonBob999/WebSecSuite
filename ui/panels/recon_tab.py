@@ -47,6 +47,7 @@ class ReconTab(QWidget):
         self.subfinder_runtime = SubfinderRuntime(self.asset_inventory, self)
         self._nmap_candidate_path = ""
         self._tool_inspector_width = 340
+        self._nmap_controls_hosted = False
         self._build_ui()
         self.target_model.inventoryChanged.connect(self._update_counts)
         self.target_model.editRejected.connect(self.ui.statusLabel.setText)
@@ -296,13 +297,43 @@ class ReconTab(QWidget):
         self.ui.toolInfo.set_tool(tool_id)
         self.ui.toolStatusStack.setCurrentWidget(self.ui.toolLabels[tool_id])
         self.ui.toolDiagnostic.setText(self.ui.toolLabels[tool_id].toolTip())
-        self.ui.nmapInstallation.setVisible(tool_id == "nmap")
-        self.ui.nmapExecution.setVisible(tool_id == "nmap")
-        self.ui.btnManageNmapProfiles.setVisible(tool_id == "nmap")
-        self.public_nmap_controls.set_visible(tool_id == "nmap")
-        self.authorized_nmap_controls.set_visible(tool_id == "nmap")
+        if not self._nmap_controls_hosted:
+            self.ui.nmapInstallation.setVisible(tool_id == "nmap")
+            self.ui.nmapExecution.setVisible(tool_id == "nmap")
+            self.ui.btnManageNmapProfiles.setVisible(tool_id == "nmap")
+            self.public_nmap_controls.set_visible(tool_id == "nmap")
+            self.authorized_nmap_controls.set_visible(tool_id == "nmap")
+        elif tool_id == "nmap":
+            self.ui.toolInfo.labels["execution"].setText("Open Tools → Nmap for Nmap controls and results.")
         self.subfinder_controls.set_visible(tool_id == "subfinder")
         self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
+
+    def rehost_nmap_controls(self, tool_info):
+        """Move the existing widgets once; keep controllers and runtime owned here.
+
+        Reparenting widgets preserves their signals and the shared target/profile
+        state. Subfinder continues using the original inspector section layouts.
+        """
+        if self._nmap_controls_hosted:
+            raise RuntimeError("Nmap controls already have a workspace.")
+        ui = self.ui
+        sections = {
+            "installation": (ui.nmapInstallation,),
+            "profiles": (ui.nmapProfileSetup, ui.btnManageNmapProfiles,
+                         ui.nmapAuthorizedSetup, ui.nmapPublicSetup),
+            "execution": (ui.nmapExecution, ui.btnNmapAuthorizedRun,
+                          ui.btnNmapPublicScan, ui.btnNmapRunProfile),
+            "results": (ui.nmapAuthorizedStatus, ui.btnNmapAuthorizedResults,
+                        ui.nmapPublicSummary),
+        }
+        for section, widgets in sections.items():
+            for widget in widgets:
+                ui.toolInfo.section_layouts[section].removeWidget(widget)
+                tool_info.section_layouts[section].addWidget(widget)
+                widget.show()
+        self._nmap_controls_hosted = True
+        ui.toolSelector.setCurrentIndex(ui.toolSelector.findData("subfinder"))
+        self._select_inspector_tool()
 
     def _open_nmap_profiles(self):
         if self._nmap_profiles_dialog is None:

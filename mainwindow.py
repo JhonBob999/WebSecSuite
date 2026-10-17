@@ -12,6 +12,7 @@ from ui.main.ui_form import Ui_MainWindow
 # Подключаем ScraperTabController
 from ui.panels.scraper_tab import ScraperTabController
 from ui.panels.recon_tab import ReconTab
+from ui.panels.tools_tab import ToolsTab
 
 
 class MainWindow(QMainWindow):
@@ -37,8 +38,17 @@ class MainWindow(QMainWindow):
         self.scraper_tab.reconTargetRequested.connect(self.recon_tab.receive_target_hostname)
         self.scraper_tab.reconObservationRequested.connect(self.recon_tab.receive_scraper_observations)
 
+        self.tools_tab = ToolsTab(self.recon_tab)
+        tools_index = self.ui.tabWidget.addTab(self.tools_tab, "Tools")
+        self.ui.tabWidget.setTabToolTip(tools_index, "External tool workspaces with explicit execution approval.")
+
         # Добавляем UI shell вкладки для будущих модулей.
         self._add_placeholder_tabs()
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        if event.isAccepted():
+            self.recon_tab.close()
 
     def _add_placeholder_tabs(self):
         tabs = [

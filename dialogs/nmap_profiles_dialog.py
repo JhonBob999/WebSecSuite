@@ -59,7 +59,7 @@ class NmapProfilesDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(10)
         ui.configurationNotice = self._label(
-            "Configuration-only editor · Run supported profiles from Tool Inspector after capability and scope checks. "
+            "Configuration-only editor · Run supported profiles from Tools → Nmap after capability and scope checks. "
             "The existing Quick Network Discovery action and Local Self-Test keep their current settings. "
             "Selecting or saving a profile grants no authorization and starts no scan."
         )
@@ -409,7 +409,7 @@ class NmapProfilesDialog(QDialog):
                 widget.setReadOnly(profile.is_builtin)
         ui.profileKind.setText(
             "Built-in · Read-only. Duplicate to edit."
-            if profile.is_builtin else "Custom · Editable · Execution eligibility is checked in Tool Inspector."
+            if profile.is_builtin else "Custom · Editable · Execution eligibility is checked in Tools → Nmap."
         )
         self._baseline = self._field_values()
         self._loading = False
