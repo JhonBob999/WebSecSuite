@@ -128,3 +128,75 @@ def test_offline_recon_controls_preserve_scraper_results_and_viewer(
     assert scraper.table_ctl.task_id_by_row(0) == task_id
     assert scraper.task_results[task_id] == payload
     assert scraper.task_manager.is_idle()
+
+
+def test_offline_asset_inventory_preserves_targets_scraper_and_full_viewer_payload(
+    recon_window, qapp, monkeypatch, tmp_path,
+):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from dialogs.results_viewer_dialog import UniversalViewerDialog
+
+    window = recon_window
+    recon, scraper = window.recon_tab, window.scraper_tab
+    scraper.add_task_row("https://scraper.example.test")
+    task_id = scraper.table_ctl.task_id_by_row(0)
+    payload = {
+        "url": "https://scraper.example.test", "status_code": 200,
+        "request_recipe": {"method": "GET", "url": "https://scraper.example.test"},
+        "response_snapshot": {"body_preview": "preserved offline evidence"},
+        "custom": {"preserve": [1, 2, 3]},
+    }
+    scraper.on_task_result(task_id, payload)
+    window.ui.tabWidget.setCurrentWidget(recon)
+    recon.ui.manualInput.setText("target.example.test")
+    recon.ui.btnAddTarget.click()
+    recon.ui.btnSelectAll.click()
+    recon.ui.reconPages.setCurrentIndex(1)
+    qapp.processEvents()
+    assert recon.ui.assetTable.isVisible()
+    fixture = Path(__file__).parents[1] / "fixtures" / "recon_observations_v1.json"
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(fixture), ""))
+    recon.ui.btnImportObservations.click()
+    assert recon.asset_model.rowCount() == 6
+    recon.ui.assetSearch.setText("EXAMPLE.COM")
+    recon.ui.assetTypeFilter.setCurrentIndex(recon.ui.assetTypeFilter.findData("hostname"))
+    recon.ui.sourceFilter.setCurrentIndex(recon.ui.sourceFilter.findData("synthetic-import"))
+    assert recon.asset_proxy.rowCount() == 1
+    recon.ui.assetTable.selectRow(0)
+    viewed = []
+    monkeypatch.setattr(UniversalViewerDialog, "exec", lambda dialog: viewed.append(dialog._payload))
+    recon.ui.btnAssetDetails.click()
+    assert viewed[0]["value"] == "example.com"
+    assert set(viewed[0]["sources"]) == {"synthetic-dns", "synthetic-import"}
+    assert len(viewed[0]["observations"]) == 2
+    assert viewed[0]["observations"][0]["evidence"]
+    invalid = tmp_path / "invalid-observations.json"
+    invalid.write_text("not json", encoding="utf-8")
+    assert not recon.import_observations_file(invalid)
+    assert recon.asset_model.rowCount() == 6
+    assert recon.asset_proxy.rowCount() == 1
+    assert recon.ui.btnAssetDetails.isEnabled()
+    assert recon.target_model.rowCount() == recon.target_model.selected_count == 1
+    assert recon.target_model.data(recon.target_model.index(0, recon.target_model.SCOPE)) == "Unreviewed"
+    recon.ui.reconPages.setCurrentIndex(0)
+    qapp.processEvents()
+    assert recon.ui.targetTable.isVisible()
+    recon.ui.btnRemoveSelected.click()
+    assert recon.target_model.rowCount() == 0
+    assert recon.asset_model.rowCount() == 6
+    recon.ui.manualInput.setText("clear.example.test")
+    recon.ui.btnAddTarget.click()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    recon.ui.btnClearTargets.click()
+    assert recon.target_model.rowCount() == 0
+    assert recon.asset_model.rowCount() == 6
+    assert recon.asset_proxy.rowCount() == 1
+    assert scraper.ui.taskTable.rowCount() == 1
+    assert scraper.table_ctl.task_id_by_row(0) == task_id
+    assert scraper.task_results[task_id] == payload
+    assert scraper.task_manager.is_idle()
+    scraper.open_results_viewer_for_row(0)
+    assert viewed[-1] == payload

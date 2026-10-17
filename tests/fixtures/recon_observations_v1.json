@@ -1,0 +1,39 @@
+{
+  "schema": "websecsuite.recon.observations",
+  "version": 1,
+  "run_id": "synthetic-run-1",
+  "observations": [
+    {
+      "id": "hostname-example", "type": "hostname", "source": "synthetic-dns",
+      "value": "EXAMPLE.COM.", "confidence": 0.9,
+      "evidence": [{"ref": "fixture:dns/example", "kind": "synthetic", "metadata": {"address": "192.0.2.10"}}]
+    },
+    {
+      "id": "hostname-idna", "type": "hostname", "source": "synthetic-dns",
+      "value": "bücher.example", "confidence": 0.8,
+      "evidence": [{"ref": "fixture:dns/idna", "metadata": {"address": "192.0.2.10"}}]
+    },
+    {
+      "id": "ipv4-example", "type": "ip", "source": "synthetic-import", "value": "192.0.2.10",
+      "evidence": [{"ref": "fixture:addresses/ipv4", "kind": "synthetic"}]
+    },
+    {
+      "id": "ipv6-example", "type": "ip", "source": "synthetic-import", "value": "2001:0DB8:0:0::10",
+      "evidence": [{"ref": "fixture:addresses/ipv6", "kind": "synthetic"}]
+    },
+    {
+      "id": "service-tcp", "type": "service", "source": "synthetic-services", "host": "192.0.2.10",
+      "transport": "tcp", "port": 443, "service_name": "https", "confidence": 0.7,
+      "evidence": [{"ref": "fixture:services/tcp443", "metadata": {"note": "Imported synthetic signal only"}}]
+    },
+    {
+      "id": "service-udp", "type": "service", "source": "synthetic-services", "host": "192.0.2.10",
+      "transport": "udp", "port": 443, "service_name": "quic",
+      "evidence": [{"ref": "fixture:services/udp443"}]
+    },
+    {
+      "id": "hostname-second-source", "type": "hostname", "source": "synthetic-import", "value": "example.com",
+      "evidence": [{"ref": "fixture:import/example", "metadata": {"note": "Second source for the same asset"}}]
+    }
+  ]
+}
