@@ -176,7 +176,7 @@ class ScraperTabController(QWidget):
             cb_whole=self.ui.cbFindWhole,
             counter_label=self.ui.lblFindHits,
             export_btn=self.ui.btnExportMatches,
-            root_dir="data/logs",
+            root_dir=str(project_root() / "data" / "logs"),
         )
         self.ui.btnFindPrev.clicked.connect(self.log.navigate_prev)
         self.ui.btnFindNext.clicked.connect(self.log.navigate_next)
@@ -223,11 +223,6 @@ class ScraperTabController(QWidget):
         table.itemSelectionChanged.connect(self._on_task_selection_changed)
         table.currentCellChanged.connect(self._on_task_current_cell_changed)
 
-
-        # 5) Демонстрационные задачи (можно оставить для проверки)
-        self.add_task_row("https://delfi.lv")
-        self.add_task_row("https://cnn.com")
-        self.add_task_row("https://github.com")
 
         # Остальные внутренние подключения
         self._init_ui_connections()
@@ -702,7 +697,7 @@ class ScraperTabController(QWidget):
         
     def _ask_export_path_log(self):
         ts = QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")
-        suggested = os.path.join("data", "exports", f"log_search_{ts}.txt")
+        suggested = str(project_root() / "data" / "exports" / f"log_search_{ts}.txt")
         os.makedirs(os.path.dirname(suggested), exist_ok=True)
         path, _ = QFileDialog.getSaveFileName(
             self.ui.taskTable, "Export matches", suggested, "Text (*.txt);;JSON (*.json)"
@@ -1375,7 +1370,9 @@ class ScraperTabController(QWidget):
         ts = time.strftime("%Y%m%d_%H%M%S")
         default_name = f"export_{mode.lower()}_{ts}.csv"  # CSV по умолчанию
         settings = QSettings("WebSecSuite", "Scraper")
-        last_dir = settings.value("export/last_dir", str(Path("data") / "exports"))
+        last_dir = settings.value("export/last_dir", str(project_root() / "data" / "exports"))
+        if Path(last_dir) == Path("data") / "exports":
+            last_dir = project_root() / last_dir
         Path(last_dir).mkdir(parents=True, exist_ok=True)
 
         path, selected_filter = QFileDialog.getSaveFileName(
@@ -1641,13 +1638,13 @@ class ScraperTabController(QWidget):
         """
         if cookie_file:
             p = Path(cookie_file)
-            return p if p.is_absolute() else (Path("data") / "cookies" / p)
+            return p if p.is_absolute() else (project_root() / "data" / "cookies" / p)
         host = (urlparse(url).hostname or "default").lstrip(".")
-        return Path("data") / "cookies" / f"cookies_{host}.json"
+        return project_root() / "data" / "cookies" / f"cookies_{host}.json"
 
 
     def _open_cookie_dir(self):
-        path = Path("data") / "cookies"
+        path = project_root() / "data" / "cookies"
         path.mkdir(parents=True, exist_ok=True)
 
         # Кроссплатформенно через Qt; на Windows откроет Проводник
@@ -1812,7 +1809,7 @@ class ScraperTabController(QWidget):
             if not cookie_path:
                 url = getattr(task, "final_url", None) or getattr(task, "url", None) or ""
                 dom = urlparse(url).hostname or "unknown"
-                cookie_path = os.path.join("data", "cookies", f"cookies_{dom}.json")
+                cookie_path = str(project_root() / "data" / "cookies" / f"cookies_{dom}.json")
 
             data = None
             if load_cookiejar_as_json and os.path.exists(cookie_path):
@@ -2081,11 +2078,9 @@ class ScraperTabController(QWidget):
         timings = payload.get("timings", {}) or {}
         self.set_time_cell(row, timings.get("request_ms"))
 
-        # Подсказка по редиректам в статусе
-        redirects = payload.get("redirect_chain", []) or []
         st_item = self.ui.taskTable.item(row, Col.Status)
         if st_item:
-            st_item.setToolTip(f"{TaskStatus.DONE} • redirects: {len(redirects)}")
+            st_item.setToolTip("")
 
 
         params = dict(getattr(task, "params", {}) or {}) if task else {}
@@ -2095,14 +2090,7 @@ class ScraperTabController(QWidget):
         # 4) >>> ЗАПОЛНЯЕМ КОЛОНКУ Results <<<
         # краткое резюме в ячейку
         summary = self._format_result_short(payload)   # уже есть у тебя
-        # красивый JSON в tooltip (если нет хелпера, можно через json.dumps)
-        try:
-            import json
-            tooltip = json.dumps(payload, ensure_ascii=False, indent=2)
-        except Exception:
-            tooltip = str(payload)
-
-        self.set_results_cell(row, summary, tooltip)
+        self.set_results_cell(row, summary)
         if self.ui.taskTable.currentRow() == row:
             self._refresh_task_inspector_for_current()
 

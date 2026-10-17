@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.viewer_keyword_packs import keyword_pack_names, keywords_for_pack
+from core.paths import project_root
 
 
 _MAX_KEYWORD_REPORT_MATCHES_PER_KEYWORD = 200
@@ -378,7 +379,7 @@ Pretty / Raw JSON
     def _save_to_file(self):
         self._clear_jump_line_highlight()
         default_name = f"{self._default_save_stem}.json" if self._pretty_mode else f"{self._default_save_stem}.txt"
-        default_path = str(Path("data") / "exports" / default_name)
+        default_path = str(project_root() / "data" / "exports" / default_name)
         path, _ = QFileDialog.getSaveFileName(
             self,
             self._save_dialog_title,
@@ -401,7 +402,7 @@ Pretty / Raw JSON
             return
 
         selected_text = cursor.selectedText().replace("\u2029", "\n")
-        default_path = str(Path("data") / "exports" / f"{self._default_save_stem}_selection.txt")
+        default_path = str(project_root() / "data" / "exports" / f"{self._default_save_stem}_selection.txt")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Selected Text",
@@ -464,7 +465,7 @@ Pretty / Raw JSON
             QMessageBox.information(self, "Export Search Matches", "No search matches to export.")
             return
 
-        default_path = str(Path("data") / "exports" / f"{self._default_save_stem}_matches.txt")
+        default_path = str(project_root() / "data" / "exports" / f"{self._default_save_stem}_matches.txt")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Search Matches",

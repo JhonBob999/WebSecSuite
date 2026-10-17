@@ -6,8 +6,6 @@ from PySide6.QtCore import Qt, QSettings, QPoint
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu
 from PySide6.QtGui import QAction
 
-import json
-
 SETTINGS_KEY = "ui/taskTable/widths_v2"
 
 DEFAULT_WIDTHS = {
@@ -187,6 +185,8 @@ class TaskTableController:
         if item is None:
             item = QTableWidgetItem()
             t.setItem(row, col, item)
+        if col != Col.URL:
+            item.setToolTip("")
         return item
 
     def selected_rows(self) -> List[int]:
@@ -250,7 +250,7 @@ class TaskTableController:
         row: int,
         payload: dict | None = None,       # вариант 1: даём полный payload
         summary: str | None = None,        # вариант 2: даём краткий текст
-        payload_short: str | None = None,  # tooltip/короткая версия payload
+        payload_short: str | None = None,  # retained for existing callers
     ) -> None:
         
         item = self.ensure_item(row, Col.Results)
@@ -262,7 +262,7 @@ class TaskTableController:
             item.setData(Qt.TextAlignmentRole, Qt.AlignLeft | Qt.AlignVCenter)
             return
 
-        # Вариант 1: есть полный payload -> строим краткое резюме и prettified tooltip
+        # Full details are available through Universal Viewer; keep only the summary.
         if payload is not None:
             code = payload.get("status_code")
             size = payload.get("content_len")
@@ -288,18 +288,11 @@ class TaskTableController:
 
             summary = f"{code_txt} · {size_txt} · {ms_txt} · r={red}"
 
-            try:
-                payload_short = json.dumps(payload, ensure_ascii=False, indent=2)
-            except Exception:
-                payload_short = str(payload)
-
-        # Вариант 2: нам уже дали готовые summary / payload_short
         text = summary or ""
-        tip  = payload_short or ("No results yet" if not text else "")
 
         item.setText(text)
         item.setData(Qt.TextAlignmentRole, Qt.AlignLeft | Qt.AlignVCenter)
-        item.setToolTip(tip)
+        item.setToolTip("")
 
 
 
@@ -309,9 +302,7 @@ class TaskTableController:
         p = params or {}
 
         cookie_mode = (p.get("cookie_mode") or "").strip().lower()  # "auto" | "custom" | "none"
-        cookies_source = (p.get("cookies_source") or "").strip().lower()  # "auto" | "manual" | ""
         cookies_count = int(p.get("cookies_count") or 0)
-        cookie_file = (p.get("cookie_file") or "").strip()
 
         # --- Иконка ---
         # Правило:
@@ -328,17 +319,6 @@ class TaskTableController:
 
         it.setText(icon)
 
-        # --- Tooltip ---
-        tip_lines = []
-        if cookie_file:
-            tip_lines.append(f"Path: {cookie_file}")
-        tip_lines.append(f"Loaded: {cookies_count}")
-        if cookie_mode:
-            tip_lines.append(f"Mode: {cookie_mode}")
-        if cookies_source:
-            tip_lines.append(f"Source: {cookies_source}")
-
-        it.setToolTip("\n".join(tip_lines))
         it.setData(Qt.TextAlignmentRole, Qt.AlignCenter)
 
 
@@ -364,7 +344,7 @@ class TaskTableController:
             Col.Status:  "Текущий статус задачи (PENDING / RUNNING / DONE / FAILED / STOPPED)",
             Col.Code:    "HTTP-код ответа сервера (последнего запроса)",
             Col.Time:    "Время запроса, мс (timings.request_ms)",
-            Col.Results: "Краткое резюме результата; полный JSON — в tooltip ячейки",
+            Col.Results: "Краткое резюме результата; полный JSON — в Universal Viewer",
             Col.Cookies: "Куки-файл, используемый задачей (авто по домену или кастомный путь)",
             Col.Params:  "Параметры запроса: метод, proxy, headers, user-agent и т.д.",
         }

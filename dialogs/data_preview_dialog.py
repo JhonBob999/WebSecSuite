@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 from core.metadata import build_preview_field_entity_key
+from core.paths import project_root
 from dialogs.results_viewer_dialog import UniversalViewerDialog
 
 from dialogs.ui.data_preview_dialog_ui import Ui_DataPreviewDialog  # сгенерённый класс
@@ -861,13 +862,6 @@ class DataPreviewDialog(QDialog):
             return
 
         QMessageBox.information(self, "Export", f"Saved {len(records)} rows →\n{path}")
-        # опционально: открыть папку
-        try:
-            folder = os.path.dirname(os.path.abspath(path))
-            QFileDialog.getOpenFileName(self, "Open folder", folder)  # дешёвый трюк, можно убрать
-        except Exception:
-            logger.debug("Failed to open export folder picker", exc_info=True)
-
         # если хочешь отдать в лог ScraperTab:
         if hasattr(self, "export_done"):
             try: self.export_done.emit(path, len(records))
@@ -943,7 +937,7 @@ class DataPreviewDialog(QDialog):
         Возвращает (path, fmt) где fmt in {'csv','json','xlsx'}.
         """
         # дефолтная папка
-        base_dir = os.path.join("data", "exports")
+        base_dir = str(project_root() / "data" / "exports")
         os.makedirs(base_dir, exist_ok=True)
 
         ts = QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")

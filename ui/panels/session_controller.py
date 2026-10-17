@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QDateTime
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QTableWidgetSelectionRange
 
 from core.paths import project_root
 from core.scraper.task_types import ScrapeTask, TaskStatus
@@ -17,6 +17,8 @@ from core.session_persistence import (
     extract_annotation_store,
     load_session,
     save_session,
+    session_contains_sensitive_data,
+    validate_session_data,
 )
 from ui.constants import Col
 
@@ -167,6 +169,18 @@ class SessionController:
 
         try:
             session = self.collect_snapshot()
+            if session_contains_sensitive_data(session):
+                answer = QMessageBox.warning(
+                    self.parent,
+                    "Save Session",
+                    "Session files are plaintext and may contain authentication headers, "
+                    "cookies or proxy credentials. Save only to a trusted location.\n\n"
+                    "Save this session with these values included?",
+                    QMessageBox.Save | QMessageBox.Cancel,
+                    QMessageBox.Cancel,
+                )
+                if answer != QMessageBox.Save:
+                    return
             save_session(path, session)
         except Exception as exc:
             self.log_panel.append("ERROR", f"Save session failed: {exc}", tag="SESSION")
@@ -228,7 +242,17 @@ class SessionController:
         return False
 
     def restore_snapshot(self, session: dict) -> int:
+        if self._has_active_or_running_tasks():
+            raise ValueError("Cannot load a session while tasks are running. Stop active tasks first.")
+
+        # Validate and construct every task before touching the current workspace.
+        session = validate_session_data(session)
+        prepared = self._prepare_session_tasks(session)
+        annotations = extract_annotation_store(session)
         table = self.table_ctl.table
+        previous = self._capture_restore_state()
+        signals_blocked = table.signalsBlocked()
+        updates_enabled = table.updatesEnabled()
         table.setUpdatesEnabled(False)
         table.blockSignals(True)
         try:
@@ -237,31 +261,14 @@ class SessionController:
             self.parent.task_results.clear()
             self.task_manager._tasks.clear()
             self.task_manager._runnables.clear()
+            self.parent.annotation_store = annotations
 
-            loaded = 0
-            for entry in session.get("tasks") or []:
-                if not isinstance(entry, dict):
-                    continue
-                task_id = str(entry.get("id") or "").strip()
-                url = str(entry.get("url") or "").strip()
-                if not task_id or not url:
-                    self.log_panel.append("WARN", "Skipped session task without id/url", tag="SESSION")
-                    continue
-
-                params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
-                result = deepcopy(entry.get("result")) if entry.get("result") is not None else None
-                status_text = self._coerce_loaded_session_status(entry.get("status"))
-                progress = self._session_progress_value(entry.get("progress"))
-                task = ScrapeTask(id=task_id, url=url, params=deepcopy(params))
-                task.status = TaskStatus(status_text)
-                task.progress = progress
-                task.result = result
-                created_at = self._parse_session_created_at(entry.get("created_at"))
-                if created_at is not None:
-                    task.created_at = created_at
+            for task, cached_result in prepared:
+                task_id, url, params = task.id, task.url, task.params
+                status_text, progress, result = task.status.value, task.progress, task.result
                 self.task_manager._tasks[task_id] = task
                 if result is not None:
-                    self.parent.task_results[task_id] = deepcopy(result)
+                    self.parent.task_results[task_id] = cached_result
 
                 row = table.rowCount()
                 table.insertRow(row)
@@ -279,16 +286,84 @@ class SessionController:
                 }
                 self.parent.set_params_cell(row, str(params_light) if params_light else "")
                 self.parent._row_by_task_id[task_id] = row
-                loaded += 1
-        finally:
-            table.blockSignals(False)
-            table.setUpdatesEnabled(True)
 
-        self._restore_session_selection(session)
-        self.parent.annotation_store = extract_annotation_store(session)
-        self.parent.actions.refresh_task_annotation_visuals()
-        self.parent._refresh_task_inspector_for_current()
-        return loaded
+            self._restore_session_selection(session)
+            self.parent.actions.refresh_task_annotation_visuals()
+            self.parent._refresh_task_inspector_for_current()
+        except Exception as exc:
+            # Restore original objects and cloned cells without calling failed setters.
+            self._rollback_restore(previous)
+            try:
+                self.parent._refresh_task_inspector_for_current()
+            except Exception:
+                self.log_panel.append("WARN", "Workspace restored, but inspector refresh failed", tag="SESSION")
+            raise RuntimeError("Could not restore session. The previous workspace was restored.") from exc
+        finally:
+            table.blockSignals(signals_blocked)
+            table.setUpdatesEnabled(updates_enabled)
+
+        return len(prepared)
+
+    def _prepare_session_tasks(self, session: dict) -> list:
+        prepared = []
+        for index, entry in enumerate(session["tasks"], start=1):
+            try:
+                task = ScrapeTask(
+                    id=entry["id"].strip(), url=entry["url"].strip(),
+                    params=deepcopy(entry.get("params", {})),
+                )
+                task.status = TaskStatus(self._coerce_loaded_session_status(entry.get("status")))
+                task.progress = self._session_progress_value(entry.get("progress"))
+                task.result = deepcopy(entry.get("result"))
+                created_at = self._parse_session_created_at(entry.get("created_at"))
+                if created_at is not None:
+                    task.created_at = created_at
+                prepared.append((task, deepcopy(task.result)))
+            except Exception as exc:
+                raise ValueError(f"Invalid session task {index}: could not prepare task parameters or result.") from exc
+        return prepared
+
+    def _capture_restore_state(self) -> dict:
+        table = self.table_ctl.table
+        return {
+            "tasks": dict(self.task_manager._tasks),
+            "runnables": dict(self.task_manager._runnables),
+            "results": dict(self.parent.task_results),
+            "rows": dict(self.parent._row_by_task_id),
+            "annotations": self.parent.annotation_store,
+            "cells": [
+                [table.item(row, col).clone() if table.item(row, col) is not None else None
+                 for col in range(table.columnCount())]
+                for row in range(table.rowCount())
+            ],
+            "current": (table.currentRow(), table.currentColumn()),
+            "selection": [
+                (r.topRow(), r.leftColumn(), r.bottomRow(), r.rightColumn())
+                for r in table.selectedRanges()
+            ],
+        }
+
+    def _rollback_restore(self, previous: dict) -> None:
+        for target, key in (
+            (self.task_manager._tasks, "tasks"),
+            (self.task_manager._runnables, "runnables"),
+            (self.parent.task_results, "results"),
+            (self.parent._row_by_task_id, "rows"),
+        ):
+            target.clear()
+            target.update(previous[key])
+        self.parent.annotation_store = previous["annotations"]
+        table = self.table_ctl.table
+        table.setRowCount(0)
+        table.setRowCount(len(previous["cells"]))
+        for row, cells in enumerate(previous["cells"]):
+            for col, item in enumerate(cells):
+                if item is not None:
+                    table.setItem(row, col, item)
+        table.setCurrentCell(*previous["current"])
+        table.clearSelection()
+        for selection in previous["selection"]:
+            table.setRangeSelected(QTableWidgetSelectionRange(*selection), True)
 
     def _restore_loaded_result_cells(self, row: int, result) -> None:
         if isinstance(result, dict) and result:
