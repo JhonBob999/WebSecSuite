@@ -101,7 +101,10 @@ def test_initialization_has_gated_local_action_without_program_execution(recon):
     assert "Process safety not validated" in recon.ui.nmapAdapterLabel.text()
     assert "Setup required" in recon.ui.nmapStatusLabel.text()
     assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
-        "Refresh Detection", "Public Target Preflight", "Choose Nmap…", "Local Self-Test", "Stop", "Public Scan",
+        "Refresh Detection", "Choose Subfinder…", "Choose official archive…",
+        "Verify / approve executable", "Public Target Preflight", "Choose Nmap…",
+        "Local Self-Test", "Stop", "Public Scan", "Run Passive Discovery", "Stop Subfinder",
+        "Run / Import History",
     ]
 
 

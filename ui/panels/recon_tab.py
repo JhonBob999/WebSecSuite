@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from core.recon.inventory import AssetInventory
 from core.recon.nmap_runtime import NmapRuntime
+from core.recon.subfinder_runtime import SubfinderRuntime
 from core.recon.observations import ObservationImportError
 from core.recon.tool_discovery import ToolDiscoveryService
 from core.recon.targets import (
@@ -23,6 +24,7 @@ from ui.recon_asset_model import ReconAssetFilterProxy, ReconAssetModel
 from ui.recon_target_model import ImportIssueModel, ReconTargetModel
 from ui.recon_tool_info import TOOL_NAMES, ToolInformationView
 from ui.recon_public_nmap import NmapPublicControls
+from ui.recon_subfinder import SubfinderControls
 
 
 class ReconTab(QWidget):
@@ -37,6 +39,7 @@ class ReconTab(QWidget):
         self.asset_proxy.setSourceModel(self.asset_model)
         self.tool_discovery = ToolDiscoveryService()
         self.nmap_runtime = NmapRuntime(self.asset_inventory, self)
+        self.subfinder_runtime = SubfinderRuntime(self.asset_inventory, self)
         self._nmap_candidate_path = ""
         self._tool_inspector_width = 340
         self._build_ui()
@@ -72,6 +75,7 @@ class ReconTab(QWidget):
         self.ui.btnStopNmap.clicked.connect(self.nmap_runtime.stop)
         self.nmap_runtime.changed.connect(self._refresh_nmap_runtime)
         self.nmap_runtime.inventory_changed.connect(self._refresh_asset_inventory)
+        self.subfinder_runtime.inventory_changed.connect(self._refresh_asset_inventory)
         self._update_counts()
         self._update_asset_counts()
         self._refresh_tool_detection()
@@ -201,7 +205,7 @@ class ReconTab(QWidget):
         self.ui.toolManager = QGroupBox("Tool Inspector")
         tools_layout = QVBoxLayout(self.ui.toolManager)
         tools_layout.setSpacing(8)
-        self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap scans require setup and confirmation.")
+        self.ui.toolDetectionStatus = QLabel("Detection is read-only; Nmap and Subfinder require setup and confirmation.")
         self.ui.toolDetectionStatus.setTextFormat(Qt.PlainText)
         self.ui.toolDetectionStatus.setWordWrap(True)
         self.ui.toolDetectionStatus.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -273,6 +277,8 @@ class ReconTab(QWidget):
             execution.addWidget(button)
         self.ui.toolInfo.section_layouts["execution"].addWidget(self.ui.nmapExecution)
         self.public_nmap_controls = NmapPublicControls(self)
+        self.subfinder_controls = SubfinderControls(self)
+        self.subfinder_controls.set_visible(False)
         return self.ui.toolManager
 
     def _select_inspector_tool(self):
@@ -283,6 +289,7 @@ class ReconTab(QWidget):
         self.ui.nmapInstallation.setVisible(tool_id == "nmap")
         self.ui.nmapExecution.setVisible(tool_id == "nmap")
         self.public_nmap_controls.set_visible(tool_id == "nmap")
+        self.subfinder_controls.set_visible(tool_id == "subfinder")
         self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
 
     def _toggle_tool_inspector(self):
@@ -342,7 +349,7 @@ class ReconTab(QWidget):
             if record.tool_id == "nmap" and record.status.name == "CANDIDATE_UNVERIFIED":
                 self._nmap_candidate_path = record.executable_path or ""
         self.ui.toolDetectionStatus.setText(
-            "Detection is read-only; Nmap scans require setup and confirmation."
+            "Detection is read-only; Nmap and Subfinder require setup and confirmation."
         )
         self.ui.toolDiagnostic.setText(self.ui.toolLabels[self.ui.toolSelector.currentData()].toolTip())
 
@@ -399,6 +406,7 @@ class ReconTab(QWidget):
 
     def closeEvent(self, event):
         self.nmap_runtime.shutdown(immediate=True)
+        self.subfinder_runtime.shutdown(immediate=True)
         super().closeEvent(event)
 
     def _build_asset_inventory(self):

@@ -119,20 +119,26 @@ def test_clear_requires_confirmation_and_remove_uses_checkboxes(recon, monkeypat
     assert recon.target_model.rowCount() == recon.target_model.selected_count == 0
 
 
-def test_tool_manager_keeps_other_tools_detection_only_and_gates_local_nmap(recon):
+def test_tool_manager_keeps_httpx_ffuf_detection_only_and_gates_live_tools(recon):
     from PySide6.QtWidgets import QLabel, QPushButton
 
     labels = "\n".join(label.text() for label in recon.findChildren(QLabel))
     for name in ("Subfinder", "ProjectDiscovery httpx", "Nmap", "FFUF"):
         assert name in labels
     assert recon.ui.btnRefreshDetection.text() == "Refresh Detection"
-    for tool_id in ("subfinder", "httpx", "ffuf"):
+    for tool_id in ("httpx", "ffuf"):
         recon.ui.toolSelector.setCurrentIndex(recon.ui.toolSelector.findData(tool_id))
         information = "\n".join(label.text() for label in recon.ui.toolInfo.labels.values()).lower()
         assert "compatibility unverified" in information
         assert "adapter not connected" in information
         assert "execution disabled" in information
         assert recon.ui.nmapExecution.isHidden()
+        assert recon.ui.subfinderExecution.isHidden()
+    recon.ui.toolSelector.setCurrentIndex(recon.ui.toolSelector.findData("subfinder"))
+    assert not recon.ui.subfinderExecution.isHidden()
+    assert not recon.ui.btnApproveSubfinder.isEnabled()
+    assert not recon.ui.btnRunSubfinder.isEnabled()
+    assert not recon.ui.btnStopSubfinder.isEnabled()
     recon.ui.toolSelector.setCurrentIndex(recon.ui.toolSelector.findData("nmap"))
     assert "authorization" in labels.lower()
     assert "discovered assets" in labels.lower()

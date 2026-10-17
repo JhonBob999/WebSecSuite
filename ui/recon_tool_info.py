@@ -66,25 +66,41 @@ _TOOL_INFORMATION = {
         "overview": (
             "Find subdomain names through passive external sources. Typical "
             "recon use: expand a domain's candidate attack surface. Coverage "
-            "depends on source data and configured provider credentials; names "
+            "depends on available source data; names "
             "are not proof of live or authorized assets."
         ),
         "installation": (
-            "WebSecSuite detects local native candidates only: compatibility "
-            "unverified; version not verified; adapter not connected. No "
-            "installation or provider configuration is performed here."
+            "Choose subfinder.exe and its official v2.17.0 Windows amd64 or arm64 "
+            "release ZIP already on disk. Explicit approval checks the pinned "
+            "release SHA-256 and executable bytes before a bounded version check. "
+            "Nothing is downloaded, installed or configured."
         ),
-        "profiles": "None implemented in WebSecSuite; execution options unavailable.",
+        "profiles": (
+            "Passive Standard: exactly one checked, valid Target Manager hostname. "
+            "Confirm authorization for this exact root on every attempt. Exclusions "
+            "override confirmation. No active resolution, recursion, all-sources "
+            "mode or custom flags."
+        ),
         "network": (
-            "When run independently, passive discovery queries external data "
-            "providers, whose rate limits and logging apply. Review domain "
-            "authorization and provider terms. WebSecSuite detection here reads "
-            "local metadata only; no network requests."
+            "Passive discovery sends third-party API requests that disclose the "
+            "selected root and may be logged. Provider terms and rate limits "
+            "apply. User provider configuration and credentials are not loaded; "
+            "sources requiring keys are unavailable. Fixed limits: -rl 2 (2 requests/s), -timeout 15 "
+            "(seconds), -max-time 2 (minutes); application timeout 150 seconds. "
+            "Local detection makes no network requests."
         ),
-        "execution": "Execution disabled. No Subfinder runtime or Stop action is connected.",
+        "execution": (
+            "Requires the verified executable, process containment, one checked "
+            "hostname and fresh default-No confirmation of scope and provider "
+            "requests. Stop cancels the current operation. Nmap approvals do not "
+            "authorize Subfinder."
+        ),
         "results": (
-            "No Subfinder contributions to Asset Inventory or run history "
-            "currently; detection reports only a local candidate."
+            "Validated successful output adds unverified hostname candidates to "
+            "Asset Inventory and Run / Import History with Subfinder provenance. "
+            "Results do not prove reachability, ownership, authorization or a "
+            "vulnerability. Names are not probed or scanned automatically. "
+            "Zero results is valid."
         ),
     },
     "httpx": {

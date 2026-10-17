@@ -16,7 +16,7 @@ from enum import Enum
 import os
 from uuid import uuid4
 
-from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from core.recon.execution_policy import ExecutionPolicy, ExecutionPolicyError, ValidatedExecutionSpec
 from core.recon.windows_process import WindowsJobProcess, process_safety_status
@@ -192,6 +192,13 @@ class ProcessSupervisor(QObject):
             process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
             process.setProgram(job.spec._plan.program)
             process.setArguments(list(job.spec._plan.arguments))
+            if job.spec._plan.environment is not None:
+                environment = QProcessEnvironment()
+                for key, value in job.spec._plan.environment:
+                    environment.insert(key, value)
+                process.setProcessEnvironment(environment)
+            if job.spec._plan.working_directory is not None:
+                process.setWorkingDirectory(job.spec._plan.working_directory)
             if isinstance(process, WindowsJobProcess):
                 process.setPreflightValidator(lambda: self._policy.validate(job.spec))
             process.started.connect(lambda: self._started(job))

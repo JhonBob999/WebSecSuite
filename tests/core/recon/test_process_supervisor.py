@@ -73,6 +73,12 @@ class FakeProcess(QObject):
         assert type(values) is list
         self.arguments = values
 
+    def setProcessEnvironment(self, environment):
+        self.environment = environment
+
+    def setWorkingDirectory(self, directory):
+        self.directory = directory
+
     def setProcessChannelMode(self, mode):
         assert mode == QtProcess.ProcessChannelMode.SeparateChannels
 

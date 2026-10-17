@@ -101,6 +101,8 @@ class _AdapterPlan:
     arguments: tuple[str, ...]
     targets: tuple[str, ...]
     timeout_ms: int = 30_000
+    environment: tuple[tuple[str, str], ...] | None = None
+    working_directory: str | None = None
 
 
 class _TrustedAdapter(Protocol):
@@ -142,7 +144,10 @@ _ISSUED_SPECS: WeakKeyDictionary[ValidatedExecutionSpec, bool] = WeakKeyDictiona
 def _validate_plan(plan: _AdapterPlan, approval: object, *, adapter_id=None, adapter=None) -> _AdapterPlan:
     if type(plan) is not _AdapterPlan:
         raise ExecutionPolicyError("Trusted adapter did not return a typed plan.")
-    if type(approval) is ScopeApproval:
+    if adapter_id in {"subfinder.version-check", "subfinder.passive-standard"}:
+        from core.recon.subfinder_adapter import _validate_subfinder_plan
+        _validate_subfinder_plan(adapter_id, adapter, plan, approval)
+    elif type(approval) is ScopeApproval:
         decision = preflight_scope(plan.targets, approval)
         if not decision.allowed:
             raise ExecutionPolicyError(decision.reason)
@@ -176,7 +181,24 @@ def _validate_plan(plan: _AdapterPlan, approval: object, *, adapter_id=None, ada
             raise OSError
     except (OSError, ValueError):
         raise ExecutionPolicyError("Adapter executable is missing, unsuitable, or a shell.") from None
-    return _AdapterPlan(str(resolved), plan.arguments, plan.targets, plan.timeout_ms)
+    if plan.environment is not None:
+        if (type(plan.environment) is not tuple or not plan.environment
+                or any(type(pair) is not tuple or len(pair) != 2
+                       or any(type(item) is not str or "\x00" in item for item in pair)
+                       or not pair[0] or "=" in pair[0] for pair in plan.environment)
+                or len({key.casefold() for key, _ in plan.environment}) != len(plan.environment)):
+            raise ExecutionPolicyError("Adapter environment must be explicit immutable text pairs.")
+    if plan.working_directory is not None:
+        from core.recon.tool_discovery import _LocalInspection
+        try:
+            if (not Path(plan.working_directory).is_absolute()
+                    or str(_LocalInspection(os.name == "nt").path(plan.working_directory, directory=True))
+                    != plan.working_directory):
+                raise ValueError
+        except (OSError, ValueError, TypeError):
+            raise ExecutionPolicyError("Adapter working directory must be a safe absolute local directory.") from None
+    return _AdapterPlan(str(resolved), plan.arguments, plan.targets, plan.timeout_ms,
+                        plan.environment, plan.working_directory)
 
 
 class ExecutionPolicy:
@@ -195,7 +217,10 @@ class ExecutionPolicy:
         except Exception:
             # Adapter exceptions can contain credentials/arguments; never echo them.
             raise ExecutionPolicyError("Trusted adapter could not prepare an execution plan.") from None
-        if type(approval) is not ScopeApproval:
+        if adapter_id in {"subfinder.version-check", "subfinder.passive-standard"}:
+            from core.recon.subfinder_adapter import _bind_subfinder_approval
+            _bind_subfinder_approval(approval)
+        elif type(approval) is not ScopeApproval:
             from core.recon.nmap_adapter import _bind_nmap_approval
             _bind_nmap_approval(approval)
         spec = object.__new__(ValidatedExecutionSpec)

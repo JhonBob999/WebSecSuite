@@ -227,6 +227,8 @@ class WindowsJobProcess(QObject):
         self.destroyed.connect(lambda: resources.close())
         self._program = ""
         self._arguments = []
+        self._environment = None
+        self._working_directory = None
         self._preflight_validator = None
         self._state = QProcess.ProcessState.NotRunning
         self._exit_code = 0
@@ -254,6 +256,13 @@ class WindowsJobProcess(QObject):
 
     def setArguments(self, arguments):
         self._arguments = list(arguments)
+
+    def setProcessEnvironment(self, environment):
+        self._environment = tuple(sorted(
+            ((key, environment.value(key)) for key in environment.keys()), key=lambda pair: pair[0].casefold()))
+
+    def setWorkingDirectory(self, directory):
+        self._working_directory = directory
 
     def setPreflightValidator(self, validator):
         """Supply the supervisor's capability check for use under the image lock."""
@@ -312,14 +321,21 @@ class WindowsJobProcess(QObject):
             startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = stdin, out_write, err_write
             startup.attributes = ctypes.cast(attributes, wintypes.LPVOID)
             command = ctypes.create_unicode_buffer(list2cmdline([self._program, *self._arguments]))
+            environment = None
+            creation_flags = 0x08080004
+            if self._environment is not None:
+                environment = ctypes.create_unicode_buffer(
+                    "\x00".join(key + "=" + value for key, value in self._environment) + "\x00\x00")
+                creation_flags |= 0x400  # CREATE_UNICODE_ENVIRONMENT
             # STARTING observers have already run. Lock the selected image,
             # then revalidate its capability/digest before Windows resolves it.
             with locked_executable(self._program):
                 _require(self._preflight_validator is not None)
                 self._preflight_validator()
                 # CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW.
-                _require(api.CreateProcessW(self._program, command, None, None, True, 0x08080004,
-                                            None, None, ctypes.byref(startup), ctypes.byref(info)))
+                _require(api.CreateProcessW(self._program, command, None, None, True, creation_flags,
+                                            environment, self._working_directory,
+                                            ctypes.byref(startup), ctypes.byref(info)))
                 self._process = resources.add(info.process)
                 primary_thread = resources.add(info.thread)
             _require(api.AssignProcessToJobObject(self._job, self._process))

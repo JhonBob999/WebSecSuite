@@ -33,3 +33,5 @@ elif mode == "flood":
         os.write(sys.stderr.fileno(), b"y" * 4096)
 elif mode == "arguments":
     print(json.dumps(sys.argv[2:]), flush=True)
+elif mode == "environment":
+    print(json.dumps({"environment": dict(os.environ), "directory": os.getcwd()}), flush=True)
