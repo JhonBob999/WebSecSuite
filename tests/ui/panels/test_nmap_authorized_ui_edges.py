@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.core.recon.test_nmap_adapter import candidate
+from tests.core.recon.test_nmap_authorized_execution import ready
+from tests.core.recon.test_nmap_public_adapter import tool
+
 
 @pytest.fixture
 def prepared_panel(qapp, tmp_path, monkeypatch):
@@ -111,3 +115,51 @@ def test_version_probes_need_their_explicit_warning_confirmation(prepared_panel,
     assert len(prompts) == 1 and "NSE version engine" in prompts[0]
     assert "version-test" in prompts[0]
     assert not panel.ui.nmapScopeApproval.isChecked()
+
+
+@pytest.mark.parametrize("version_detection, script_ids, script_arguments, expected_arguments", [
+    pytest.param(True, (), (), None, id="version-only-empty-arguments"),
+    pytest.param(False, ("http-title",), (), None, id="selected-script-empty-arguments"),
+    pytest.param(False, ("http-title",),
+        (("http.useragent", "R7B2 UI Agent"), ("http.max-body-size", "4096")),
+        "http.useragent=R7B2 UI Agent,http.max-body-size=4096", id="explicit-safe-arguments"),
+])
+def test_saved_profile_preview_preserves_only_configured_script_arguments(
+        prepared_panel, ready, tmp_path, monkeypatch,
+        version_detection, script_ids, script_arguments, expected_arguments):
+    from core.recon.nmap_authorized_execution import authorized_arguments
+    from core.recon.nmap_profile_store import NmapProfileStore
+    from core.recon.nmap_profiles import BUILTIN_PROFILES, duplicate_profile
+
+    profile = replace(duplicate_profile(BUILTIN_PROFILES[0]),
+        name="R7B2 Version Test", version_detection=version_detection,
+        script_ids=script_ids, script_arguments=script_arguments)
+    path = tmp_path / "preview-profiles.json"
+    NmapProfileStore(path).save(profile)
+    loaded, = NmapProfileStore(path).profiles
+    before = path.read_bytes()
+    panel = prepared_panel
+    controls = panel.authorized_nmap_controls
+    monkeypatch.setattr(controls, "_profile", lambda: loaded)
+    monkeypatch.setattr(panel.nmap_runtime, "authorized_arguments",
+        lambda scope, selected: authorized_arguments(ready[0], scope, selected))
+
+    controls.refresh()
+    preview = panel.ui.nmapAuthorizedPreview.toPlainText()
+    arguments = panel.nmap_runtime.authorized_arguments(controls.preflight.scope, loaded)
+
+    assert not preview.startswith("Plan unavailable:")
+    assert ("-sV" in arguments) is version_detection
+    assert ("-sV" in preview.split()) is version_detection
+    assert arguments[arguments.index("-p") + 1] == "80,443,8080,8443"
+    assert path.read_bytes() == before
+    assert NmapProfileStore(path).profiles[0].script_arguments == script_arguments
+    if expected_arguments is None:
+        assert "--script-args" not in preview
+        assert "<structured-values-redacted>" not in preview
+        assert "--script-args" not in arguments
+    else:
+        assert "--script-args <structured-values-redacted>" in preview
+        assert "R7B2 UI Agent" not in preview
+        assert arguments.count("--script-args") == 1
+        assert arguments[arguments.index("--script-args") + 1] == expected_arguments

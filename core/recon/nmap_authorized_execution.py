@@ -115,17 +115,10 @@ def _canonical_arguments(scope, snapshot, root, scripts):
             arguments[index + 1] = ",".join(script_id + ".nse" for script_id in snapshot.script_ids)
         if "--script-timeout" not in arguments:
             index = arguments.index("--no-stylesheet")
+            # -sV also runs NSE version scripts, so keep their execution bounded.
             arguments[index:index] = ["--script-timeout", f"{snapshot.script_timeout_seconds}s"]
-        # Bound library responses and outstanding HTTP requests. Profile values
-        # stay within reviewed limits and cannot add targets/files/commands.
-        defaults = {"http.max-body-size": "65536", "http.max-pipeline": "1", "http.pipeline": "1"}
-        defaults.update(dict(validate_script_arguments(snapshot.script_arguments)))
-        if "--script-args" in arguments:
-            index = arguments.index("--script-args")
-            arguments[index + 1] = ",".join(f"{key}={value}" for key, value in sorted(defaults.items()))
-        else:
-            index = arguments.index("--no-stylesheet")
-            arguments[index:index] = ["--script-args", ",".join(f"{key}={value}" for key, value in sorted(defaults.items()))]
+        # configuration_arguments already includes only explicitly saved NSE
+        # arguments. Implicit version scripts must not manufacture defaults.
     prefix = ("-6",) if scope.family == 6 else ()
     return (*prefix, "--datadir", str(root), *arguments, *scope.targets)
 

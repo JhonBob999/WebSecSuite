@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import importlib
+import json
 import os
 from pathlib import Path
 
@@ -64,6 +65,80 @@ def test_exact_scope_preview_and_approval_use_identical_typed_arguments(ready):
         api().prepare_nmap_authorized_scan(tool, approval)
     with pytest.raises(ValueError):
         api().approve_authorized_nmap(tool, selection, profile=BUILTIN_PROFILES[1], scope_confirmed=True, confirmed=True)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize("version_detection", [False, True])
+def test_saved_and_migrated_empty_nse_settings_stay_empty_in_execution(ready, schema_version, version_detection):
+    from core.recon.nmap_profiles import LEGACY_PROFILE_FIELDS, profile_to_dict
+
+    tool, _ = ready
+    profile = replace(duplicate_profile(BUILTIN_PROFILES[0]), name="R7B2 Version Test",
+        version_detection=version_detection)
+    document = profile_to_dict(profile)
+    if schema_version == 1:
+        document = {key: value for key, value in document.items() if key in LEGACY_PROFILE_FIELDS}
+    path = Path(tool.executable_path).parent / "profiles.json"
+    path.write_text(json.dumps({"schema": "websecsuite.nmap.profiles", "version": schema_version,
+        "profiles": [document]}), encoding="utf-8")
+    original = path.read_bytes()
+    store = NmapProfileStore(path)
+    loaded, = store.profiles
+    assert loaded.script_ids == loaded.script_arguments == ()
+    assert path.read_bytes() == original
+    store.save(loaded)
+    saved = json.loads(path.read_text(encoding="utf-8"))["profiles"][0]
+    assert saved["script_ids"] == saved["script_arguments"] == []
+    loaded, = NmapProfileStore(path).profiles
+    selection = scope()
+    preview = api().authorized_arguments(tool, selection, loaded)
+    assert "--script-args" not in preview
+    assert "--script" not in preview
+    assert "-sT" in preview and preview[preview.index("-p") + 1] == "80,443,8080,8443"
+    assert ("-sV" in preview) is version_detection
+    assert ("--script-timeout" in preview) is version_detection
+    approval = api().approve_authorized_nmap(tool, selection, profile=loaded, profile_store=store,
+        scope_confirmed=True, confirmed=True, version_nse_confirmed=version_detection)
+    try:
+        spec = api().prepare_nmap_authorized_scan(tool, approval)
+        assert spec._plan.arguments == approval._arguments == preview
+        assert tuple(script.script_id for script in approval.scripts) == (("http-server-header",) if version_detection else ())
+        ExecutionPolicy().validate(spec)
+    finally:
+        api().release_authorized_approval(approval)
+
+
+@pytest.mark.parametrize("script_arguments, expected_value", [
+    ((), None),
+    ((("http.useragent", "WebSecSuite Test"), ("http.max-body-size", "4096"),
+      ("http.max-pipeline", "3"), ("http.pipeline", "2")),
+     "http.useragent=WebSecSuite Test,http.max-body-size=4096,http.max-pipeline=3,http.pipeline=2"),
+])
+def test_selected_scripts_execute_only_explicitly_saved_arguments(ready, script_arguments, expected_value):
+    tool, _ = ready
+    profile = replace(duplicate_profile(BUILTIN_PROFILES[0]), script_ids=("http-title",),
+        script_arguments=script_arguments)
+    store = NmapProfileStore(Path(tool.executable_path).parent / "profiles.json")
+    store.save(profile)
+    loaded, = NmapProfileStore(store.path).profiles
+    selection = scope()
+    preview = api().authorized_arguments(tool, selection, loaded)
+    if expected_value is None:
+        assert "--script-args" not in preview
+    else:
+        assert preview.count("--script-args") == 1
+        assert preview[preview.index("--script-args") + 1] == expected_value
+    assert preview[preview.index("--script") + 1] == "http-title.nse"
+    assert preview[preview.index("--script-timeout") + 1] == "30s"
+    approval = api().approve_authorized_nmap(tool, selection, profile=loaded, profile_store=store,
+        scope_confirmed=True, confirmed=True)
+    try:
+        spec = api().prepare_nmap_authorized_scan(tool, approval)
+        assert spec._plan.arguments == approval._arguments == preview
+        assert approval.profile.script_arguments == script_arguments
+        ExecutionPolicy().validate(spec)
+    finally:
+        api().release_authorized_approval(approval)
 
 
 @pytest.mark.parametrize("technique", ["tcp-connect", "tcp-syn", "tcp-ack", "tcp-window", "tcp-fin", "tcp-null", "tcp-xmas", "tcp-maimon", "udp"])
