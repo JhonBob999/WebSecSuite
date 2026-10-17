@@ -578,3 +578,52 @@ def test_profile_startup_and_editing_never_start_threads_or_runtimes(qapp, tmp_p
         window.deleteLater()
         qapp.processEvents()
     assert attempts == []
+
+
+def test_expanded_editor_saves_protocol_discovery_identification_and_nse(manager):
+    dialog, store = manager
+    ui = dialog.ui
+    ui.btnDuplicate.click()
+    ui.techniqueInput.setCurrentIndex(ui.techniqueInput.findData("tcp-syn"))
+    ui.udpScan.setChecked(True)
+    ui.udpPortsInput.setText("53,123")
+    ui.discoveryInput.setCurrentIndex(ui.discoveryInput.findData("default"))
+    ui.probeChecks["icmp-echo"].setChecked(True)
+    ui.versionDetection.setChecked(True)
+    ui.versionIntensityInput.setValue(3)
+    ui.osDetection.setChecked(True)
+    ui.scriptIdsInput.setText("http-title")
+    assert ui.scriptCatalog.selected_ids() == ("http-title",)
+    ui.scriptArgumentsInput.setPlainText("http.useragent=WebSecSuite")
+    ui.maxParallelismInput.setValue(4)
+    assert not ui.validationLabel.text()
+    assert "-sU" in ui.preview.toPlainText()
+    assert "--script http-title" in ui.preview.toPlainText()
+    ui.btnSave.click()
+    profile, = store.profiles
+    assert profile.technique == "tcp-syn" and profile.udp_ports == (53, 123)
+    assert profile.discovery_probes == ("icmp-echo",)
+    assert profile.version_intensity == 3 and profile.os_detection
+    assert profile.script_arguments == (("http.useragent", "WebSecSuite"),)
+    assert profile.max_parallelism == 4
+
+
+def test_extended_controls_reset_and_catalog_loading_is_explicit(qapp, tmp_path):
+    from core.recon.nmap_profile_store import NmapProfileStore
+    from dialogs.nmap_profiles_dialog import NmapProfilesDialog
+    calls = []
+    dialog = NmapProfilesDialog(NmapProfileStore(tmp_path / "profiles.json"), catalog_loader=lambda: calls.append(True))
+    try:
+        assert calls == []
+        ui = dialog.ui
+        assert not ui.osDetection.isEnabled()
+        ui.btnDuplicate.click()
+        ui.portModeInput.setCurrentIndex(ui.portModeInput.findData("all"))
+        assert "1-65535" in ui.preview.toPlainText()
+        ui.btnReset.click()
+        ui.btnDiscardEdits.click()
+        assert ui.portModeInput.currentData() == "explicit"
+        assert calls == []
+    finally:
+        dialog.deleteLater()
+        qapp.processEvents()

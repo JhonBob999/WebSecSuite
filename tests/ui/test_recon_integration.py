@@ -287,9 +287,10 @@ def test_tool_refresh_and_responsive_tab_switches_preserve_offline_workspaces(
     assert QThreadPool.globalInstance().maxThreadCount() == pool_limit
     assert [button.text() for button in recon.ui.toolManager.findChildren(QPushButton)] == [
         "Refresh Detection", "Choose Subfinder…", "Choose official archive…",
-        "Verify / approve executable", "Manage Scan Profiles…", "Public Target Preflight", "Choose Nmap…",
-        "Local Self-Test", "Stop", "Public Scan", "Run Selected Profile…", "Run Passive Discovery", "Stop Subfinder",
-        "Run / Import History",
+        "Verify / approve executable", "Manage Scan Profiles…", "Public Target Preflight",
+        "Use checked targets", "Review concrete scope", "Inspect capabilities", "Choose Nmap…",
+        "Local Self-Test", "Stop", "Public Scan", "Run Selected Profile…", "Run Authorized Profile…",
+        "Run Passive Discovery", "Stop Subfinder", "Open results / evidence", "Run / Import History",
     ]
     assert not recon.ui.btnNmapSelfTest.isEnabled()
     assert not recon.ui.btnStopNmap.isEnabled()

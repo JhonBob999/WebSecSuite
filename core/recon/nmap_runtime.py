@@ -13,6 +13,10 @@ from core.recon.nmap_public_output import parse_public_nmap_output
 from core.recon.nmap_profile_execution import (
     approve_profile_nmap, prepare_nmap_profile_scan, validate_executable_profile,
 )
+from core.recon.nmap_authorized_execution import (
+    approve_authorized_nmap, prepare_nmap_authorized_scan, release_authorized_approval,
+)
+from core.recon.nmap_authorized_output import parse_authorized_nmap_output
 from core.recon.process_supervisor import JobSnapshot, JobState, ProcessSupervisor, process_safety_status
 from core.recon.public_target import PublicTargetPreflight, selected_public_hostname, validate_public_address
 
@@ -49,6 +53,8 @@ class NmapRuntime(QObject):
         self.public_preflight.changed.connect(self.changed)
         self._public_context = None
         self._profile_context = None
+        self._authorized_context = None
+        self.last_authorized_result = None
 
     @property
     def busy(self) -> bool:
@@ -71,6 +77,29 @@ class NmapRuntime(QObject):
     @property
     def version(self) -> str:
         return self._tool.version if self._tool is not None else ""
+
+    def capabilities(self):
+        """Explicit read-only inspection; construction does not inspect or launch tools."""
+        from core.recon.nmap_capabilities import detect_capabilities
+        return detect_capabilities(self._tool)
+
+    def discover_nse_scripts(self):
+        from core.recon.nmap_nse import discover_scripts
+        if self._tool is None:
+            raise ValueError("Choose and verify Nmap before loading its script catalog.")
+        return discover_scripts(self._tool)
+
+    def authorized_arguments(self, scope, profile):
+        from core.recon.nmap_authorized_execution import authorized_arguments
+        if self._tool is None:
+            raise ValueError("Choose and verify Nmap before reviewing the executable plan.")
+        return authorized_arguments(self._tool, scope, profile)
+
+    def implicit_version_scripts(self):
+        from core.recon.nmap_authorized_execution import implicit_version_scripts
+        if self._tool is None:
+            raise ValueError("Choose and verify Nmap before reviewing version engine scripts.")
+        return implicit_version_scripts(self._tool)
 
     @property
     def status(self) -> str:
@@ -210,6 +239,48 @@ class NmapRuntime(QObject):
         self.changed.emit()
         return job_id
 
+    def start_authorized_scan(self, scope, *, profile, profile_store=None,
+                              scope_confirmed: bool, confirmed: bool,
+                              high_impact_confirmed: bool = False,
+                              version_nse_confirmed: bool = False) -> str:
+        """Submit one explicitly authorized profile through the existing supervisor."""
+        self._require_idle_safe()
+        if self._tool is None:
+            raise ValueError("Choose and verify an approved Nmap executable first.")
+        self._submitting = True
+        self._phase = "authorized-scan"
+        self._stop_requested = False
+        self.last_authorized_result = None
+        approval = None
+        try:
+            approval = approve_authorized_nmap(self._tool, scope, profile=profile,
+                profile_store=profile_store, scope_confirmed=scope_confirmed,
+                confirmed=confirmed, high_impact_confirmed=high_impact_confirmed,
+                version_nse_confirmed=version_nse_confirmed)
+            spec = prepare_nmap_authorized_scan(self._tool, approval)
+            self._authorized_context = approval
+            if self._closing or self._stop_requested:
+                raise ValueError("Authorized scan cancelled before launch.")
+            job_id = self._supervisor.submit(spec)
+            if self._phase == "authorized-scan":
+                self._job_id = job_id
+                if self._closing or self._stop_requested:
+                    self._supervisor.cancel(job_id)
+                else:
+                    self._status = f"{approval.profile.name}: authorized scan queued."
+        except (ValueError, RuntimeError) as error:
+            if self._job_id is None:
+                self._phase = ""
+                self._authorized_context = None
+                if approval is not None:
+                    release_authorized_approval(approval)
+            self._status = f"Authorized scan preflight failed: {error}"
+            raise
+        finally:
+            self._submitting = False
+            self.changed.emit()
+        return job_id
+
     def stop(self) -> None:
         if self.public_preflight.busy:
             self.public_preflight.clear()
@@ -229,9 +300,11 @@ class NmapRuntime(QObject):
         self._supervisor.shutdown(immediate=immediate)
         self.changed.emit()
 
+
     def _job_changed(self, snapshot: JobSnapshot) -> None:
-        if (self._submitting and self._phase == "profile-scan" and self._job_id is None
-                and snapshot.adapter_id == "nmap.public-profile" and snapshot.state == JobState.QUEUED):
+        pending_adapter = {"profile-scan": "nmap.public-profile", "authorized-scan": "nmap.authorized-profile"}.get(self._phase)
+        if (self._submitting and pending_adapter and self._job_id is None
+                and snapshot.adapter_id == pending_adapter and snapshot.state == JobState.QUEUED):
             self._job_id = snapshot.job_id
             if self._stop_requested or self._closing:
                 self._supervisor.cancel(snapshot.job_id)
@@ -247,6 +320,8 @@ class NmapRuntime(QObject):
             return
         phase, candidate, public_context = self._phase, self._candidate, self._public_context
         profile_context = self._profile_context
+        authorized_context = self._authorized_context
+        self._authorized_context = None
         self._public_context = None
         self._profile_context = None
         self._job_id, self._phase, self._candidate = None, "", None
@@ -263,13 +338,23 @@ class NmapRuntime(QObject):
             self._status = f"{action}: failed; unexpected execution identity. No results imported."
         elif phase == "profile-scan" and snapshot.adapter_id != "nmap.public-profile":
             self._status = f"{action}: failed; unexpected execution identity. No results imported."
+        elif phase == "authorized-scan" and snapshot.adapter_id != "nmap.authorized-profile":
+            self._status = f"{action}: failed; unexpected execution identity. No results imported."
         else:
             try:
                 if phase == "verify":
                     self._tool = verify_nmap_version(candidate, snapshot)
                     self._status = f"Nmap {self._tool.version} verified. Local Self-Test ready for confirmation."
                 else:
-                    if phase == "profile-scan":
+                    if phase == "authorized-scan":
+                        approval = authorized_context
+                        batch = parse_authorized_nmap_output(snapshot.stdout, scope=approval.scope,
+                            profile=approval.profile, executable_version=approval._version,
+                            executable_sha256=approval._sha256, arguments=approval._arguments,
+                            scripts=approval.scripts, expected_ports=getattr(approval, "expected_ports", ()),
+                            run_id="nmap:authorized:" + snapshot.job_id)
+                        label = f"Nmap {approval.profile.name} · authorized scope"
+                    elif phase == "profile-scan":
                         observation, address = public_context
                         profile, version = profile_context
                         batch = parse_public_nmap_output(snapshot.stdout, observation=observation,
@@ -287,9 +372,14 @@ class NmapRuntime(QObject):
                     result = self._inventory.import_batch(
                         batch, label=label, format_name="Nmap live XML",
                     )
+                    if phase == "authorized-scan":
+                        self.last_authorized_result = {
+                            "run_id": batch.run_id, "profile": approval.profile.name,
+                            "observations": [item.to_dict() for item in batch.observations],
+                        }
                     open_count = sum(item.entity_type == "service" for item in batch.observations)
                     self._status = (
-                        f"{action} succeeded: {open_count} open TCP ports · "
+                        f"{action} succeeded: {open_count} open {'TCP/UDP' if phase == 'authorized-scan' else 'TCP'} ports · "
                         f"Added: {result.added_observations} observations · Duplicates: {result.duplicates}."
                     )
                     self.inventory_changed.emit()
@@ -297,6 +387,8 @@ class NmapRuntime(QObject):
                 if phase == "verify":
                     self._tool = None
                 self._status = f"{action} failed: {error} No results imported."
+        if authorized_context is not None:
+            release_authorized_approval(authorized_context)
         self.changed.emit()
 
     @staticmethod
@@ -305,6 +397,8 @@ class NmapRuntime(QObject):
             return "Nmap verification"
         if phase == "profile-scan":
             return "Nmap profile scan"
+        if phase == "authorized-scan":
+            return "Authorized Nmap scan"
         return "Quick Network Discovery" if phase == "public-scan" else "Local Self-Test"
 
 

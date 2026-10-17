@@ -6,13 +6,14 @@ from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from core.recon.nmap_profile_store import ProfileStorageError
 from core.recon.nmap_profiles import (
     BUILTIN_PROFILES, PREVIEW_NOTICE, ProfileValidationError, duplicate_profile,
     format_network_impact, format_ports, preview_arguments, profile_from_dict, profile_to_dict,
+    TECHNIQUE_FLAGS, DISCOVERY_PROBE_FLAGS,
 )
 
 
@@ -21,7 +22,7 @@ class NmapProfilesDialog(QDialog):
 
     profilesChanged = Signal()
 
-    def __init__(self, store, parent=None):
+    def __init__(self, store, parent=None, *, catalog_loader=None):
         super().__init__(parent)
         self.store = store
         self.ui = SimpleNamespace()
@@ -31,6 +32,7 @@ class NmapProfilesDialog(QDialog):
         self._loading = False
         self._pending = None
         self._allow_close = False
+        self._catalog_loader = catalog_loader
         self.setWindowTitle("Nmap Scan Profiles")
         self.resize(920, 740)
         self.setMinimumSize(700, 480)
@@ -57,8 +59,8 @@ class NmapProfilesDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(10)
         ui.configurationNotice = self._label(
-            "Configuration-only editor · Run eligible Web Services and bounded saved Custom profiles "
-            "from Tool Inspector. The existing Quick Network Discovery action and Local Self-Test keep their current settings. "
+            "Configuration-only editor · Run supported profiles from Tool Inspector after capability and scope checks. "
+            "The existing Quick Network Discovery action and Local Self-Test keep their current settings. "
             "Selecting or saving a profile grants no authorization and starts no scan."
         )
         root.addWidget(ui.configurationNotice)
@@ -86,10 +88,20 @@ class NmapProfilesDialog(QDialog):
         layout.setContentsMargins(10, 0, 4, 0)
         ui.profileKind = self._label()
         layout.addWidget(ui.profileKind)
-        form = QFormLayout()
+        ui.settingsTabs = QTabWidget()
+        ui.settingsTabs.setMinimumHeight(275)
+        ui.settingsTabs.setMaximumHeight(380)
+        layout.addWidget(ui.settingsTabs)
+        general = QWidget()
+        form = QFormLayout(general)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        layout.addLayout(form)
+        general_scroll = QScrollArea()
+        general_scroll.setFrameShape(QFrame.NoFrame)
+        general_scroll.setWidgetResizable(True)
+        general_scroll.setWidget(general)
+        ui.settingsTabs.addTab(general_scroll, "Scan / Ports")
+        self._general_form = form
         ui.nameInput = QLineEdit()
         ui.nameInput.setMaxLength(100)
         ui.descriptionInput = QPlainTextEdit()
@@ -99,7 +111,8 @@ class NmapProfilesDialog(QDialog):
         ui.portsInput.setMaxLength(8192)
         ui.portsInput.setPlaceholderText("80,443,8000-8005 · up to 1024 TCP ports")
         ui.techniqueInput = QComboBox()
-        ui.techniqueInput.addItem("TCP connect", "tcp-connect")
+        for technique, flag in TECHNIQUE_FLAGS.items():
+            ui.techniqueInput.addItem(f"{technique.replace('-', ' ').upper()} ({flag})", technique)
         ui.maxRateInput = self._spin(1, 100, " probes/s")
         ui.maxRetriesInput = self._spin(0, 3)
         ui.hostTimeoutInput = self._spin(5, 600, " s")
@@ -126,10 +139,11 @@ class NmapProfilesDialog(QDialog):
         ):
             widget.setAccessibleName(title)
             form.addRow(title, widget)
+        self._build_extended_fields()
         ui.versionNotice = self._label(
-            "Service version detection is not executable in R7B-1. It sends additional "
-            "probes; Nmap --max-rate does not constrain every "
-            "service-version probe."
+            "R7B-2: raw-packet techniques require Windows/Npcap capability checks. Version, OS, NSE and discovery "
+            "send additional probes; --max-rate does not constrain every probe. A valid configuration may be unavailable "
+            "on this computer. NSE scripts run only after explicit execution approval."
         )
         layout.addWidget(ui.versionNotice)
         layout.addWidget(self._label("Illustrative argument preview"))
@@ -174,15 +188,20 @@ class NmapProfilesDialog(QDialog):
             actions.addWidget(button)
         root.addLayout(actions)
         ui.profileList.currentItemChanged.connect(self._selection_changed)
-        for widget in (ui.nameInput, ui.portsInput):
+        for widget in (ui.nameInput, ui.portsInput, ui.udpPortsInput, ui.scriptIdsInput):
             widget.textChanged.connect(self._validate)
         ui.descriptionInput.textChanged.connect(self._validate)
+        ui.scriptArgumentsInput.textChanged.connect(self._validate)
         for widget in self._spin_inputs:
             widget.valueChanged.connect(self._validate)
             # valueChanged alone misses incomplete text that retains the old value.
             widget.lineEdit().textChanged.connect(self._validate)
         ui.techniqueInput.currentIndexChanged.connect(self._validate)
         ui.versionDetection.toggled.connect(self._validate)
+        for widget in self._extended_checks:
+            widget.toggled.connect(self._validate)
+        for widget in self._extended_combos:
+            widget.currentIndexChanged.connect(self._validate)
         ui.btnDuplicate.clicked.connect(lambda: self._request(self._duplicate, "duplicate a profile"))
         ui.btnSave.clicked.connect(self._save)
         ui.btnDelete.clicked.connect(lambda: self._request(self._delete, "delete this custom profile"))
@@ -198,6 +217,121 @@ class NmapProfilesDialog(QDialog):
         widget.setRange(minimum, maximum)
         widget.setSuffix(suffix)
         return widget
+
+    def _build_extended_fields(self):
+        """Keep advanced configuration in compact groups within the existing editor."""
+        ui = self.ui
+
+        def tab(title):
+            page = QWidget()
+            form = QFormLayout(page)
+            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            scroll = QScrollArea()
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(page)
+            ui.settingsTabs.addTab(scroll, title)
+            return form
+
+        def combo(items):
+            widget = QComboBox()
+            for label, value in items:
+                widget.addItem(label, value)
+            return widget
+
+        def add(form, label, widget, help_text=""):
+            widget.setAccessibleName(label)
+            if help_text:
+                widget.setToolTip(help_text)
+            form.addRow(label, widget)
+            return widget
+
+        def move_row(source, widget, target, label):
+            row = source.takeRow(widget)
+            if row.labelItem is not None:
+                old_label = row.labelItem.widget()
+                old_label.hide()
+                old_label.deleteLater()
+            add(target, label, widget)
+
+        ports = self._general_form
+        ui.udpScan = add(ports, "UDP combination", QCheckBox("Add UDP scan (-sU)"), "Combines the selected TCP technique with UDP. Requires raw-packet capabilities.")
+        ui.udpPortsInput = add(ports, "UDP ports", QLineEdit())
+        ui.udpPortsInput.setMaxLength(8192)
+        ui.udpPortsInput.setPlaceholderText("53,123,161 · explicit UDP ports")
+        ui.portModeInput = add(ports, "Port selection", combo((("Explicit ports", "explicit"), ("All ports (1–65535)", "all"), ("Most common ports", "top"))))
+        ui.topPortsInput = add(ports, "Top ports per protocol", self._spin(1, 65535))
+        ui.portPresetInput = add(ports, "TCP port preset", combo((("Keep current ports", ""), ("Common web", "80,443,8000,8080,8443"), ("Common services", "21-23,25,53,80,110,135,139,143,443,445,3389"), ("First 1024", "1-1024"))))
+        ui.portPresetInput.currentIndexChanged.connect(self._apply_port_preset)
+
+        discovery = tab("Discovery / DNS")
+        ui.discoveryInput = add(discovery, "Discovery mode", combo((("No discovery (-Pn)", "none"), ("Default discovery", "default"), ("Host discovery only (-sn)", "only"), ("List only (-sL)", "list"))))
+        ui.dnsModeInput = add(discovery, "DNS resolution", combo((("Never resolve (-n)", "never"), ("Reverse DNS (-R)", "reverse"))), "Reverse DNS names are observations. They never expand the authorized target scope.")
+        ui.probeChecks = {}
+        for probe, flag in DISCOVERY_PROBE_FLAGS.items():
+            ui.probeChecks[probe] = add(discovery, probe.replace("-", " ").title(), QCheckBox(flag))
+        discovery.addRow(self._label("Probe choices require Default discovery or Host discovery only. Defaults use Nmap's documented probe set."))
+
+        identification = tab("Service / OS")
+        # Move existing version checkbox to the identification tab.
+        # takeRow preserves the existing widget and public UI object identity.
+        move_row(ports, ui.versionDetection, identification, "Version detection")
+        ui.versionIntensityInput = add(identification, "Version intensity", self._spin(0, 9), "0 sends the fewest version probes; 9 tries every probe.")
+        ui.versionAll = add(identification, "All version probes", QCheckBox("--version-all"))
+        ui.versionTrace = add(identification, "Version trace", QCheckBox("--version-trace"))
+        ui.versionTimeoutInput = add(identification, "Version execution budget", self._spin(0, 900, " s"), "0 uses the overall timeout. A nonzero value limits the entire version-enabled process, not an individual service probe; Nmap has no independent version-timeout option.")
+        ui.osDetection = add(identification, "OS detection", QCheckBox("Enable OS guesses (-O)"), "Requires raw-packet privileges and favorable open/closed port evidence. Output is a confidence-rated guess.")
+        ui.osGuess = add(identification, "Aggressive OS guess", QCheckBox("--osscan-guess"))
+        ui.osLimit = add(identification, "Limit OS attempts", QCheckBox("--osscan-limit"))
+
+        timing = tab("Timing")
+        for widget, label in ((ui.maxRateInput, "Maximum scan rate"), (ui.maxRetriesInput, "Maximum retries"),
+                              (ui.hostTimeoutInput, "Host timeout"), (ui.executionTimeoutInput, "Overall timeout")):
+            move_row(ports, widget, timing, label)
+        ui.timingTemplateInput = add(timing, "Timing template", self._spin(0, 5), "T0–T5; higher values can be disruptive. Explicit rate, retries and timeouts remain bounded.")
+        ui.minRateInput = add(timing, "Minimum rate", self._spin(0, 100, " probes/s"), "0 leaves Nmap's minimum unset. Cannot exceed maximum rate.")
+        ui.minParallelismInput = add(timing, "Minimum parallel probes", self._spin(0, 64))
+        ui.maxParallelismInput = add(timing, "Maximum parallel probes", self._spin(0, 64), "0 uses Nmap defaults. This is probe parallelism, not a reliable cap on every NSE/service operation.")
+
+        nse = tab("NSE")
+        from ui.nmap_nse_catalog import NmapScriptCatalogWidget
+        ui.scriptCatalog = NmapScriptCatalogWidget(catalog_loader=self._catalog_loader)
+        nse.addRow(ui.scriptCatalog)
+        ui.scriptIdsInput = add(nse, "Selected script IDs", QLineEdit(), "Comma-separated installed script IDs. No external paths, categories, expressions or automatic script presets. Execution verifies each installed file.")
+        ui.scriptIdsInput.setMaxLength(3232)
+        ui.scriptArgumentsInput = add(nse, "Structured script arguments", QPlainTextEdit(), "One name=value pair per line. Only bounded simple scalar values are accepted; nested Lua syntax, external files and option injection are unsupported. Do not store secrets in profiles.")
+        ui.scriptArgumentsInput.setMaximumHeight(80)
+        ui.scriptTimeoutInput = add(nse, "Script timeout", self._spin(1, 600, " s"))
+        nse.addRow(self._label("Potentially disruptive categories require an additional per-run confirmation. Presets never enable scripts automatically."))
+        ui.scriptCatalog.selectionChanged.connect(lambda values: ui.scriptIdsInput.setText(",".join(values)))
+        ui.scriptIdsInput.textChanged.connect(self._sync_script_selection)
+
+        routing = tab("Routing / Output")
+        ui.traceroute = add(routing, "Traceroute", QCheckBox("Enable --traceroute"), "Requires supported capabilities and sends probes along the route. Intermediate hops are observations and never authorized scan targets.")
+        routing.addRow(self._label("Output is locked to bounded XML on stdout with no stylesheet. Runtime retains validated raw evidence and provenance. Arbitrary output paths, interfaces, source spoofing and raw expert arguments are unsupported."))
+
+        self._extended_checks = (ui.udpScan, *ui.probeChecks.values(), ui.versionAll, ui.versionTrace,
+                                 ui.osDetection, ui.osGuess, ui.osLimit, ui.traceroute)
+        self._extended_combos = (ui.portModeInput, ui.discoveryInput, ui.dnsModeInput)
+        extra_spins = (ui.topPortsInput, ui.timingTemplateInput, ui.minRateInput,
+                       ui.minParallelismInput, ui.maxParallelismInput, ui.versionIntensityInput,
+                       ui.versionTimeoutInput, ui.scriptTimeoutInput)
+        self._spin_inputs += extra_spins
+        self._inputs += (*self._extended_checks, *self._extended_combos, *extra_spins,
+                         ui.udpPortsInput, ui.scriptIdsInput, ui.scriptArgumentsInput, ui.portPresetInput)
+
+    def _apply_port_preset(self):
+        if self._loading or self._original is None or self._original.is_builtin:
+            return
+        ports = self.ui.portPresetInput.currentData()
+        if ports:
+            self.ui.portsInput.setText(ports)
+            self.ui.portPresetInput.setCurrentIndex(0)
+
+    def _sync_script_selection(self, text):
+        if not self._loading:
+            self.ui.scriptCatalog.set_selected(tuple(value.strip() for value in text.split(",") if value.strip()))
 
     def _profiles(self):
         return BUILTIN_PROFILES + self.store.profiles + ((self._draft,) if self._draft else ())
@@ -245,6 +379,29 @@ class NmapProfilesDialog(QDialog):
         ui.hostTimeoutInput.setValue(profile.host_timeout_seconds)
         ui.executionTimeoutInput.setValue(profile.execution_timeout_seconds)
         ui.versionDetection.setChecked(profile.version_detection)
+        ui.udpPortsInput.setText(format_ports(profile.udp_ports) if profile.udp_ports else "")
+        ui.udpScan.setChecked(profile.udp_scan)
+        for widget, value in ((ui.portModeInput, profile.port_mode), (ui.discoveryInput, profile.discovery),
+                              (ui.dnsModeInput, profile.dns_mode)):
+            widget.setCurrentIndex(widget.findData(value))
+        ui.portPresetInput.setCurrentIndex(0)
+        for probe, widget in ui.probeChecks.items():
+            widget.setChecked(probe in profile.discovery_probes)
+        for widget, value in (
+            (ui.topPortsInput, profile.top_ports), (ui.timingTemplateInput, profile.timing_template),
+            (ui.minRateInput, profile.min_rate), (ui.minParallelismInput, profile.min_parallelism),
+            (ui.maxParallelismInput, profile.max_parallelism), (ui.versionIntensityInput, profile.version_intensity),
+            (ui.versionTimeoutInput, profile.version_timeout_seconds), (ui.scriptTimeoutInput, profile.script_timeout_seconds),
+        ):
+            widget.setValue(value)
+        for widget, value in ((ui.versionAll, profile.version_all), (ui.versionTrace, profile.version_trace),
+                              (ui.osDetection, profile.os_detection), (ui.osGuess, profile.os_guess),
+                              (ui.osLimit, profile.os_limit), (ui.traceroute, profile.traceroute)):
+            widget.setChecked(value)
+        ui.scriptIdsInput.setText(",".join(profile.script_ids))
+        ui.scriptArgumentsInput.setPlainText("\n".join(f"{name}={value}" for name, value in profile.script_arguments))
+        ui.scriptCatalog.set_selected(profile.script_ids)
+        ui.scriptCatalog.setEnabled(not profile.is_builtin)
         for widget in self._inputs:
             if isinstance(widget, (QCheckBox, QComboBox)):
                 widget.setEnabled(not profile.is_builtin)
@@ -267,6 +424,20 @@ class NmapProfilesDialog(QDialog):
             "host_timeout_seconds": ui.hostTimeoutInput.value(),
             "execution_timeout_seconds": ui.executionTimeoutInput.value(),
             "version_detection": ui.versionDetection.isChecked(),
+            "udp_ports": ui.udpPortsInput.text(), "udp_scan": ui.udpScan.isChecked(),
+            "port_mode": ui.portModeInput.currentData(), "top_ports": ui.topPortsInput.value(),
+            "discovery": ui.discoveryInput.currentData(),
+            "discovery_probes": [probe for probe, widget in ui.probeChecks.items() if widget.isChecked()],
+            "dns_mode": ui.dnsModeInput.currentData(), "timing_template": ui.timingTemplateInput.value(),
+            "min_rate": ui.minRateInput.value(), "min_parallelism": ui.minParallelismInput.value(),
+            "max_parallelism": ui.maxParallelismInput.value(), "version_intensity": ui.versionIntensityInput.value(),
+            "version_all": ui.versionAll.isChecked(), "version_trace": ui.versionTrace.isChecked(),
+            "os_detection": ui.osDetection.isChecked(), "os_guess": ui.osGuess.isChecked(),
+            "os_limit": ui.osLimit.isChecked(), "traceroute": ui.traceroute.isChecked(),
+            "script_ids": [value.strip() for value in ui.scriptIdsInput.text().split(",")] if ui.scriptIdsInput.text() else [],
+            "script_arguments": [line.split("=", 1) for line in ui.scriptArgumentsInput.toPlainText().splitlines() if line],
+            "script_timeout_seconds": ui.scriptTimeoutInput.value(),
+            "version_timeout_seconds": ui.versionTimeoutInput.value(),
         }
 
     def _dirty(self):

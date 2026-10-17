@@ -27,10 +27,9 @@ _SECTIONS = {
 _TOOL_INFORMATION = {
     "nmap": {
         "overview": (
-            "Discover reachable TCP ports with Local Self-Test, Quick Network "
-            "Discovery, Web Services or a bounded saved Custom profile for one "
-            "explicitly approved ginandjuice.shop IPv4 address. "
-            "Reachable ports are not verified vulnerabilities."
+            "Discover hosts, TCP/UDP ports, services, OS guesses and script evidence using a "
+            "saved profile and explicitly authorized concrete scope. Reachability and "
+            "fingerprints are observations, not verified vulnerabilities."
         ),
         "installation": (
             "Choose an official signed Windows nmap.exe. Approval checks local "
@@ -38,35 +37,28 @@ _TOOL_INFORMATION = {
             "Nothing is downloaded or installed."
         ),
         "profiles": (
-            "Local Self-Test: TCP connect to 127.0.0.1, ports 80, 443, 8080, 8443. "
-            "Quick Network Discovery: the same four TCP ports on one public IPv4 "
-            "from a fresh ginandjuice.shop preflight, explicitly selected and "
-            "authorized for each run. No arbitrary options, scripts, UDP, OS "
-            "detection or service-version probing in these executable actions. "
-            "Run Selected Profile supports Web Services and saved Custom profiles "
-            "with 1–16 TCP ports, no version detection, rate 1–10 probes/s, "
-            "0–1 retries, host timeout 5–60 s and overall timeout 10–90 s "
-            "exceeding the host timeout. Standard TCP and Deep Service Review "
-            "are not executable in R7B-1. Manage Scan Profiles remains an offline editor."
+            "Manage Scan Profiles edits typed settings in grouped tabs and never starts a scan. "
+            "Authorized Profile Scan supports bounded hostnames, IPv4/IPv6 literals, ranges and CIDRs; "
+            "review every numeric address and confirm permission. Capabilities can block a valid "
+            "configuration. Local Self-Test and the original ginandjuice.shop Public Scan / "
+            "Run Selected Profile actions retain their narrow settings and approval checks."
         ),
         "network": (
-            "Local Self-Test connects only to loopback. Public preflight resolves "
-            "DNS only on request; Public Scan connects to the approved numeric IP. "
-            "All scans disable DNS and host discovery. Maximum: 10 probes/s, one "
-            "retry. Quick and Local: 30 s host / 40 s overall; selected profiles "
-            "show their exact bounds before execution. Services may log "
-            "connections. Shared infrastructure requires permission for the IP."
+            "Active probes may be logged or disrupt services. Rate limits do not reliably bound "
+            "version, NSE or discovery probes. Review host/whole-run/script deadlines and concurrency. "
+            "-sV also invokes installed NSE version probes and requires extra consent. "
+            "Npcap/raw-packet/elevation requirements are inspected read-only; no automatic fallback or elevation."
         ),
         "execution": (
             "Requires verified Nmap, Windows process containment and fresh "
-            "confirmation for each run. Stop cancels the current operation."
+            "scope and per-run confirmation. Extra consent is required for script impact. "
+            "Stop cancels the current operation. No hidden scans or automatic retries."
         ),
         "results": (
-            "Validated successful results add the scanned IP and open TCP "
-            "services to Asset Inventory and Run / Import History, preserving "
-            "scan provenance and closed/filtered states. Zero open ports is valid. "
-            "DNS associations are time-specific observations, not ownership proof. "
-            "Existing offline Nmap XML import remains available."
+            "Complete successful XML adds validated IPs and open TCP/UDP services to Asset Inventory "
+            "and history. Shared viewers show version/CPE data, OS guesses with confidence, traces, "
+            "NSE and provenance. Zero open ports is valid. Failed/partial results are not imported. "
+            "DNS and discovered names never grant authorization. Offline XML import remains available."
         ),
     },
     "subfinder": {

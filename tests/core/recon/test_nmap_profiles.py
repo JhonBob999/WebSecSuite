@@ -148,11 +148,13 @@ def serialized():
 def test_strict_serialization_retains_only_recognized_typed_fields_and_compact_ports():
     module = profiles()
     data = serialized()
-    assert module.profile_to_dict(custom()) == data
+    extended = module.profile_to_dict(custom())
+    assert {key: value for key, value in extended.items() if key in module.LEGACY_PROFILE_FIELDS} == data
     assert module.profile_from_dict(data) == custom()
     data["ports"] = "443,80,81,443"
     assert module.profile_to_dict(module.profile_from_dict(data))["ports"] == "80-81,443"
-    assert {field.name for field in fields(custom())} == set(serialized())
+    assert {field.name for field in fields(custom())} == set(extended)
+    assert set(serialized()) == module.LEGACY_PROFILE_FIELDS
     for builtin in module.BUILTIN_PROFILES:
         assert module.profile_from_dict(module.profile_to_dict(builtin)) == builtin
 

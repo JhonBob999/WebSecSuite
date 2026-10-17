@@ -2,6 +2,12 @@
 
 No target, scope, executable or runtime capability is part of this format.
 Loading never creates a directory or repairs a damaged document.
+
+Version 1 contains exactly the original 12 configuration fields. Loading it
+adds the immutable model's v2 defaults in memory while retaining IDs, names,
+descriptions and the original bytes. Only an explicit successful save writes
+version 2 with every extended field. Either version rejects unknown/missing
+fields and the complete collection is rejected if any entry is damaged.
 """
 
 from __future__ import annotations
@@ -14,13 +20,13 @@ from PySide6.QtCore import QLockFile, QStandardPaths
 
 from core.recon.nmap_profiles import (
     BUILTIN_PROFILES, NmapScanProfile, ProfileValidationError,
-    profile_from_dict, profile_to_dict,
+    LEGACY_PROFILE_FIELDS, profile_from_dict, profile_to_dict,
 )
 from core.session_persistence import save_session as _atomic_write_json
 
 
 PROFILE_SCHEMA = "websecsuite.nmap.profiles"
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2
 MAX_PROFILE_DOCUMENT_BYTES = 256 * 1024
 MAX_CUSTOM_PROFILES = 64
 
@@ -50,14 +56,17 @@ def _validate_document(data) -> tuple[NmapScanProfile, ...]:
         raise ProfileStorageError("Expected only schema, version and profiles in the profile document.")
     if data["schema"] != PROFILE_SCHEMA:
         raise ProfileStorageError("Unrecognized Nmap profile schema.")
-    if type(data["version"]) is not int or data["version"] != PROFILE_VERSION:
-        raise ProfileStorageError("Unsupported Nmap profile version; expected version 1.")
+    if type(data["version"]) is not int or data["version"] not in {1, PROFILE_VERSION}:
+        raise ProfileStorageError("Unsupported Nmap profile version; expected version 1 or 2.")
     entries = data["profiles"]
     if not isinstance(entries, list) or len(entries) > MAX_CUSTOM_PROFILES:
         raise ProfileStorageError(f"Profiles must be a list of at most {MAX_CUSTOM_PROFILES} custom profiles.")
     profiles, identities = [], set()
+    expected_fields = LEGACY_PROFILE_FIELDS if data["version"] == 1 else frozenset(profile_to_dict(BUILTIN_PROFILES[0]))
     for entry in entries:
         try:
+            if type(entry) is not dict or frozenset(entry) != expected_fields:
+                raise ProfileValidationError("Profile fields do not match the declared schema version.")
             profile = profile_from_dict(entry)
         except ProfileValidationError as exc:
             raise ProfileStorageError(f"Invalid custom profile: {exc}") from exc

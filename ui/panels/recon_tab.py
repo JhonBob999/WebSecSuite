@@ -26,6 +26,7 @@ from ui.recon_asset_model import ReconAssetFilterProxy, ReconAssetModel
 from ui.recon_target_model import ImportIssueModel, ReconTargetModel
 from ui.recon_tool_info import TOOL_NAMES, ToolInformationView
 from ui.recon_public_nmap import NmapPublicControls
+from ui.recon_authorized_nmap import NmapAuthorizedControls
 from ui.recon_subfinder import SubfinderControls
 
 
@@ -285,6 +286,7 @@ class ReconTab(QWidget):
             execution.addWidget(button)
         self.ui.toolInfo.section_layouts["execution"].addWidget(self.ui.nmapExecution)
         self.public_nmap_controls = NmapPublicControls(self)
+        self.authorized_nmap_controls = NmapAuthorizedControls(self)
         self.subfinder_controls = SubfinderControls(self)
         self.subfinder_controls.set_visible(False)
         return self.ui.toolManager
@@ -298,14 +300,17 @@ class ReconTab(QWidget):
         self.ui.nmapExecution.setVisible(tool_id == "nmap")
         self.ui.btnManageNmapProfiles.setVisible(tool_id == "nmap")
         self.public_nmap_controls.set_visible(tool_id == "nmap")
+        self.authorized_nmap_controls.set_visible(tool_id == "nmap")
         self.subfinder_controls.set_visible(tool_id == "subfinder")
         self.ui.toolInspectorScroll.verticalScrollBar().setValue(0)
 
     def _open_nmap_profiles(self):
         if self._nmap_profiles_dialog is None:
-            self._nmap_profiles_dialog = NmapProfilesDialog(self.nmap_profile_store, self)
+            self._nmap_profiles_dialog = NmapProfilesDialog(self.nmap_profile_store, self,
+                catalog_loader=getattr(self.nmap_runtime, "discover_nse_scripts", None))
             self._nmap_profiles_dialog.setModal(True)
             self._nmap_profiles_dialog.profilesChanged.connect(self.public_nmap_controls.reload_profiles)
+            self._nmap_profiles_dialog.profilesChanged.connect(self.authorized_nmap_controls._invalidate)
         self._nmap_profiles_dialog.show()
         self._nmap_profiles_dialog.raise_()
         self._nmap_profiles_dialog.activateWindow()
@@ -387,7 +392,9 @@ class ReconTab(QWidget):
         self.ui.btnNmapSelfTest.setToolTip(
             runtime.safety_reason or "Confirm a TCP connect self-test on 127.0.0.1 only."
         )
-        self.ui.btnStopNmap.setEnabled(runtime.busy)
+        scope_busy = (hasattr(self, "authorized_nmap_controls")
+                      and self.authorized_nmap_controls.preflight.busy)
+        self.ui.btnStopNmap.setEnabled(runtime.busy or scope_busy)
 
     def _choose_nmap_executable(self):
         if self.nmap_runtime.busy:
@@ -423,6 +430,7 @@ class ReconTab(QWidget):
             self.ui.nmapStatusLabel.setText(f"Local Self-Test rejected: {exc}")
 
     def closeEvent(self, event):
+        self.authorized_nmap_controls.preflight.clear()
         self.nmap_runtime.shutdown(immediate=True)
         self.subfinder_runtime.shutdown(immediate=True)
         super().closeEvent(event)

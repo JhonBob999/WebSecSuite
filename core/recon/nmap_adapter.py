@@ -388,6 +388,10 @@ def _connect_adapters() -> None:
 
 def _validate_nmap_plan(adapter_id, adapter, plan, approval) -> None:
     _require_safety()
+    if adapter_id == "nmap.authorized-profile":
+        from core.recon.nmap_authorized_execution import _validate_authorized_plan
+        _validate_authorized_plan(adapter, plan, approval)
+        return
     if adapter_id == "nmap.public-profile":
         from core.recon.nmap_profile_execution import _validate_profile_plan
         _validate_profile_plan(adapter, plan, approval)

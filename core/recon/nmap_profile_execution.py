@@ -6,7 +6,7 @@ Configuration, DNS and inventory records never grant execution permission.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import MISSING, dataclass, field, fields, replace
 import hashlib
 from pathlib import Path
 from time import monotonic
@@ -33,6 +33,11 @@ def execution_reasons(profile: NmapScanProfile) -> tuple[str, ...]:
     except (TypeError, ValueError) as error:
         return (str(error),)
     reasons = []
+    if profile.technique != "tcp-connect":
+        reasons.append("The legacy profile action supports TCP Connect only; use Authorized Profile Scan for other techniques.")
+    if any(item.default is not MISSING and getattr(profile, item.name) != item.default
+           for item in fields(NmapScanProfile)):
+        reasons.append("Extended options require the Authorized Profile Scan workflow; the legacy action cannot apply them.")
     if profile.is_builtin and profile != BUILTIN_PROFILES[1]:
         reasons.append("Not executable in R7B-1. Only the unchanged built-in Web Services profile is enabled here.")
     if profile.profile_id == "quick-network-discovery":

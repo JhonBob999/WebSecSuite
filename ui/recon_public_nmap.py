@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from core.recon.targets import normalize_hostname
 from core.recon.nmap_profile_execution import execution_reasons, validate_executable_profile
 from core.recon.nmap_profile_store import NmapProfileStore
-from core.recon.nmap_profiles import format_network_impact, format_ports
+from core.recon.nmap_profiles import TECHNIQUE_FLAGS, format_network_impact, format_ports
 
 
 class NmapPublicControls(QObject):
@@ -136,10 +136,24 @@ class NmapPublicControls(QObject):
             ui.nmapProfileSummary.setText("Select a saved scan profile.")
             ui.nmapProfileEligibility.setText("Not executable in R7B-1: no selected profile.")
         else:
+            technique = ("TCP connect" if profile.technique == "tcp-connect" else
+                         profile.technique.replace("-", " ").upper())
+            udp = (f"UDP ports ({len(profile.udp_ports)}): {format_ports(profile.udp_ports)}\n"
+                   if profile.udp_ports else "")
+            port_summary = f"TCP ports ({len(profile.ports)}): {format_ports(profile.ports)}\n{udp}"
+            if profile.discovery in {"only", "list"}:
+                port_summary = "Ports: no port scan in this discovery mode\n"
+            elif profile.port_mode == "all":
+                port_summary = "Ports: all 65535 per selected protocol\n"
+            elif profile.port_mode == "top":
+                port_summary = f"Ports: top {profile.top_ports} available per selected protocol\n"
+            elif profile.technique == "udp":
+                port_summary = udp
             ui.nmapProfileSummary.setText(
                 f"Name: {profile.name}\n{profile.description}\n"
-                f"TCP ports ({len(profile.ports)}): {format_ports(profile.ports)}\n"
-                f"Technique: TCP connect (-sT)\n"
+                f"{port_summary}Technique: {technique} ({TECHNIQUE_FLAGS[profile.technique]})"
+                f"{' + UDP (-sU)' if profile.udp_scan and profile.technique != 'udp' else ''}\n"
+                f"Port selection: {profile.port_mode}; discovery: {profile.discovery}\n"
                 f"Maximum rate: {profile.max_rate} probes/s; retries: {profile.max_retries}\n"
                 f"Host timeout: {profile.host_timeout_seconds} s; "
                 f"overall timeout: {profile.execution_timeout_seconds} s\n"
@@ -155,7 +169,7 @@ class NmapPublicControls(QObject):
                     text = "Not executable in R7B-1: " + text
             else:
                 text = "Eligible in R7B-1. Fresh DNS, selected IP scope and per-run confirmation are required."
-            ui.nmapProfileEligibility.setText(text)
+            ui.nmapProfileEligibility.setText(text + " Expanded capabilities use Authorized Profile Scan below.")
         self.refresh_runtime()
 
     def _selected_targets(self):

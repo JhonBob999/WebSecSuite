@@ -19,7 +19,7 @@ def custom(name="My web review"):
 
 def document(*profiles):
     from core.recon.nmap_profiles import profile_to_dict
-    return {"schema": "websecsuite.nmap.profiles", "version": 1,
+    return {"schema": "websecsuite.nmap.profiles", "version": 2,
             "profiles": [profile_to_dict(profile) for profile in profiles]}
 
 
@@ -53,15 +53,13 @@ def test_saved_document_contains_only_allowlisted_configuration(tmp_path):
     store.save(profile)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data == document(profile)
-    assert set(data["profiles"][0]) == {
-        "profile_id", "name", "description", "is_builtin", "ports", "technique",
-        "max_rate", "max_retries", "host_timeout_seconds", "execution_timeout_seconds",
-        "version_detection", "network_impact",
-    }
+    from dataclasses import fields
+    assert set(data["profiles"][0]) == {field.name for field in fields(profile)}
+    assert not {"targets", "approval", "scope_confirmed", "executable_path"} & set(data["profiles"][0])
 
 
 @pytest.mark.parametrize("raw", [b"{", b"\xff", b"[]", b"null", b'{"schema": 1}',
-    b'{"schema":"websecsuite.nmap.profiles","version":2,"profiles":[]}',
+    b'{"schema":"websecsuite.nmap.profiles","version":3,"profiles":[]}',
     b'{"schema":"websecsuite.nmap.profiles","version":true,"profiles":[]}',
     b'{"schema":"websecsuite.nmap.profiles","version":1,"profiles":{},"target":"x"}',
     b'{"schema":"websecsuite.nmap.profiles","version":1,"profiles":[],"version":1}',
