@@ -259,6 +259,8 @@ class ScraperTabController(QWidget):
 
     def _apply_responsive_main_layout(self) -> None:
         """Минимально перестраивает главный layout на основе существующих виджетов."""
+        # The Designer form caps the page at 1680px; let the tab use its full width.
+        self.setMaximumWidth(16777215)
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(10, 10, 10, 10)
         root_layout.setSpacing(8)
@@ -323,7 +325,6 @@ class ScraperTabController(QWidget):
 
         right_panel = QWidget(splitter)
         right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        right_panel.setMinimumWidth(320)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(6, 2, 0, 0)
         right_layout.setSpacing(6)
@@ -345,11 +346,17 @@ class ScraperTabController(QWidget):
         find_row.addWidget(self.ui.lineEditLogFilter, 1)
         find_row.addWidget(self.ui.btnFindPrev)
         find_row.addWidget(self.ui.btnFindNext)
-        find_row.addWidget(self.ui.lblMatches)
-        find_row.addWidget(self.ui.lblFindHits)
-        find_row.addStretch(1)
-        find_row.addWidget(self.ui.btnExportMatches)
         right_layout.addLayout(find_row)
+
+        # Keep the search controls usable at the panel's layout-derived minimum.
+        matches_row = QHBoxLayout()
+        matches_row.setContentsMargins(0, 0, 0, 0)
+        matches_row.setSpacing(6)
+        matches_row.addWidget(self.ui.lblMatches)
+        matches_row.addWidget(self.ui.lblFindHits)
+        matches_row.addStretch(1)
+        matches_row.addWidget(self.ui.btnExportMatches)
+        right_layout.addLayout(matches_row)
 
         options_row = QHBoxLayout()
         options_row.setContentsMargins(0, 0, 0, 0)
